@@ -1,60 +1,57 @@
 #!/usr/bin/env python3
 """
-IRC Bot — SSL, weather.gov API, classic IRC output style
+Internets — modular IRC bot with SSL support and dynamic module loading.
 
-Commands (prefix configurable in config.ini, default: .)
-  .weather  [zip|city|-n nick]        Current conditions
-  .w        [zip|city|-n nick]        Alias for .weather
-  .forecast [zip|city|-n nick]        4-day forecast
-  .f        [zip|city|-n nick]        Alias for .forecast
-  .register_location <zip|city>       Register your default location
-  .regloc            <zip|city>       Alias for .register_location
-  .myloc                              Show your saved location
-  .delloc                             Remove your saved location
-  .cc   <expression>                  Calculator  e.g. .cc 2pi
-  .d    [X]dN[+/-M]                   Dice roller  e.g. .d 3d6+2
-  .u    <word> [/N]                   Urban Dictionary lookup
-  .urbandictionary <word> [/N]        Alias for .u
-  .t    [src] <tgt> <text>            Translate  e.g. .t en es Hello
-  .translate [src] <tgt> <text>       Alias for .t
-  .join <#channel>                    Join a channel (works in PM)
-  .part <#channel>                    Leave a channel
-  .help                               Command list
+Core commands (always available):
+  .help              List all commands from all loaded modules
+  .modules           List loaded/available modules
+  .auth <password>   Authenticate as admin (PM only)
+  .deauth            Drop admin session (PM only)
+  .load  <module>    Load a module by name    [admin only]
+  .unload <module>   Unload a loaded module   [admin only]
+  .reload <module>   Reload a module in-place [admin only]
 
-  -n nick  Use another user's registered location
-  In PM you can drop the prefix — e.g. /MSG BotNick WEATHER 90210
-
-weather.gov API: https://www.weather.gov/documentation/services-web-api
-Geocoding: OpenStreetMap Nominatim (no key required)
-Translation: MyMemory API (no key required)
+Modules live in the modules/ directory. Each exposes a setup(bot) function
+that returns a BotModule instance. See modules/base.py for the interface.
 """
 
-import ssl, socket, time, threading, logging, configparser
-import requests, sys, re, json, math, random
+import ssl
+import socket
+import time
+import threading
+import logging
+import configparser
+import sys
+import re
+import json
+import importlib
+import importlib.util
 from pathlib import Path
-from datetime import datetime, timezone
+from hashpw import verify_password
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 cfg = configparser.ConfigParser()
 cfg.read("config.ini")
 
-IRC_SERVER   = cfg["irc"]["server"]
-IRC_PORT     = int(cfg["irc"]["port"])
-NICKNAME     = cfg["irc"]["nickname"]
-REALNAME     = cfg["irc"]["realname"]
-CHANNELS     = [c.strip() for c in cfg["irc"]["channels"].split(",")]
-NICKSERV_PW  = cfg["irc"].get("nickserv_password", "").strip()
+IRC_SERVER    = cfg["irc"]["server"]
+IRC_PORT      = int(cfg["irc"]["port"])
+NICKNAME      = cfg["irc"]["nickname"]
+REALNAME      = cfg["irc"]["realname"]
+NICKSERV_PW   = cfg["irc"].get("nickserv_password", "").strip()
 
-CMD_PREFIX   = cfg["bot"]["command_prefix"]
-API_COOLDOWN = int(cfg["bot"]["api_cooldown"])
-DEFAULT_LOC  = cfg["bot"]["default_location"]
-LOC_FILE     = cfg["bot"].get("locations_file", "locations.json")
+CMD_PREFIX    = cfg["bot"]["command_prefix"]
+API_COOLDOWN  = int(cfg["bot"]["api_cooldown"])
+LOC_FILE      = cfg["bot"].get("locations_file",  "locations.json")
+CHANNELS_FILE = cfg["bot"].get("channels_file",   "channels.json")
+USERS_FILE    = cfg["bot"].get("users_file",       "users.json")
+MODULES_DIR   = Path(cfg["bot"].get("modules_dir", "modules"))
+AUTO_LOAD     = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
 
-USER_AGENT   = cfg["weather"]["user_agent"]
+ADMIN_HASH    = cfg["admin"].get("password_hash", "").strip()
 
-LOG_LEVEL    = cfg["logging"]["level"]
-LOG_FILE     = cfg["logging"]["log_file"]
+LOG_LEVEL     = cfg["logging"]["level"]
+LOG_FILE      = cfg["logging"]["log_file"]
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -68,371 +65,374 @@ logging.basicConfig(
 )
 log = logging.getLogger("internets")
 
-NWS_HEADERS = {"User-Agent": USER_AGENT, "Accept": "application/geo+json"}
-NOM_HEADERS = {"User-Agent": USER_AGENT}
+# ─── Startup hash validation ──────────────────────────────────────────────────
+
+def _validate_hash_on_startup():
+    if not ADMIN_HASH:
+        log.warning(
+            "No admin password_hash set in config.ini. "
+            "Module management will be disabled. "
+            "Run: python hashpw.py  to generate one."
+        )
+        return
+    prefix = ADMIN_HASH.split("$")[0] if "$" in ADMIN_HASH else ""
+    if prefix not in ("scrypt", "bcrypt", "argon2"):
+        log.critical(
+            f"Invalid password_hash format in config.ini (got prefix '{prefix}'). "
+            "Must start with 'scrypt$', 'bcrypt$', or 'argon2$'. "
+            "Run: python hashpw.py  to generate a valid hash."
+        )
+        sys.exit(1)
+    log.info(f"Admin password hash loaded ({prefix}).")
+
+_validate_hash_on_startup()
+
+# ─── Generic JSON store ───────────────────────────────────────────────────────
+
+def _load_json(path: str, default):
+    try:
+        p = Path(path)
+        if p.exists():
+            return json.loads(p.read_text())
+    except Exception as e:
+        log.warning(f"Load {path}: {e}")
+    return default
+
+def _save_json(path: str, data):
+    try:
+        Path(path).write_text(json.dumps(data, indent=2))
+    except Exception as e:
+        log.warning(f"Save {path}: {e}")
 
 # ─── Location store ───────────────────────────────────────────────────────────
 
 _loc_lock = threading.Lock()
 
-def _load() -> dict:
-    try:
-        if Path(LOC_FILE).exists():
-            return json.loads(Path(LOC_FILE).read_text())
-    except Exception as e:
-        log.warning(f"Load {LOC_FILE}: {e}")
-    return {}
+def _load_locs() -> dict:
+    return _load_json(LOC_FILE, {})
 
-def _save(data: dict):
-    try:
-        Path(LOC_FILE).write_text(json.dumps(data, indent=2))
-    except Exception as e:
-        log.warning(f"Save {LOC_FILE}: {e}")
+def _save_locs(data: dict):
+    _save_json(LOC_FILE, data)
 
-def loc_get(nick: str):
-    with _loc_lock:
-        return _load().get(nick.lower())
+# ─── Persistent channel store ─────────────────────────────────────────────────
 
-def loc_set(nick: str, raw: str):
-    with _loc_lock:
-        d = _load(); d[nick.lower()] = raw; _save(d)
+_chan_lock = threading.Lock()
 
-def loc_del(nick: str) -> bool:
-    with _loc_lock:
-        d = _load()
-        if nick.lower() in d:
-            del d[nick.lower()]; _save(d); return True
-        return False
+def _load_channels() -> list:
+    return _load_json(CHANNELS_FILE, [])
+
+def _save_channels(channels: set):
+    with _chan_lock:
+        _save_json(CHANNELS_FILE, sorted(channels))
+
+# ─── Per-channel user registry ────────────────────────────────────────────────
+
+_users_lock = threading.Lock()
+
+def _load_users() -> dict:
+    return _load_json(USERS_FILE, {})
+
+def _save_users(data: dict):
+    _save_json(USERS_FILE, data)
+
+def user_join(channel: str, nick: str, hostmask: str):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _users_lock:
+        data = _load_users()
+        ch   = data.setdefault(channel.lower(), {})
+        entry = ch.setdefault(nick.lower(), {
+            "nick": nick, "hostmask": hostmask,
+            "first_seen": now, "last_seen": now
+        })
+        entry["last_seen"] = now
+        entry["hostmask"]  = hostmask
+        entry["nick"]      = nick
+        _save_users(data)
+
+def user_part(channel: str, nick: str):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _users_lock:
+        data = _load_users()
+        entry = data.get(channel.lower(), {}).get(nick.lower())
+        if entry:
+            entry["last_seen"] = now
+            _save_users(data)
+
+def user_quit(nick: str):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _users_lock:
+        data    = _load_users()
+        updated = False
+        for ch in data.values():
+            if nick.lower() in ch:
+                ch[nick.lower()]["last_seen"] = now
+                updated = True
+        if updated:
+            _save_users(data)
+
+def user_rename(old_nick: str, new_nick: str, hostmask: str):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    with _users_lock:
+        data    = _load_users()
+        updated = False
+        for ch in data.values():
+            if old_nick.lower() in ch:
+                entry = ch.pop(old_nick.lower())
+                entry.update({"nick": new_nick, "hostmask": hostmask, "last_seen": now})
+                ch[new_nick.lower()] = entry
+                updated = True
+        if updated:
+            _save_users(data)
+
+def channel_users(channel: str) -> dict:
+    return _load_users().get(channel.lower(), {})
 
 # ─── Rate limiting ────────────────────────────────────────────────────────────
 
 _last_call: dict = {}
 
-def rate_limited(nick: str) -> bool:
-    now = time.time()
-    if nick in _last_call and now - _last_call[nick] < API_COOLDOWN:
-        return True
-    _last_call[nick] = now
-    return False
-
-# ─── Unit helpers ─────────────────────────────────────────────────────────────
-
-def cf(c) -> str:
-    if c is None: return "N/A"
-    f = c * 9 / 5 + 32
-    return f"{c:.1f}C / {f:.1f}F"
-
-def kph_mph(mps) -> str:
-    if mps is None: return "N/A"
-    return f"{mps*3.6:.1f}km/h / {mps*2.237:.1f} mph"
-
-def km_mi(m) -> str:
-    if m is None: return "N/A"
-    return f"{m/1000:.1f}km / {m/1609.344:.1f}mi"
-
-def mb_in(pa) -> str:
-    if pa is None: return "N/A"
-    return f"{pa/100:.0f}mb / {pa/3386.39:.2f}in"
-
-WIND_DIRS = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
-             "S","SSW","SW","WSW","W","WNW","NW","NNW"]
-
-def deg_to_card(deg) -> str:
-    if deg is None: return ""
-    return WIND_DIRS[round(deg / 22.5) % 16]
-
-# ─── Geocoding ────────────────────────────────────────────────────────────────
-
-STATE_ABBR = {
-    "Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA",
-    "Colorado":"CO","Connecticut":"CT","Delaware":"DE","Florida":"FL","Georgia":"GA",
-    "Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA",
-    "Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD",
-    "Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS",
-    "Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH",
-    "New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC",
-    "North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA",
-    "Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN",
-    "Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA",
-    "West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY","District of Columbia":"DC",
-}
-
-def geocode(query: str):
-    """Returns (lat, lon, display_name) or None. Accepts zip, city name, lat,lon."""
-    query = query.strip().strip("'\"")
-    m = re.match(r"^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$", query)
-    if m:
-        lat, lon = float(m.group(1)), float(m.group(2))
-        return lat, lon, f"{lat:.4f},{lon:.4f}"
-    try:
-        r = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": query, "format": "json", "limit": 1,
-                    "addressdetails": 1, "countrycodes": "us"},
-            headers=NOM_HEADERS, timeout=10
-        )
-        results = r.json()
-        if not results: return None
-        hit   = results[0]
-        lat   = float(hit["lat"])
-        lon   = float(hit["lon"])
-        addr  = hit.get("address", {})
-        city  = (addr.get("city") or addr.get("town") or
-                 addr.get("village") or addr.get("county") or "")
-        state = STATE_ABBR.get(addr.get("state", ""), addr.get("state", ""))
-        display = f"{city}, {state}".strip(", ") if city or state else hit["display_name"]
-        return lat, lon, display
-    except Exception as e:
-        log.warning(f"Geocode error '{query}': {e}")
-    return None
-
-# ─── weather.gov API ──────────────────────────────────────────────────────────
-
-def get_gridpoint(lat: float, lon: float):
-    try:
-        r = requests.get(
-            f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}",
-            headers=NWS_HEADERS, timeout=10
-        )
-        r.raise_for_status()
-        return r.json().get("properties")
-    except Exception as e:
-        log.warning(f"Gridpoint error: {e}")
-    return None
-
-
-def get_current(lat: float, lon: float, grid: dict) -> str:
-    try:
-        r       = requests.get(grid["observationStations"], headers=NWS_HEADERS, timeout=10)
-        feat    = r.json()["features"][0]["properties"]
-        sta_id  = feat["stationIdentifier"]
-        sta_name = feat["name"]
-
-        r2   = requests.get(
-            f"https://api.weather.gov/stations/{sta_id}/observations/latest",
-            headers=NWS_HEADERS, timeout=10
-        )
-        obs = r2.json()["properties"]
-
-        temp_c  = obs.get("temperature",       {}).get("value")
-        dewpt_c = obs.get("dewpoint",           {}).get("value")
-        hi_c    = obs.get("heatIndex",          {}).get("value")
-        humidity= obs.get("relativeHumidity",   {}).get("value")
-        wind_ms = obs.get("windSpeed",          {}).get("value")
-        wind_deg= obs.get("windDirection",      {}).get("value")
-        pressure= obs.get("barometricPressure", {}).get("value")
-        visib   = obs.get("visibility",         {}).get("value")
-        desc    = obs.get("textDescription", "N/A") or "N/A"
-
-        ts_raw = obs.get("timestamp", "")
-        try:
-            dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-            updated = dt.strftime("%B %d, %I:%M %p %Z")
-        except Exception:
-            updated = ts_raw or "N/A"
-
-        if wind_ms is not None and wind_ms < 0.5:
-            wind_str = "Calm"
-        elif wind_ms is not None:
-            card = deg_to_card(wind_deg)
-            wind_str = f"from {card} at {kph_mph(wind_ms)}" if card else kph_mph(wind_ms)
-        else:
-            wind_str = "N/A"
-
-        parts = [f"Conditions {desc}", f"Temperature {cf(temp_c)}"]
-        if hi_c is not None:
-            parts.append(f"Heat index {cf(hi_c)}")
-        parts += [
-            f"Dew point {cf(dewpt_c)}",
-            f"Pressure {mb_in(pressure)}",
-            f"Humidity {f'{humidity:.0f}%' if humidity is not None else 'N/A'}",
-            f"Visibility {km_mi(visib)}",
-            f"Wind {wind_str}",
-            f"Last Updated on {updated}",
-        ]
-        return " :: ".join(parts)
-    except Exception as e:
-        log.warning(f"Observation error: {e}")
-        return None
-
-
-def get_forecast_line(grid: dict) -> str:
-    try:
-        r = requests.get(grid["forecast"], headers=NWS_HEADERS, timeout=10)
-        periods = r.json()["properties"]["periods"]
-        days, i = [], 0
-        while i < len(periods) and len(days) < 4:
-            p = periods[i]
-            if p["isDaytime"]:
-                high_c = (p["temperature"] - 32) * 5 / 9 if p["temperatureUnit"] == "F" else p["temperature"]
-                low_c  = None
-                if i + 1 < len(periods) and not periods[i+1]["isDaytime"]:
-                    nt = periods[i+1]
-                    low_c = (nt["temperature"] - 32) * 5 / 9 if nt["temperatureUnit"] == "F" else nt["temperature"]
-                    i += 2
-                else:
-                    i += 1
-                days.append((p["name"], p.get("shortForecast", ""), high_c, low_c))
-            else:
-                i += 1
-        if not days: return None
-        chunks = []
-        for name, cond, high_c, low_c in days:
-            chunks.append(f"{name} {cond} {cf(high_c)} {cf(low_c) if low_c is not None else 'N/A'}")
-        return " :: ".join(chunks)
-    except Exception as e:
-        log.warning(f"Forecast error: {e}")
-    return None
-
-# ─── Calculator ───────────────────────────────────────────────────────────────
-
-_CALC_GLOBALS = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
-_CALC_GLOBALS.update({"pi": math.pi, "e": math.e, "abs": abs, "round": round})
-
-def safe_calc(expr: str) -> str:
-    """Evaluate a math expression safely. No builtins = no code execution."""
-    expr = expr.strip()
-    # Expand implicit multiplication: 2pi → 2*pi
-    expr = re.sub(r"(\d)(\s*)([a-zA-Z])", r"\1*\3", expr)
-    expr = re.sub(r"([a-zA-Z])(\s*)(\d)", r"\1*\3", expr)
-    try:
-        result = eval(expr, {"__builtins__": {}}, _CALC_GLOBALS)
-        if isinstance(result, float) and result == int(result):
-            return str(int(result))
-        if isinstance(result, float):
-            return f"{result:.8g}"
-        return str(result)
-    except ZeroDivisionError:
-        return "Error: division by zero"
-    except Exception as e:
-        return f"Error: {e}"
-
-# ─── Dice roller ──────────────────────────────────────────────────────────────
-
-def roll_dice(expr: str) -> str:
-    """
-    Parse XdN[+/-M] or just N (single die).
-    Returns :: Total X / Y [Z%] :: Results [...] ::
-    """
-    expr = expr.strip().lower().replace(" ", "")
-    m = re.match(r"^(?:(\d+)d)?(\d+)([+-]\d+)?$", expr)
-    if not m:
-        return "Invalid dice format. Use: N  or  XdN  or  XdN+M"
-    count_s, sides_s, mod_s = m.groups()
-    count = int(count_s) if count_s else 1
-    sides = int(sides_s)
-    mod   = int(mod_s) if mod_s else 0
-    if count < 1 or count > 100:  return "Dice count must be 1-100."
-    if sides < 2 or sides > 10000: return "Sides must be 2-10000."
-    rolls   = [random.randint(1, sides) for _ in range(count)]
-    total   = sum(rolls) + mod
-    maximum = sides * count + mod
-    minimum = count + mod
-    pct     = round((total - minimum) / max(maximum - minimum, 1) * 100)
-    return f":: Total {total} / {maximum} [{pct}%] :: Results {rolls} ::"
-
-# ─── Urban Dictionary ─────────────────────────────────────────────────────────
-
-def urban_lookup(term: str, index: int = 1) -> str:
-    try:
-        r = requests.get(
-            "https://api.urbandictionary.com/v0/define",
-            params={"term": term},
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-        )
-        defs = r.json().get("list", [])
-        if not defs:
-            return f"No Urban Dictionary results for '{term}'."
-        total = len(defs)
-        idx   = max(1, min(index, total)) - 1
-        defn  = defs[idx]["definition"].replace("\r", "").replace("\n", " ").strip()
-        if len(defn) > 400:
-            defn = defn[:397] + "..."
-        return f"[{idx+1}/{total}] {defn}"
-    except Exception as e:
-        log.warning(f"UD error: {e}")
-        return "Urban Dictionary lookup failed."
-
-# ─── Translation ──────────────────────────────────────────────────────────────
-
-SUPPORTED_LANGS = {
-    "ar","bg","ca","cs","da","nl","en","et","fi","fr","de","el","hi",
-    "hu","id","it","ja","ko","lv","lt","no","fa","pl","pt","ro","ru",
-    "sk","sl","es","sv","th","tr","uk","vi",
-}
-
-def translate_text(src_lang, tgt_lang: str, text: str) -> str:
-    """
-    Translate using the unofficial Google Translate gtx endpoint.
-    No API key required. src_lang=None means auto-detect.
-    """
-    sl = src_lang if src_lang else "auto"
-    try:
-        r = requests.get(
-            "https://translate.googleapis.com/translate_a/single",
-            params={
-                "client": "gtx",
-                "sl":     sl,
-                "tl":     tgt_lang,
-                "dt":     "t",
-                "q":      text,
-            },
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10,
-        )
-        data = r.json()
-        # Response is nested lists: data[0] = list of [translated_chunk, original_chunk, ...]
-        translated = "".join(part[0] for part in data[0] if part[0])
-        # data[2] = detected source language code
-        detected = data[2] if len(data) > 2 and data[2] else sl
-        if not translated:
-            return "Translation returned empty result."
-        return f"[t] [from {detected}] -> {translated}"
-    except Exception as e:
-        log.warning(f"Translate error: {e}")
-        return "Translation failed."
-
-# ─── Help ─────────────────────────────────────────────────────────────────────
-
-def build_help(botnick: str) -> list:
-    p = CMD_PREFIX
-    return [
-        f"── {botnick} Commands ──────────────────────────────────────────────────",
-        f"  {p}weather  [zip|city|-n nick]    Current conditions",
-        f"  {p}w        [zip|city|-n nick]    Alias for {p}weather",
-        f"  {p}forecast [zip|city|-n nick]    4-day forecast",
-        f"  {p}f        [zip|city|-n nick]    Alias for {p}forecast",
-        f"  {p}register_location <zip|city>   Save your default location",
-        f"  {p}regloc            <zip|city>   Alias for {p}register_location",
-        f"  {p}myloc                          Show your saved location",
-        f"  {p}delloc                         Remove your saved location",
-        f"  {p}cc  <expression>               Calculator  e.g. {p}cc 2pi",
-        f"  {p}d   [X]dN[+/-M]               Dice roller  e.g. {p}d 3d6+2",
-        f"  {p}u   <word> [/N]               Urban Dictionary  e.g. {p}u jason /2",
-        f"  {p}urbandictionary <word> [/N]   Alias for {p}u",
-        f"  {p}t   [src] <tgt> <text>        Translate  e.g. {p}t en es Hello",
-        f"  {p}translate [src] <tgt> <text>  Alias for {p}t",
-        f"  {p}join  <#channel>              Ask me to join a channel (works in PM)",
-        f"  {p}part  <#channel>              Ask me to leave a channel",
-        f"  {p}help                          This message",
-        f"────────────────────────────────────────────────────────────────────────",
-        f"  -n nick  Use another user's saved location",
-        f"  In PM you can drop the '{p}' — e.g.  /MSG {botnick} WEATHER 90210",
-        f"────────────────────────────────────────────────────────────────────────",
-    ]
-
 # ─── IRC Bot ──────────────────────────────────────────────────────────────────
 
 class IRCBot:
     def __init__(self):
-        self.sock = None
-        self._lock = threading.Lock()
+        self.sock               = None
+        self._lock              = threading.Lock()
         self.active_channels: set = set()
+        self.cfg                = cfg
+        self._modules: dict     = {}
+        self._commands: dict    = {}
+        self._authed_nicks: set = set()
+        self._keepalive_stop    = threading.Event()
 
-    # ── low-level ──────────────────────────────────────────────────────────
+    # ── public API for modules ─────────────────────────────────────────────
 
-    def connect(self):
+    def privmsg(self, target: str, msg: str):
+        for chunk in [msg[i:i+450] for i in range(0, len(msg), 450)]:
+            self.send(f"PRIVMSG {target} :{chunk}")
+            time.sleep(0.4)
+
+    def send(self, msg: str):
+        with self._lock:
+            log.debug(f">> {msg}")
+            self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
+
+    def rate_limited(self, nick: str) -> bool:
+        now = time.time()
+        if nick in _last_call and now - _last_call[nick] < API_COOLDOWN:
+            return True
+        _last_call[nick] = now
+        return False
+
+    def loc_get(self, nick: str):
+        with _loc_lock:
+            return _load_locs().get(nick.lower())
+
+    def loc_set(self, nick: str, raw: str):
+        with _loc_lock:
+            d = _load_locs(); d[nick.lower()] = raw; _save_locs(d)
+
+    def loc_del(self, nick: str) -> bool:
+        with _loc_lock:
+            d = _load_locs()
+            if nick.lower() in d:
+                del d[nick.lower()]; _save_locs(d); return True
+            return False
+
+    def channel_users(self, channel: str) -> dict:
+        return channel_users(channel)
+
+    # ── module manager ─────────────────────────────────────────────────────
+
+    def load_module(self, name: str) -> tuple:
+        if name in self._modules:
+            return False, f"Module '{name}' is already loaded."
+        mod_path = MODULES_DIR / f"{name}.py"
+        if not mod_path.exists():
+            return False, f"Module file '{mod_path}' not found."
+        try:
+            spec     = importlib.util.spec_from_file_location(f"modules.{name}", mod_path)
+            module   = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            if not hasattr(module, "setup"):
+                return False, f"Module '{name}' has no setup() function."
+            instance  = module.setup(self)
+            conflicts = [
+                cmd for cmd in instance.COMMANDS
+                if cmd in self._commands and self._commands[cmd][0] != name
+            ]
+            if conflicts:
+                return False, f"Module '{name}' conflicts with: {', '.join(conflicts)}"
+            instance.on_load()
+            self._modules[name] = instance
+            for cmd, method in instance.COMMANDS.items():
+                self._commands[cmd] = (name, method)
+            log.info(f"Loaded module: {name} (commands: {list(instance.COMMANDS.keys())})")
+            return True, f"Module '{name}' loaded ({len(instance.COMMANDS)} commands registered)."
+        except Exception as e:
+            log.error(f"Failed to load module '{name}': {e}")
+            return False, f"Error loading '{name}': {e}"
+
+    def unload_module(self, name: str) -> tuple:
+        if name not in self._modules:
+            return False, f"Module '{name}' is not loaded."
+        try:
+            self._modules[name].on_unload()
+            for cmd in [c for c, v in self._commands.items() if v[0] == name]:
+                del self._commands[cmd]
+            del self._modules[name]
+            log.info(f"Unloaded module: {name}")
+            return True, f"Module '{name}' unloaded."
+        except Exception as e:
+            log.error(f"Failed to unload '{name}': {e}")
+            return False, f"Error unloading '{name}': {e}"
+
+    def reload_module(self, name: str) -> tuple:
+        ok, msg = self.unload_module(name)
+        if not ok:
+            return False, msg
+        return self.load_module(name)
+
+    def autoload_modules(self):
+        for name in AUTO_LOAD:
+            ok, msg = self.load_module(name)
+            log.info(msg) if ok else log.warning(f"Autoload failed: {msg}")
+
+    # ── admin auth ─────────────────────────────────────────────────────────
+
+    def is_admin(self, nick: str) -> bool:
+        return nick in self._authed_nicks
+
+    def cmd_auth(self, nick: str, reply_to: str, arg):
+        if not ADMIN_HASH:
+            self.privmsg(reply_to,
+                f"{nick}: no password_hash configured. "
+                f"Run hashpw.py and set password_hash in config.ini.")
+            return
+        if not arg:
+            self.privmsg(reply_to, f"{nick}: usage: /MSG {NICKNAME} AUTH <password>")
+            return
+        try:
+            ok = verify_password(arg.strip(), ADMIN_HASH)
+        except ValueError as e:
+            self.privmsg(reply_to, f"{nick}: configuration error — {e}")
+            log.error(f"Auth config error: {e}")
+            return
+        if ok:
+            self._authed_nicks.add(nick)
+            self.privmsg(reply_to, f"{nick}: you are now authenticated as admin.")
+            log.info(f"Admin auth granted: {nick}")
+        else:
+            self.privmsg(reply_to, f"{nick}: incorrect password.")
+            log.warning(f"Failed admin auth attempt from {nick}")
+
+    def cmd_deauth(self, nick: str, reply_to: str, arg):
+        if nick in self._authed_nicks:
+            self._authed_nicks.discard(nick)
+            self.privmsg(reply_to, f"{nick}: admin session ended.")
+        else:
+            self.privmsg(reply_to, f"{nick}: you are not authenticated.")
+
+    # ── core commands ──────────────────────────────────────────────────────
+
+    def cmd_help(self, nick: str, reply_to: str, arg):
+        p = CMD_PREFIX
+        lines = [f"── {NICKNAME} Commands ─────────────────────────────────────────────"]
+        lines += [
+            f"  {p}help               This message",
+            f"  {p}modules            List loaded/available modules",
+            f"  {p}auth <pw>          Authenticate as admin (PM only)",
+            f"  {p}deauth             End admin session (PM only)",
+            f"  {p}load   <module>    Load a module   [admin]",
+            f"  {p}unload <module>    Unload a module [admin]",
+            f"  {p}reload <module>    Reload a module [admin]",
+            f"────────────────────────────────────────────────────────────────────",
+        ]
+        for mod_name, instance in self._modules.items():
+            mod_lines = instance.help_lines(p)
+            if mod_lines:
+                lines.append(f"  [{mod_name}]")
+                lines.extend(mod_lines)
+        lines += [
+            f"────────────────────────────────────────────────────────────────────",
+            f"  In PM you can drop the '{p}' prefix.",
+        ]
+        for line in lines:
+            self.privmsg(reply_to, line)
+
+    def cmd_modules(self, nick: str, reply_to: str, arg):
+        if self._modules:
+            self.privmsg(reply_to, f"Loaded: {', '.join(self._modules.keys())}")
+        else:
+            self.privmsg(reply_to, "No modules currently loaded.")
+        available = sorted(
+            p.stem for p in MODULES_DIR.glob("*.py")
+            if p.stem not in ("__init__", "base") and p.stem not in self._modules
+        )
+        if available:
+            self.privmsg(reply_to, f"Available: {', '.join(available)}")
+
+    def cmd_load(self, nick: str, reply_to: str, arg):
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        if not arg:
+            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}load <module>"); return
+        _, msg = self.load_module(arg.strip().lower())
+        self.privmsg(reply_to, msg)
+
+    def cmd_unload(self, nick: str, reply_to: str, arg):
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        if not arg:
+            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}unload <module>"); return
+        _, msg = self.unload_module(arg.strip().lower())
+        self.privmsg(reply_to, msg)
+
+    def cmd_reload(self, nick: str, reply_to: str, arg):
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        if not arg:
+            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}reload <module>"); return
+        _, msg = self.reload_module(arg.strip().lower())
+        self.privmsg(reply_to, msg)
+
+    # ── dispatcher ─────────────────────────────────────────────────────────
+
+    _CORE_COMMANDS = {
+        "help":    "cmd_help",
+        "modules": "cmd_modules",
+        "load":    "cmd_load",
+        "unload":  "cmd_unload",
+        "reload":  "cmd_reload",
+        "auth":    "cmd_auth",
+        "deauth":  "cmd_deauth",
+    }
+
+    def dispatch(self, nick: str, reply_to: str, cmd: str, arg, is_pm: bool):
+        if cmd in ("auth", "deauth") and not is_pm:
+            self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in a private message.")
+            return
+
+        def run(fn, *a):
+            threading.Thread(target=fn, args=a, daemon=True).start()
+
+        if cmd in self._CORE_COMMANDS:
+            run(getattr(self, self._CORE_COMMANDS[cmd]), nick, reply_to, arg)
+            return
+
+        if cmd in self._commands:
+            mod_name, method_name = self._commands[cmd]
+            instance = self._modules.get(mod_name)
+            if instance:
+                run(getattr(instance, method_name), nick, reply_to, arg)
+
+    # ── connection ─────────────────────────────────────────────────────────
+
+    def _make_socket(self):
+        """Create and return a connected (and SSL-wrapped if needed) socket."""
         use_ssl    = cfg["irc"].getboolean("ssl",        fallback=True)
         ssl_verify = cfg["irc"].getboolean("ssl_verify", fallback=True)
         log.info(
@@ -446,315 +446,206 @@ class IRCBot:
             if not ssl_verify:
                 ctx.check_hostname = False
                 ctx.verify_mode    = ssl.CERT_NONE
-            self.sock = ctx.wrap_socket(raw, server_hostname=IRC_SERVER)
+            sock = ctx.wrap_socket(raw, server_hostname=IRC_SERVER)
         else:
-            self.sock = raw
-        self.sock.settimeout(300)  # 5 min recv window; keepalive pings every 90s
-        self._start_keepalive()
-        self.send(f"NICK {NICKNAME}")
-        self.send(f"USER {NICKNAME} 0 * :{REALNAME}")
+            sock = raw
+        sock.settimeout(300)
+        return sock
 
     def _start_keepalive(self):
+        stop = self._keepalive_stop
         def _loop():
-            while True:
-                time.sleep(90)
+            while not stop.wait(timeout=90):
                 try:
                     self.send(f"PING :{IRC_SERVER}")
                 except Exception:
                     break
         threading.Thread(target=_loop, daemon=True, name="keepalive").start()
 
-    def send(self, msg: str):
-        with self._lock:
-            log.debug(f">> {msg}")
-            self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
+    def _connect(self):
+        """
+        Stop old keepalive, build a new socket, assign it, start new keepalive.
+        Does NOT send NICK/USER — caller does that inside the protected recv loop.
+        Raises on failure so the caller can retry.
+        """
+        self._keepalive_stop.set()
+        self._keepalive_stop = threading.Event()
+        self.sock = self._make_socket()
+        self._start_keepalive()
 
-    def privmsg(self, target: str, msg: str):
-        for chunk in [msg[i:i+450] for i in range(0, len(msg), 450)]:
-            self.send(f"PRIVMSG {target} :{chunk}")
-            time.sleep(0.4)
-
-    def join_channels(self):
-        for ch in CHANNELS:
+    def rejoin_saved_channels(self):
+        saved = _load_channels()
+        if not saved:
+            log.info("No saved channels — waiting for INVITE.")
+            return
+        for ch in saved:
             self.send(f"JOIN {ch}")
             self.active_channels.add(ch.lower())
-            log.info(f"Joined {ch}")
+            log.info(f"Rejoined saved channel: {ch}")
 
-    # ── location resolution ────────────────────────────────────────────────
+    def _on_invite(self, nick: str, channel: str):
+        log.info(f"Invited to {channel} by {nick}")
+        self.send(f"JOIN {channel}")
+        self.active_channels.add(channel.lower())
+        _save_channels(self.active_channels)
 
-    def resolve_arg(self, nick: str, arg):
-        """
-        Parse the argument for a weather/forecast command.
-        Returns (raw_location_string | None, error_message).
-        Handles: -n nick, freeform city/zip, empty (use own saved loc).
-        """
-        if arg:
-            arg = arg.strip()
-            m = re.match(r"^-n\s+(\S+)$", arg, re.IGNORECASE)
-            if m:
-                target_nick = m.group(1)
-                saved = loc_get(target_nick)
-                if saved:
-                    return saved, ""
-                return None, f"{target_nick} hasn't registered a location."
-            return arg, ""
-        saved = loc_get(nick)
-        if saved:
-            return saved, ""
-        return None, (f"{nick}: no location given and none saved. "
-                      f"Try {CMD_PREFIX}regloc <zip or city> first.")
+    def _on_bot_join(self, channel: str):
+        self.active_channels.add(channel.lower())
+        _save_channels(self.active_channels)
+        log.info(f"Joined {channel}")
 
-    # ── command handlers ───────────────────────────────────────────────────
+    def _on_bot_part(self, channel: str):
+        self.active_channels.discard(channel.lower())
+        _save_channels(self.active_channels)
+        log.info(f"Left {channel}")
 
-    def do_weather(self, nick: str, reply_to: str, arg):
-        if rate_limited(nick):
-            self.privmsg(reply_to, f"{nick}: slow down! ({API_COOLDOWN}s cooldown)")
-            return
-        raw, err = self.resolve_arg(nick, arg)
-        if raw is None:
-            self.privmsg(reply_to, err); return
-        geo = geocode(raw)
-        if geo is None:
-            self.privmsg(reply_to, f"{nick}: couldn't find '{raw}' (US locations only)."); return
-        lat, lon, display = geo
-        grid = get_gridpoint(lat, lon)
-        if grid is None:
-            self.privmsg(reply_to, f"{nick}: weather.gov has no data for that location."); return
-        body = get_current(lat, lon, grid)
-        if body:
-            self.privmsg(reply_to, f":: {display} :: {body} ::")
-        else:
-            self.privmsg(reply_to, f"{nick}: couldn't fetch conditions right now.")
-
-    def do_forecast(self, nick: str, reply_to: str, arg):
-        if rate_limited(nick):
-            self.privmsg(reply_to, f"{nick}: slow down! ({API_COOLDOWN}s cooldown)")
-            return
-        raw, err = self.resolve_arg(nick, arg)
-        if raw is None:
-            self.privmsg(reply_to, err); return
-        geo = geocode(raw)
-        if geo is None:
-            self.privmsg(reply_to, f"{nick}: couldn't find '{raw}' (US locations only)."); return
-        lat, lon, display = geo
-        grid = get_gridpoint(lat, lon)
-        if grid is None:
-            self.privmsg(reply_to, f"{nick}: weather.gov has no data for that location."); return
-        body = get_forecast_line(grid)
-        if body:
-            self.privmsg(reply_to, f":: {display} :: {body} ::")
-        else:
-            self.privmsg(reply_to, f"{nick}: couldn't fetch forecast right now.")
-
-    def do_regloc(self, nick: str, reply_to: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}regloc <zip or city name>"); return
-        geo = geocode(arg)
-        if geo is None:
-            self.privmsg(reply_to, f"{nick}: couldn't find '{arg}' (US locations only)."); return
-        _, _, display = geo
-        loc_set(nick, arg)
-        self.privmsg(reply_to, f"{nick}: registered location {display}")
-        log.info(f"regloc: {nick} -> {arg!r} ({display})")
-
-    def do_myloc(self, nick: str, reply_to: str):
-        raw = loc_get(nick)
-        if raw:
-            geo     = geocode(raw)
-            display = geo[2] if geo else raw
-            self.privmsg(reply_to, f"{nick}: your saved location is {display} ({raw!r})")
-        else:
-            self.privmsg(reply_to, f"{nick}: no saved location. Use {CMD_PREFIX}regloc <zip or city>.")
-
-    def do_delloc(self, nick: str, reply_to: str):
-        if loc_del(nick):
-            self.privmsg(reply_to, f"{nick}: your saved location has been removed.")
-        else:
-            self.privmsg(reply_to, f"{nick}: you have no saved location to remove.")
-
-    def do_calc(self, nick: str, reply_to: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}cc <expression>  e.g. {CMD_PREFIX}cc 2pi"); return
-        self.privmsg(reply_to, f"[calc] {arg} = {safe_calc(arg)}")
-
-    def do_dice(self, nick: str, reply_to: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}d [X]dN[+/-M]  e.g. {CMD_PREFIX}d 3d6+2"); return
-        self.privmsg(reply_to, roll_dice(arg))
-
-    def do_ud(self, nick: str, reply_to: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}u <word> [/N]  e.g. {CMD_PREFIX}u jason /4"); return
-        m = re.match(r"^(.+?)\s*/(\d+)$", arg.strip())
-        if m:
-            term, idx = m.group(1).strip(), int(m.group(2))
-        else:
-            term, idx = arg.strip(), 1
-        self.privmsg(reply_to, urban_lookup(term, idx))
-
-    def do_translate(self, nick: str, reply_to: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}t [src] <tgt> <text>  e.g. {CMD_PREFIX}t en es Hello"); return
-        parts   = arg.strip().split(None, 2)
-        lang_re = re.compile(r"^[a-z]{2}$")
-        if len(parts) >= 3 and lang_re.match(parts[0]) and lang_re.match(parts[1]):
-            src, tgt, text = parts[0], parts[1], parts[2]
-        elif len(parts) >= 2 and lang_re.match(parts[0]):
-            src, tgt, text = None, parts[0], " ".join(parts[1:])
-        else:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}t [src] <tgt> <text>"); return
-        self.privmsg(reply_to, translate_text(src, tgt, text))
-
-    def do_join_part(self, nick: str, reply_to: str, cmd: str, arg):
-        if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}{cmd} <#channel>"); return
-        if not re.match(r"^[#&+!][^\s,\x07]{1,49}$", arg):
-            self.privmsg(reply_to, f"{nick}: '{arg}' doesn't look like a valid channel name."); return
-        chan_lower = arg.lower()
-        if cmd == "join":
-            if chan_lower in self.active_channels:
-                self.privmsg(reply_to, f"{nick}: I'm already in {arg}.")
-            else:
-                self.send(f"JOIN {arg}")
-                self.active_channels.add(chan_lower)
-                self.privmsg(reply_to, f"{nick}: joining {arg} ...")
-                log.info(f"{nick} requested JOIN {arg}")
-        else:
-            if chan_lower not in self.active_channels:
-                self.privmsg(reply_to, f"{nick}: I'm not in {arg}.")
-            else:
-                self.send(f"PART {arg} :Parting on request from {nick}")
-                self.active_channels.discard(chan_lower)
-                if chan_lower != reply_to.lower():
-                    self.privmsg(reply_to, f"{nick}: left {arg}.")
-                log.info(f"{nick} requested PART {arg}")
-
-    def do_help(self, nick: str, reply_to: str):
-        for line in build_help(NICKNAME):
-            self.privmsg(reply_to, line)
-
-    # ── dispatcher ────────────────────────────────────────────────────────
-
-    CMD_ALIASES = {
-        "weather":           "weather",
-        "w":                 "weather",
-        "forecast":          "forecast",
-        "f":                 "forecast",
-        "register_location": "regloc",
-        "regloc":            "regloc",
-        "myloc":             "myloc",
-        "delloc":            "delloc",
-        "cc":                "cc",
-        "d":                 "dice",
-        "urbandictionary":   "ud",
-        "u":                 "ud",
-        "translate":         "translate",
-        "t":                 "translate",
-        "join":              "join",
-        "part":              "part",
-        "help":              "help",
-    }
-
-    def dispatch(self, nick: str, reply_to: str, cmd: str, arg):
-        canonical = self.CMD_ALIASES.get(cmd)
-        if canonical is None: return
-
-        def run(fn, *a):
-            threading.Thread(target=fn, args=a, daemon=True).start()
-
-        if   canonical == "weather":   run(self.do_weather,   nick, reply_to, arg)
-        elif canonical == "forecast":  run(self.do_forecast,  nick, reply_to, arg)
-        elif canonical == "regloc":    run(self.do_regloc,    nick, reply_to, arg)
-        elif canonical == "myloc":     run(self.do_myloc,     nick, reply_to)
-        elif canonical == "delloc":    run(self.do_delloc,    nick, reply_to)
-        elif canonical == "cc":        run(self.do_calc,      nick, reply_to, arg)
-        elif canonical == "dice":      run(self.do_dice,      nick, reply_to, arg)
-        elif canonical == "ud":        run(self.do_ud,        nick, reply_to, arg)
-        elif canonical == "translate": run(self.do_translate, nick, reply_to, arg)
-        elif canonical in ("join","part"): run(self.do_join_part, nick, reply_to, canonical, arg)
-        elif canonical == "help":      run(self.do_help,      nick, reply_to)
-
-    # ── main loop ─────────────────────────────────────────────────────────
+    # ── main loop ──────────────────────────────────────────────────────────
 
     def run(self):
-        self.connect()
-        buf = ""
+        self.autoload_modules()
+
+        # Initial connection — retry forever until it works
+        while True:
+            try:
+                self._connect()
+                break
+            except Exception as e:
+                log.error(f"Connection failed: {e} — retrying in 30s")
+                time.sleep(30)
+
+        buf        = ""
         identified = False
 
         while True:
             try:
+                # If we just (re)connected, send registration
+                if not identified and self.sock:
+                    self.send(f"NICK {NICKNAME}")
+                    self.send(f"USER {NICKNAME} 0 * :{REALNAME}")
+
                 data = self.sock.recv(4096).decode("utf-8", errors="replace")
                 if not data:
-                    log.warning("Disconnected — reconnecting in 30s ...")
-                    time.sleep(30)
-                    self.connect()
-                    identified = False
-                    continue
+                    raise ConnectionResetError("Server closed connection")
+
                 buf += data
                 while "\r\n" in buf:
                     line, buf = buf.split("\r\n", 1)
                     log.debug(f"<< {line}")
                     self._process(line)
+
                     if "376" in line or "422" in line:
                         if not identified:
                             if NICKSERV_PW:
                                 self.send(f"PRIVMSG NickServ :IDENTIFY {NICKSERV_PW}")
                                 time.sleep(2)
-                            self.join_channels()
+                            self.rejoin_saved_channels()
                             identified = True
 
-            except ssl.SSLError as e:
-                log.error(f"SSL error: {e}")
-                time.sleep(10)
-            except TimeoutError:
-                log.debug("recv timeout, continuing")
-                continue
-            except OSError as e:
-                if "timed out" in str(e).lower():
-                    log.debug("recv timed out, continuing")
-                    continue
-                log.error(f"Socket error: {e}")
-                time.sleep(10)
+            except (ConnectionResetError, ConnectionAbortedError,
+                    BrokenPipeError, ssl.SSLError, OSError) as e:
+                log.warning(f"Connection lost: {e} — reconnecting in 15s")
+                identified = False
+                buf        = ""
+                time.sleep(15)
+                while True:
+                    try:
+                        self._connect()
+                        break
+                    except Exception as ce:
+                        log.error(f"Reconnect failed: {ce} — retrying in 30s")
+                        time.sleep(30)
+
             except Exception as e:
-                log.error(f"Error: {e}")
-                time.sleep(10)
+                log.error(f"Unexpected error: {e}")
+                time.sleep(5)
 
     def _process(self, line: str):
         if line.startswith("PING"):
             self.send("PONG " + line.split(":", 1)[1])
             return
 
-        kick_m = re.match(r":\S+ KICK (\S+) " + re.escape(NICKNAME), line)
-        if kick_m:
-            self.active_channels.discard(kick_m.group(1).lower())
-            log.info(f"Kicked from {kick_m.group(1)}")
+        # INVITE
+        inv = re.match(r":([^!]+)![^@]+@\S+ INVITE \S+ :?(\S+)", line)
+        if inv:
+            self._on_invite(inv.group(1), inv.group(2))
             return
 
+        # JOIN
+        join_m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)", line)
+        if join_m:
+            j_nick, j_host, j_chan = join_m.groups()
+            if j_nick.lower() == NICKNAME.lower():
+                self._on_bot_join(j_chan)
+            else:
+                user_join(j_chan, j_nick, j_host)
+            return
+
+        # PART
+        part_m = re.match(r":([^!]+)![^@]+@(\S+) PART :?(\S+)", line)
+        if part_m:
+            p_nick, p_host, p_chan = part_m.groups()
+            if p_nick.lower() == NICKNAME.lower():
+                self._on_bot_part(p_chan)
+            else:
+                user_part(p_chan, p_nick)
+            return
+
+        # KICK
+        kick_m = re.match(r":\S+ KICK (\S+) (\S+)", line)
+        if kick_m:
+            k_chan, k_nick = kick_m.group(1), kick_m.group(2)
+            if k_nick.lower() == NICKNAME.lower():
+                self._on_bot_part(k_chan)
+                log.info(f"Kicked from {k_chan}")
+            else:
+                user_part(k_chan, k_nick)
+            return
+
+        # QUIT
+        quit_m = re.match(r":([^!]+)![^@]+@\S+ QUIT", line)
+        if quit_m:
+            user_quit(quit_m.group(1))
+            return
+
+        # NICK change
+        nick_m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
+        if nick_m:
+            user_rename(nick_m.group(1), nick_m.group(3), nick_m.group(2))
+            return
+
+        # PRIVMSG
         m = re.match(r":([^!]+)![^@]+@(\S+) PRIVMSG (\S+) :(.*)", line)
-        if not m: return
+        if not m:
+            return
 
         nick, hostmask, target, text = m.groups()
         text     = text.strip()
         is_pm    = target.lower() == NICKNAME.lower()
         reply_to = nick if is_pm else target
 
+        if not is_pm and target.lower() in self.active_channels:
+            user_join(target, nick, hostmask)
+
+        all_cmds = set(self._CORE_COMMANDS) | set(self._commands)
         cmd, arg = None, None
 
         if text.startswith(CMD_PREFIX):
-            rest  = text[len(CMD_PREFIX):]
-            parts = rest.split(None, 1)
+            parts = text[len(CMD_PREFIX):].split(None, 1)
             cmd   = parts[0].lower()
             arg   = parts[1].strip() if len(parts) > 1 else None
         elif is_pm:
             parts     = text.split(None, 1)
             candidate = parts[0].lower()
-            if candidate in self.CMD_ALIASES:
+            if candidate in all_cmds:
                 cmd = candidate
                 arg = parts[1].strip() if len(parts) > 1 else None
 
-        if cmd and cmd in self.CMD_ALIASES:
-            log.info(f"cmd={cmd!r} arg={arg!r} from {nick}!{hostmask} {'(PM)' if is_pm else 'in ' + reply_to}")
-            self.dispatch(nick, reply_to, cmd, arg)
+        if cmd and cmd in all_cmds:
+            log.info(
+                f"cmd={cmd!r} arg={arg!r} from {nick}!{hostmask} "
+                f"{'(PM)' if is_pm else 'in ' + reply_to}"
+            )
+            self.dispatch(nick, reply_to, cmd, arg, is_pm)
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
 

@@ -1,0 +1,15 @@
+# Core dependency
+requests>=2.31.0
+
+# Password hashing — install at least ONE of the following.
+# scrypt is built into Python's hashlib (no install needed).
+# bcrypt and argon2-cffi are optional stronger alternatives.
+#
+# Uncomment to install:
+# bcrypt>=4.0.0
+# argon2-cffi>=23.1.0
+
+# Optional but recommended on Windows for better SSL certificate handling:
+# pip install certifi
+# Then set SSL_CERT_FILE in your environment:
+#   set SSL_CERT_FILE=%APPDATA%\Python\Python3x\site-packages\certifi\cacerts.pem
