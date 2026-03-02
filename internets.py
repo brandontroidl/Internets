@@ -32,7 +32,7 @@ from hashpw import verify_password
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-cfg = configparser.ConfigParser()
+cfg = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
 cfg.read("config.ini")
 
 IRC_SERVER    = cfg["irc"]["server"]
