@@ -338,13 +338,22 @@ def nws_alerts(lat, lon, headers) -> list:
 
 def nws_discussion(grid, headers) -> list:
     """
-    Fetches the forecaster's written discussion for the grid's CWA (office).
-    Returns a list of IRC-sized strings (one paragraph per line, capped at 6).
+    Fetches the forecaster's written discussion (AFD) for the grid's CWA.
+
+    NWS AFD format:
+      - Metadata header block at the top (WMO header, office, date/time)
+      - Sections separated by && (may be inline or on its own line)
+      - Each section begins with a .LABEL... line
+      - Prose follows, word-wrapped at ~66 chars per line
+
+    Returns a list of IRC lines — one per named section, capped at 4.
+    Each line is:  [SECTION LABEL] first sentence or two of prose...
     """
     try:
         office = grid.get("cwa", "")
         if not office:
             return None
+
         r = requests.get(
             f"https://api.weather.gov/products/types/AFD/locations/{office}",
             headers=headers, timeout=10
@@ -353,10 +362,11 @@ def nws_discussion(grid, headers) -> list:
         items = r.json().get("@graph", [])
         if not items:
             return None
-        # Get the most recent discussion
+
         latest_id = items[0].get("id", "")
         if not latest_id:
             return None
+
         r2 = requests.get(
             f"https://api.weather.gov/products/{latest_id}",
             headers=headers, timeout=10
@@ -366,40 +376,55 @@ def nws_discussion(grid, headers) -> list:
         if not text:
             return None
 
-        # Strip header lines (all-caps metadata at the top)
-        lines = text.strip().splitlines()
-        body_lines = []
-        in_body = False
-        for line in lines:
-            stripped = line.strip()
-            if not in_body:
-                # Skip until we hit a line with mixed case (actual prose)
-                if stripped and not stripped.isupper() and len(stripped) > 20:
-                    in_body = True
-                else:
-                    continue
-            if stripped:
-                body_lines.append(stripped)
+        # Normalise line endings, then split on && regardless of surrounding
+        # whitespace — NWS sometimes puts it inline, sometimes on its own line
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        raw_sections = re.split(r"\s*&&\s*", text)
 
-        # Collapse into paragraphs split by blank lines
-        paragraphs = []
-        current = []
-        for line in body_lines:
-            if line:
-                current.append(line)
-            else:
-                if current:
-                    paragraphs.append(" ".join(current))
-                    current = []
-        if current:
-            paragraphs.append(" ".join(current))
-
-        # Trim each paragraph to IRC-safe length and return up to 4
         out = []
-        for para in paragraphs[:4]:
-            if len(para) > 420:
-                para = para[:417] + "..."
-            out.append(para)
+        for section in raw_sections:
+            section = section.strip()
+            if not section:
+                continue
+
+            # Find the .LABEL... line — skip sections without one (metadata header)
+            label_match = re.search(r"^\.([\w][A-Z0-9 /()\-]+?)\s*\.\.\.", section, re.MULTILINE)
+            if not label_match:
+                continue
+
+            label = label_match.group(1).strip()
+
+            # Everything after the .LABEL... line is prose
+            prose_start = label_match.end()
+            # Skip optional timestamp on same line as label (e.g. "02/948 AM.")
+            prose_raw = section[prose_start:]
+            prose_raw = re.sub(r"^\S[^\n]*\n", "\n", prose_raw)   # drop rest of label line
+
+            # Strip ***UPDATE*** markers, collapse whitespace, remove blank lines
+            prose_lines = []
+            for line in prose_raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if re.match(r"^\*+[^*]+\*+$", line):   # ***UPDATE*** etc
+                    continue
+                prose_lines.append(line)
+
+            if not prose_lines:
+                continue
+
+            prose = " ".join(prose_lines)
+            prose = re.sub(r"\s+", " ", prose).strip()
+
+            # Truncate to IRC-safe length at a word boundary
+            if len(prose) > 350:
+                prose = prose[:350].rsplit(" ", 1)[0] + " ..."
+
+            out.append(f"[{label}] {prose}")
+
+            if len(out) >= 4:
+                break
+
         return out if out else None
 
     except Exception as e:

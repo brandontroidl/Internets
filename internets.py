@@ -40,6 +40,9 @@ IRC_PORT      = int(cfg["irc"]["port"])
 NICKNAME      = cfg["irc"]["nickname"]
 REALNAME      = cfg["irc"]["realname"]
 NICKSERV_PW   = cfg["irc"].get("nickserv_password", "").strip()
+SERVER_PW     = cfg["irc"].get("server_password",   "").strip()
+OPER_NAME     = cfg["irc"].get("oper_name",          "").strip()
+OPER_PW       = cfg["irc"].get("oper_password",      "").strip()
 
 CMD_PREFIX    = cfg["bot"]["command_prefix"]
 API_COOLDOWN    = int(cfg["bot"]["api_cooldown"])
@@ -230,6 +233,31 @@ class IRCBot:
             self.send(f"PRIVMSG {target} :{chunk}")
             time.sleep(0.4)
 
+    def notice(self, target: str, msg: str):
+        """Send a NOTICE — used for help output and privileged command responses."""
+        for chunk in [msg[i:i+450] for i in range(0, len(msg), 450)]:
+            self.send(f"NOTICE {target} :{chunk}")
+            time.sleep(0.4)
+
+    def reply(self, nick: str, reply_to: str, msg: str, privileged: bool = False):
+        """
+        Route a response based on context:
+          PM (reply_to == nick):        PRIVMSG to nick
+          Channel, regular command:     PRIVMSG to channel
+          Channel, privileged command:  NOTICE to nick only
+        """
+        is_pm = not reply_to.startswith(("#", "&", "+", "!"))
+        if is_pm:
+            self.privmsg(nick, msg)
+        elif privileged:
+            self.notice(nick, msg)
+        else:
+            self.privmsg(reply_to, msg)
+
+    def preply(self, nick: str, reply_to: str, msg: str):
+        """Privileged reply shortcut — NOTICE in channel, PRIVMSG in PM."""
+        self.reply(nick, reply_to, msg, privileged=True)
+
     def send(self, msg: str):
         with self._lock:
             log.debug(f">> {msg}")
@@ -345,109 +373,119 @@ class IRCBot:
     def cmd_auth(self, nick: str, reply_to: str, arg):
         h = _get_admin_hash()
         if not h:
-            self.privmsg(reply_to,
+            self.preply(nick, reply_to,
                 f"{nick}: no password_hash configured. "
                 f"Run hashpw.py and set password_hash in config.ini.")
             return
         if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: /MSG {NICKNAME} AUTH <password>")
+            self.preply(nick, reply_to, f"{nick}: usage: /MSG {NICKNAME} AUTH <password>")
             return
         try:
             ok = verify_password(arg.strip(), h)
         except ValueError as e:
-            self.privmsg(reply_to, f"{nick}: configuration error — {e}")
+            self.preply(nick, reply_to, f"{nick}: configuration error — {e}")
             log.error(f"Auth config error: {e}")
             return
         if ok:
             self._authed_nicks.add(nick)
-            self.privmsg(reply_to, f"{nick}: you are now authenticated as admin.")
+            self.preply(nick, reply_to, f"{nick}: you are now authenticated as admin.")
             log.info(f"Admin auth granted: {nick}")
         else:
-            self.privmsg(reply_to, f"{nick}: incorrect password.")
+            self.preply(nick, reply_to, f"{nick}: incorrect password.")
             log.warning(f"Failed admin auth attempt from {nick}")
 
     def cmd_deauth(self, nick: str, reply_to: str, arg):
         if nick in self._authed_nicks:
             self._authed_nicks.discard(nick)
-            self.privmsg(reply_to, f"{nick}: admin session ended.")
+            self.preply(nick, reply_to, f"{nick}: admin session ended.")
         else:
-            self.privmsg(reply_to, f"{nick}: you are not authenticated.")
+            self.preply(nick, reply_to, f"{nick}: you are not authenticated.")
 
     # ── core commands ──────────────────────────────────────────────────────
 
     def cmd_help(self, nick: str, reply_to: str, arg):
-        p = CMD_PREFIX
+        p        = CMD_PREFIX
+        is_admin = self.is_admin(nick)
+
         lines = [f"── {NICKNAME} Commands ─────────────────────────────────────────────"]
         lines += [
             f"  {p}help               This message",
             f"  {p}modules            List loaded/available modules",
             f"  {p}auth <pw>          Authenticate as admin (PM only)",
-            f"  {p}deauth             End admin session (PM only)",
-            f"  {p}modules              List loaded/available modules",
-            f"  {p}load      <module>   Load a module        [admin]",
-            f"  {p}unload    <module>   Unload a module      [admin]",
-            f"  {p}reload    <module>   Reload a module      [admin]",
-            f"  {p}reloadall            Reload all modules   [admin]",
-            f"  {p}restart              Restart bot process  [admin]",
-            f"  {p}rehash               Reload config.ini / new password [admin]",
-            f"────────────────────────────────────────────────────────────────────",
         ]
+
+        # Admin-only commands only shown to authed users
+        if is_admin:
+            lines += [
+                f"  {p}deauth             End admin session (PM only)",
+                f"  {p}load      <module>   Load a module        [admin]",
+                f"  {p}unload    <module>   Unload a module      [admin]",
+                f"  {p}reload    <module>   Reload a module      [admin]",
+                f"  {p}reloadall            Reload all modules   [admin]",
+                f"  {p}restart              Restart bot process  [admin]",
+                f"  {p}rehash               Reload config.ini    [admin]",
+            ]
+
+        lines.append("────────────────────────────────────────────────────────────────────")
+
         for mod_name, instance in self._modules.items():
             mod_lines = instance.help_lines(p)
             if mod_lines:
                 lines.append(f"  [{mod_name}]")
                 lines.extend(mod_lines)
+
         lines += [
             f"────────────────────────────────────────────────────────────────────",
             f"  In PM you can drop the '{p}' prefix.",
         ]
+
         for line in lines:
-            self.privmsg(reply_to, line)
+            self.preply(nick, reply_to, line)
 
     def cmd_modules(self, nick: str, reply_to: str, arg):
         if self._modules:
-            self.privmsg(reply_to, f"Loaded: {', '.join(self._modules.keys())}")
+            self.preply(nick, reply_to, f"Loaded: {', '.join(self._modules.keys())}")
         else:
-            self.privmsg(reply_to, "No modules currently loaded.")
+            self.preply(nick, reply_to, "No modules currently loaded.")
         available = sorted(
             p.stem for p in MODULES_DIR.glob("*.py")
             if p.stem not in ("__init__", "base") and p.stem not in self._modules
         )
         if available:
-            self.privmsg(reply_to, f"Available: {', '.join(available)}")
+            self.preply(nick, reply_to, f"Available: {', '.join(available)}")
 
     def cmd_load(self, nick: str, reply_to: str, arg):
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
         if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}load <module>"); return
+            self.preply(nick, reply_to, f"{nick}: usage: {CMD_PREFIX}load <module>"); return
         _, msg = self.load_module(arg.strip().lower())
-        self.privmsg(reply_to, msg)
+        self.preply(nick, reply_to, msg)
 
     def cmd_unload(self, nick: str, reply_to: str, arg):
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
         if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}unload <module>"); return
+            self.preply(nick, reply_to, f"{nick}: usage: {CMD_PREFIX}unload <module>"); return
         _, msg = self.unload_module(arg.strip().lower())
-        self.privmsg(reply_to, msg)
+        self.preply(nick, reply_to, msg)
 
     def cmd_reload(self, nick: str, reply_to: str, arg):
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
         if not arg:
-            self.privmsg(reply_to, f"{nick}: usage: {CMD_PREFIX}reload <module>"); return
+            self.preply(nick, reply_to, f"{nick}: usage: {CMD_PREFIX}reload <module>"); return
         _, msg = self.reload_module(arg.strip().lower())
-        self.privmsg(reply_to, msg)
+        self.preply(nick, reply_to, msg)
 
     def cmd_reloadall(self, nick: str, reply_to: str, arg):
         """Reload every currently loaded module in sequence."""
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
         names = list(self._modules.keys())
         if not names:
-            self.privmsg(reply_to, "No modules are loaded."); return
-        self.privmsg(reply_to, f"Reloading {len(names)} module(s): {', '.join(names)}")
+            self.preply(nick, reply_to, "No modules are loaded."); return
+        self.preply(nick, reply_to, f"Reloading {len(names)} module(s): {', '.join(names)}")
         ok_list, fail_list = [], []
         for name in names:
             ok, msg = self.reload_module(name)
@@ -458,7 +496,7 @@ class IRCBot:
             parts.append(f"OK: {', '.join(ok_list)}")
         if fail_list:
             parts.append(f"FAILED: {', '.join(fail_list)}")
-        self.privmsg(reply_to, " | ".join(parts))
+        self.preply(nick, reply_to, " | ".join(parts))
 
     def cmd_restart(self, nick: str, reply_to: str, arg):
         """
@@ -466,8 +504,8 @@ class IRCBot:
         The process replaces itself in-place; the bot will reconnect automatically.
         """
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
-        self.privmsg(reply_to, f"{nick}: restarting process — back in a moment ...")
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        self.preply(nick, reply_to, f"{nick}: restarting process — back in a moment ...")
         log.info(f"Process restart requested by {nick}")
         # Brief pause so the PRIVMSG flushes before the socket closes
         import time as _t; _t.sleep(1)
@@ -485,30 +523,30 @@ class IRCBot:
         Drops all active admin sessions since the password may have changed.
         """
         if not self.is_admin(nick):
-            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+            self.preply(nick, reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
 
         try:
             cfg.read("config.ini")
         except Exception as e:
-            self.privmsg(reply_to, f"{nick}: failed to read config.ini — {e}")
+            self.preply(nick, reply_to, f"{nick}: failed to read config.ini — {e}")
             log.error(f"Rehash failed: {e}")
             return
 
         h = _get_admin_hash()
         if not h:
-            self.privmsg(reply_to,
+            self.preply(nick, reply_to,
                 f"{nick}: config reloaded but no password_hash is set — "
                 f"module management disabled until one is configured.")
             log.warning("Rehash: no password_hash in config")
         else:
             prefix = h.split("$")[0] if "$" in h else ""
             if prefix not in ("scrypt", "bcrypt", "argon2"):
-                self.privmsg(reply_to,
+                self.preply(nick, reply_to,
                     f"{nick}: config reloaded but password_hash format is invalid "
                     f"(got '{prefix}$...'). Must be scrypt$, bcrypt$, or argon2$.")
                 log.error(f"Rehash: invalid hash prefix '{prefix}'")
                 return
-            self.privmsg(reply_to, f"{nick}: config reloaded — new {prefix} hash active.")
+            self.preply(nick, reply_to, f"{nick}: config reloaded — new {prefix} hash active.")
             log.info(f"Rehash: new {prefix} hash loaded by {nick}")
 
         # Drop all authed sessions — password may have changed
@@ -516,7 +554,7 @@ class IRCBot:
         self._authed_nicks.clear()
         if count:
             log.info(f"Rehash: cleared {count} active admin session(s)")
-            self.privmsg(reply_to,
+            self.preply(nick, reply_to,
                 f"All admin sessions have been cleared — re-authenticate to continue.")
 
     # ── dispatcher ─────────────────────────────────────────────────────────
@@ -648,6 +686,8 @@ class IRCBot:
             try:
                 # If we just (re)connected, send registration
                 if not identified and self.sock:
+                    if SERVER_PW:
+                        self.send(f"PASS {SERVER_PW}")
                     self.send(f"NICK {NICKNAME}")
                     self.send(f"USER {NICKNAME} 0 * :{REALNAME}")
 
@@ -666,6 +706,9 @@ class IRCBot:
                             if NICKSERV_PW:
                                 self.send(f"PRIVMSG NickServ :IDENTIFY {NICKSERV_PW}")
                                 time.sleep(2)
+                            if OPER_NAME and OPER_PW:
+                                self.send(f"OPER {OPER_NAME} {OPER_PW}")
+                                log.info(f"Sent OPER request for {OPER_NAME}")
                             self.rejoin_saved_channels()
                             identified = True
 

@@ -68,14 +68,14 @@ class ChannelsModule(BotModule):
         elif reply_to.startswith(("#", "&", "+", "!")):
             channel = reply_to
         else:
-            self.bot.privmsg(reply_to, f"{nick}: usage: {p}users [#channel]"); return
+            self.bot.preply(nick, reply_to, f"{nick}: usage: {p}users [#channel]"); return
 
         users = self.bot.channel_users(channel)
         if not users:
-            self.bot.privmsg(reply_to, f"No user data for {channel} yet.")
+            self.bot.preply(nick, reply_to, f"No user data for {channel} yet.")
             return
 
-        self.bot.privmsg(reply_to, f"Known users in {channel} ({len(users)}):")
+        self.bot.preply(nick, reply_to, f"Known users in {channel} ({len(users)}):")
         # Sort by last_seen descending
         sorted_users = sorted(
             users.values(),
@@ -86,8 +86,8 @@ class ChannelsModule(BotModule):
             last = u.get("last_seen", "?")[:19].replace("T", " ")
             first = u.get("first_seen", "?")[:19].replace("T", " ")
             host  = u.get("hostmask", "?")
-            self.bot.privmsg(
-                reply_to,
+            self.bot.notice(
+                nick,
                 f"  {u['nick']}!{host}  first: {first}  last: {last}"
             )
 
