@@ -11,7 +11,9 @@ A modular IRC bot with worldwide weather, calculator, dice roller, Urban Diction
 - **Worldwide weather** — US locations use weather.gov (NWS), everywhere else uses Open-Meteo. No API keys required for either.
 - **Full NWS feature set for US** — current conditions, 4-day forecast, 8-hour hourly, active alerts with severity, and formatted forecaster discussion (AFD)
 - **Smart response routing** — regular command output goes to the channel; help and privileged command responses come back as NOTICE to the requesting user only; everything in PM stays as PRIVMSG
-- **Two-tier flood protection** — a global per-nick flood gate silently drops commands sent too fast; a separate API cooldown rate-limits expensive weather lookups
+- **Two-tier flood protection** — a global per-nick flood gate silently drops commands sent too fast; a separate API cooldown rate-limits expensive weather lookups; authed admins bypass the flood gate but not the API cooldown
+- **IRCv3 compliant** — full `CAP LS 302` negotiation; requests `multi-prefix`, `away-notify`, `account-notify`, `chghost`, `extended-join`, `server-time`, `message-tags`; degrades gracefully on servers that support none of it
+- **Flood-safe outbound queue** — all sends go through a token bucket (5 burst, 1 per 1.5s refill); PONG, CAP, and registration messages bypass it as immediate priority so keepalive and negotiation are never blocked behind queued output
 - **Invite-only** — no channels in config; bot joins via `/INVITE` and remembers channels across restarts in `channels.json`
 - **Per-channel user registry** — tracks joins, parts, quits, nick changes, and last seen timestamps for every user
 - **Dynamic module system** — load, unload, and reload individual modules without restarting
@@ -22,6 +24,7 @@ A modular IRC bot with worldwide weather, calculator, dice roller, Urban Diction
 - Server connection password (`PASS`) for networks and bouncers that require one
 - IRC operator (`OPER`) support, sent automatically after connect
 - NickServ identification support
+- Nick collision recovery — appends `_` and retries automatically on 433
 - SSL with optional cert verification bypass for self-signed certs
 - Plain TCP support for non-SSL servers
 - Auto-reconnect on disconnect with keepalive ping thread
@@ -129,21 +132,60 @@ log_file = internets.log
 
 ### Connection Sequence
 
-On every connect the bot sends in this order:
+On every connect the bot follows this sequence:
+
 1. `PASS <server_password>` — only if `server_password` is set
-2. `NICK <nickname>`
-3. `USER <nickname> 0 * :<realname>`
-4. *(after motd)* `PRIVMSG NickServ :IDENTIFY <password>` — only if `nickserv_password` is set
-5. *(after motd)* `OPER <oper_name> <oper_password>` — only if both oper fields are set
+2. `CAP LS 302` — begin IRCv3 capability negotiation, pausing registration
+3. `NICK <nickname>`
+4. `USER <nickname> 0 * :<realname>`
+5. Server replies with `CAP LS` listing its available caps
+6. Bot sends `CAP REQ` for any desired caps the server supports
+7. Server replies `CAP ACK` or `CAP NAK`
+8. Bot sends `CAP END` to resume registration
+9. *(after motd)* `PRIVMSG NickServ :IDENTIFY <password>` — only if `nickserv_password` is set
+10. *(after motd)* `OPER <oper_name> <oper_password>` — only if both oper fields are set
+
+If the server doesn't support `CAP` at all it replies `421 Unknown command` — the bot detects this and proceeds with registration immediately, no caps. If the nickname is taken (433) the bot appends `_` and retries until a free nick is found.
+
+### IRCv3 Capabilities
+
+The bot requests these on every connect. All are optional — it works normally if the server supports none of them:
+
+| Capability | What it enables |
+|---|---|
+| `multi-prefix` | See all channel prefixes on a user (`@+nick` instead of just `@nick`) |
+| `away-notify` | Receive `AWAY` notifications for users in shared channels |
+| `account-notify` | Receive `ACCOUNT` messages when a user's services account changes |
+| `chghost` | Receive `CHGHOST` when a user's host changes — no spurious quit/rejoin |
+| `extended-join` | `JOIN` messages include the user's account name and realname |
+| `server-time` | Messages include a `time=` tag with the server's timestamp |
+| `message-tags` | General message tag support (required for `server-time`) |
+
+Incoming lines with message tags (`@key=val :nick!...`) are stripped before parsing so tagged messages never break the command parser.
+
+### Outbound Flood Protection
+
+All outgoing lines go through a **token bucket queue** on a dedicated sender thread:
+
+| | Value |
+|---|---|
+| Burst capacity | 5 tokens |
+| Refill rate | 1 token per 1.5 seconds (~40 msg/min sustained) |
+| Immediate (no token cost) | `PONG`, all `CAP` messages, `PASS`/`NICK`/`USER`, `QUIT` |
+| Normal (token bucket) | `PRIVMSG`, `NOTICE`, `JOIN`, `OPER`, NickServ identify |
+
+This keeps the bot well under every major network's flood kill threshold while still being able to burst several weather results back-to-back.
 
 ### Rate Limiting
 
-| Tier | Config key | Default | Scope | On trigger |
-|---|---|---|---|---|
-| Flood gate | `flood_cooldown` | 3s | Every command | Silently dropped — no response |
-| API cooldown | `api_cooldown` | 10s | Weather commands only | User is notified |
+| Tier | Config key | Default | Scope | Admin bypass | On trigger |
+|---|---|---|---|---|---|
+| Flood gate | `flood_cooldown` | 3s | Every command | ✅ Yes | Silently dropped — no response |
+| API cooldown | `api_cooldown` | 10s | Weather commands only | ❌ No | User is notified |
 
-The flood gate is the first line of defence against abuse — commands sent within `flood_cooldown` seconds of the last one are silently discarded. Admin commands bypass both tiers.
+The flood gate silently discards commands sent within `flood_cooldown` seconds of the last one. Authed admins bypass it entirely so management commands are never dropped.
+
+The API cooldown is always enforced regardless of admin status — it exists to respect weather.gov's Terms of Service, not to limit local users. Admins are trusted, but the upstream API still has limits.
 
 ---
 
@@ -412,15 +454,17 @@ Methods available on `self.bot` inside modules:
 | `notice(target, msg)` | Send a NOTICE to a channel or nick |
 | `reply(nick, reply_to, msg, privileged=False)` | Route-aware reply — PM→PRIVMSG, channel regular→PRIVMSG to channel, channel privileged→NOTICE to nick |
 | `preply(nick, reply_to, msg)` | Shortcut for `reply(..., privileged=True)` |
-| `send(raw)` | Send a raw IRC line |
+| `send(raw, priority=1)` | Send a raw IRC line; use `priority=0` for immediate sends that bypass the token bucket |
 | `rate_limited(nick)` | Returns True and records the call if nick is within `api_cooldown`; use for expensive API calls |
-| `flood_limited(nick)` | Returns True if nick is within `flood_cooldown`; silently gate commands |
+| `flood_limited(nick)` | Returns True if nick is within `flood_cooldown`; authed admins always return False |
 | `loc_get(nick)` | Get a nick's saved location string |
 | `loc_set(nick, raw)` | Save a location string for a nick |
 | `loc_del(nick)` | Delete a nick's saved location |
 | `channel_users(channel)` | Returns the user registry dict for a channel |
 | `is_admin(nick)` | Returns True if nick is currently authenticated as admin |
 | `cfg` | The live `ConfigParser` instance |
+
+All `privmsg`/`notice` output is automatically chunked to 400 bytes per line (byte-safe, not char-safe) to stay well under the 512-byte IRC line limit. Long messages are split transparently.
 
 ---
 
@@ -466,7 +510,11 @@ password_hash = scrypt$16384$8$2$<salt>$<hash>
 - `scrypt` parameters are auto-detected at runtime — no manual tuning needed
 - On Windows with SSL certificate errors: `pip install certifi`
 - weather.gov requires a `User-Agent` header with contact info per their [ToS](https://www.weather.gov/documentation/services-web-api) — set `user_agent` in `config.ini`
-- The flood gate silently drops commands — abusers get no response at all
-- Admin commands bypass both rate limiting tiers
+- The inbound flood gate silently drops commands — abusers get no response at all
+- Authed admins bypass the inbound flood gate but **not** the API cooldown
+- The outbound token bucket is always active and separate from the inbound flood gate
+- IRCv3 caps are requested but never required — the bot degrades gracefully on any server
 
 ---
+
+*Vibe coded with [Claude](https://claude.ai) because writing IRC bots from scratch is a lot of work and the vibes were immaculate.*

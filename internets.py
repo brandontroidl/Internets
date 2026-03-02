@@ -27,6 +27,7 @@ import re
 import json
 import importlib
 import importlib.util
+import queue
 from pathlib import Path
 from hashpw import verify_password
 
@@ -52,6 +53,18 @@ CHANNELS_FILE = cfg["bot"].get("channels_file",   "channels.json")
 USERS_FILE    = cfg["bot"].get("users_file",       "users.json")
 MODULES_DIR   = Path(cfg["bot"].get("modules_dir", "modules"))
 AUTO_LOAD     = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
+
+# IRCv3 capabilities we want to request
+# The bot functions fine if the server doesn't support any of these
+DESIRED_CAPS = {
+    "multi-prefix",    # see all channel mode prefixes on a user (@+nick etc)
+    "away-notify",     # get AWAY notifications for users in shared channels
+    "account-notify",  # get ACCOUNT messages when a user's account changes
+    "chghost",         # get CHGHOST when a user's host changes (no fake quit/join)
+    "extended-join",   # account name and realname included in JOIN messages
+    "server-time",     # message-tags with server timestamps
+    "message-tags",    # general message tag support
+}
 
 def _get_admin_hash() -> str:
     """Read password_hash fresh from config.ini each time — supports live rehash."""
@@ -216,6 +229,14 @@ _api_calls:   dict = {}
 # ─── IRC Bot ──────────────────────────────────────────────────────────────────
 
 class IRCBot:
+    # ── outbound send queue token bucket ──────────────────────────────────
+    # Most IRC servers kill with "Excess Flood" if you send too fast.
+    # Token bucket: 5 burst tokens, refill 1 token every 1.5 seconds.
+    # PONG/QUIT/CAP responses go into a priority queue and bypass the bucket
+    # so keepalive and cap negotiation are never delayed.
+    _BUCKET_CAPACITY = 5
+    _BUCKET_REFILL   = 1.5   # seconds per token
+
     def __init__(self):
         self.sock               = None
         self._lock              = threading.Lock()
@@ -226,18 +247,43 @@ class IRCBot:
         self._authed_nicks: set = set()
         self._keepalive_stop    = threading.Event()
 
+        # Outbound send queue — (priority, msg)  lower priority = sent first
+        # priority 0 = immediate (PONG, QUIT, CAP), 1 = normal
+        self._send_q: queue.PriorityQueue = queue.PriorityQueue()
+        self._send_counter = 0   # tie-breaker for same-priority items
+        self._sender_stop  = threading.Event()
+        self._sender_thread: threading.Thread = None
+
+        # IRCv3 cap negotiation state
+        self._cap_negotiating = False
+        self._caps_acked: set = set()
+        self._nick_attempt    = NICKNAME
+
     # ── public API for modules ─────────────────────────────────────────────
 
+    # Maximum safe message body length.
+    # IRC line limit is 512 bytes including CRLF.
+    # Overhead worst case: ":nick!user@host PRIVMSG #channel :" ≈ 70 chars.
+    # 400 chars leaves headroom for any realistic prefix.
+    _MAX_MSG = 400
+
     def privmsg(self, target: str, msg: str):
-        for chunk in [msg[i:i+450] for i in range(0, len(msg), 450)]:
+        for chunk in self._chunk(msg):
             self.send(f"PRIVMSG {target} :{chunk}")
-            time.sleep(0.4)
 
     def notice(self, target: str, msg: str):
-        """Send a NOTICE — used for help output and privileged command responses."""
-        for chunk in [msg[i:i+450] for i in range(0, len(msg), 450)]:
+        """Send a NOTICE — for help output and privileged command responses."""
+        for chunk in self._chunk(msg):
             self.send(f"NOTICE {target} :{chunk}")
-            time.sleep(0.4)
+
+    def _chunk(self, msg: str) -> list:
+        """Split message into safe-length pieces (bytes, not chars)."""
+        encoded = msg.encode("utf-8", errors="replace")
+        pieces = []
+        while encoded:
+            chunk, encoded = encoded[:self._MAX_MSG], encoded[self._MAX_MSG:]
+            pieces.append(chunk.decode("utf-8", errors="replace"))
+        return pieces
 
     def reply(self, nick: str, reply_to: str, msg: str, privileged: bool = False):
         """
@@ -258,17 +304,84 @@ class IRCBot:
         """Privileged reply shortcut — NOTICE in channel, PRIVMSG in PM."""
         self.reply(nick, reply_to, msg, privileged=True)
 
-    def send(self, msg: str):
+    def send(self, msg: str, priority: int = 1):
+        """
+        Enqueue a raw IRC line.
+        priority 0 = immediate (PONG/QUIT/CAP — bypass token bucket)
+        priority 1 = normal (subject to token bucket)
+        """
         with self._lock:
-            log.debug(f">> {msg}")
+            self._send_counter += 1
+            self._send_q.put((priority, self._send_counter, msg))
+
+    def _send_direct(self, msg: str):
+        """Write directly to socket — called only from the sender thread."""
+        log.debug(f">> {msg}")
+        try:
             self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
+        except Exception as e:
+            log.warning(f"Send error: {e}")
+
+    def _sender_loop(self):
+        """
+        Dedicated thread that drains the send queue through a token bucket.
+        Immediate items (priority 0) skip the bucket entirely.
+        Normal items (priority 1) consume one token; if empty, wait for refill.
+        """
+        tokens      = float(self._BUCKET_CAPACITY)
+        last_refill = time.monotonic()
+
+        while not self._sender_stop.is_set():
+            try:
+                priority, _, msg = self._send_q.get(timeout=0.1)
+            except queue.Empty:
+                # Refill tokens while idle
+                now = time.monotonic()
+                elapsed = now - last_refill
+                tokens = min(self._BUCKET_CAPACITY, tokens + elapsed / self._BUCKET_REFILL)
+                last_refill = now
+                continue
+
+            now     = time.monotonic()
+            elapsed = now - last_refill
+            tokens  = min(self._BUCKET_CAPACITY, tokens + elapsed / self._BUCKET_REFILL)
+            last_refill = now
+
+            if priority == 0:
+                # Immediate — no token cost, no wait
+                self._send_direct(msg)
+            else:
+                # Normal — wait for a token
+                while tokens < 1.0 and not self._sender_stop.is_set():
+                    time.sleep(0.05)
+                    now     = time.monotonic()
+                    elapsed = now - last_refill
+                    tokens  = min(self._BUCKET_CAPACITY, tokens + elapsed / self._BUCKET_REFILL)
+                    last_refill = now
+                tokens -= 1.0
+                self._send_direct(msg)
+
+    def _start_sender(self):
+        """Start (or restart) the sender thread."""
+        self._sender_stop.clear()
+        self._send_q = queue.PriorityQueue()
+        self._send_counter = 0
+        t = threading.Thread(target=self._sender_loop, daemon=True, name="sender")
+        t.start()
+        self._sender_thread = t
+
+    def _stop_sender(self):
+        self._sender_stop.set()
 
     def flood_limited(self, nick: str) -> bool:
         """
         Global per-nick flood gate applied to every command.
         Returns True (drop silently) if nick is sending faster than FLOOD_COOLDOWN.
+        Authed admins bypass this entirely — they are never flood-gated.
         Does NOT update the timestamp if limited — lets the timer keep running.
         """
+        if self.is_admin(nick):
+            return False
         now = time.time()
         with _rate_lock:
             last = _flood_calls.get(nick.lower(), 0)
@@ -281,6 +394,7 @@ class IRCBot:
         """
         Per-nick API cooldown for expensive external requests (weather etc).
         Returns True if nick is within API_COOLDOWN of their last API call.
+        Always enforced regardless of admin status — respects upstream API ToS.
         Callers are expected to notify the user when True.
         """
         now = time.time()
@@ -510,7 +624,7 @@ class IRCBot:
         # Brief pause so the PRIVMSG flushes before the socket closes
         import time as _t; _t.sleep(1)
         try:
-            self.send("QUIT :Restarting ...")
+            self.send("QUIT :Restarting ...", priority=0)
         except Exception:
             pass
         # Replace current process with a fresh copy of itself
@@ -623,20 +737,26 @@ class IRCBot:
         def _loop():
             while not stop.wait(timeout=90):
                 try:
-                    self.send(f"PING :{IRC_SERVER}")
+                    self.send(f"PING :{IRC_SERVER}", priority=0)
                 except Exception:
                     break
         threading.Thread(target=_loop, daemon=True, name="keepalive").start()
 
     def _connect(self):
         """
-        Stop old keepalive, build a new socket, assign it, start new keepalive.
-        Does NOT send NICK/USER — caller does that inside the protected recv loop.
+        Stop old keepalive and sender, build a new socket, assign it,
+        start new sender thread and keepalive.
+        Does NOT send NICK/USER — caller handles the registration flow.
         Raises on failure so the caller can retry.
         """
         self._keepalive_stop.set()
+        self._stop_sender()
         self._keepalive_stop = threading.Event()
+        self._nick_attempt    = NICKNAME
+        self._cap_negotiating = False
+        self._caps_acked      = set()
         self.sock = self._make_socket()
+        self._start_sender()
         self._start_keepalive()
 
     def rejoin_saved_channels(self):
@@ -669,6 +789,7 @@ class IRCBot:
 
     def run(self):
         self.autoload_modules()
+        log.info(f"IRCv3 caps requested: {', '.join(sorted(DESIRED_CAPS))}")
 
         # Initial connection — retry forever until it works
         while True:
@@ -684,12 +805,16 @@ class IRCBot:
 
         while True:
             try:
-                # If we just (re)connected, send registration
+                # If we just (re)connected, begin IRCv3 registration
                 if not identified and self.sock:
                     if SERVER_PW:
-                        self.send(f"PASS {SERVER_PW}")
-                    self.send(f"NICK {NICKNAME}")
-                    self.send(f"USER {NICKNAME} 0 * :{REALNAME}")
+                        self.send(f"PASS {SERVER_PW}", priority=0)
+                    # CAP LS 302 must be sent before NICK/USER to pause registration
+                    # until capability negotiation completes
+                    self.send("CAP LS 302", priority=0)
+                    self._cap_negotiating = True
+                    self.send(f"NICK {self._nick_attempt}", priority=0)
+                    self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
 
                 data = self.sock.recv(4096).decode("utf-8", errors="replace")
                 if not data:
@@ -703,9 +828,14 @@ class IRCBot:
 
                     if "376" in line or "422" in line:
                         if not identified:
+                            # If CAP negotiation is still in progress (server
+                            # sent motd before CAP END was processed), close it
+                            if self._cap_negotiating:
+                                self.send("CAP END", priority=0)
+                                self._cap_negotiating = False
                             if NICKSERV_PW:
                                 self.send(f"PRIVMSG NickServ :IDENTIFY {NICKSERV_PW}")
-                                time.sleep(2)
+                                time.sleep(1)
                             if OPER_NAME and OPER_PW:
                                 self.send(f"OPER {OPER_NAME} {OPER_PW}")
                                 log.info(f"Sent OPER request for {OPER_NAME}")
@@ -715,6 +845,7 @@ class IRCBot:
             except (ConnectionResetError, ConnectionAbortedError,
                     BrokenPipeError, ssl.SSLError, OSError) as e:
                 log.warning(f"Connection lost: {e} — reconnecting in 15s")
+                self._stop_sender()
                 identified = False
                 buf        = ""
                 time.sleep(15)
@@ -732,7 +863,81 @@ class IRCBot:
 
     def _process(self, line: str):
         if line.startswith("PING"):
-            self.send("PONG " + line.split(":", 1)[1])
+            self.send("PONG " + line.split(":", 1)[1], priority=0)
+            return
+
+        # Strip IRCv3 message tags (@tag=val :rest) before parsing
+        # Tags are informational — we use server-time if present, ignore the rest
+        raw_line = line
+        if line.startswith("@"):
+            parts = line.split(" ", 1)
+            line  = parts[1] if len(parts) > 1 else ""
+        _ = raw_line  # keep reference in case we want tags later
+
+        # CAP — IRCv3 capability negotiation
+        cap_m = re.match(r"(?::\S+ )?CAP \S+ (\S+)(?: :?(.*))?", line)
+        if cap_m:
+            sub, params = cap_m.group(1).upper(), (cap_m.group(2) or "").strip()
+            if sub == "LS":
+                # Server listed its caps — request the ones we want
+                server_caps = set(re.split(r"[\s=][^\s]*", params))
+                wanted = DESIRED_CAPS & server_caps
+                if wanted:
+                    self.send(f"CAP REQ :{' '.join(sorted(wanted))}", priority=0)
+                else:
+                    self.send("CAP END", priority=0)
+                    self._cap_negotiating = False
+            elif sub == "ACK":
+                self._caps_acked = set(params.split())
+                log.info(f"IRCv3 caps acknowledged: {self._caps_acked}")
+                self.send("CAP END", priority=0)
+                self._cap_negotiating = False
+            elif sub == "NAK":
+                log.info(f"IRCv3 caps denied: {params}")
+                self.send("CAP END", priority=0)
+                self._cap_negotiating = False
+            elif sub == "NEW":
+                # cap-notify: new caps available — request any we want
+                new_caps = set(re.split(r"[\s=][^\s]*", params)) & DESIRED_CAPS
+                if new_caps:
+                    self.send(f"CAP REQ :{' '.join(sorted(new_caps))}", priority=0)
+            return
+
+        # 421 — unknown command: old server doesn't support CAP at all
+        # Close cap negotiation and let registration proceed
+        if re.match(r":\S+ 421 \S+ CAP ", line):
+            if self._cap_negotiating:
+                self._cap_negotiating = False
+                log.info("Server does not support CAP — proceeding without IRCv3")
+            return
+
+        # 451 — not registered yet (some servers send this before CAP END)
+        if re.match(r":\S+ 451 ", line):
+            if self._cap_negotiating:
+                self.send("CAP END", priority=0)
+                self._cap_negotiating = False
+            return
+
+        # 433 — nickname already in use, try with _ appended
+        if re.match(r":\S+ 433 ", line):
+            self._nick_attempt = self._nick_attempt.rstrip("_") + "_"
+            self.send(f"NICK {self._nick_attempt}", priority=0)
+            log.warning(f"Nick in use — trying {self._nick_attempt!r}")
+            return
+
+        # CHGHOST — IRCv3: user's host changed without a quit/rejoin
+        chghost_m = re.match(r":([^!]+)![^@]+@\S+ CHGHOST (\S+) (\S+)", line)
+        if chghost_m:
+            ch_nick, ch_user, ch_host = chghost_m.groups()
+            new_host = f"{ch_user}@{ch_host}"
+            user_rename(ch_nick, ch_nick, new_host)
+            return
+
+        # ACCOUNT — IRCv3 account-notify
+        account_m = re.match(r":([^!]+)![^@]+@\S+ ACCOUNT (\S+)", line)
+        if account_m:
+            # We note it but don't currently do anything with account names
+            log.debug(f"ACCOUNT: {account_m.group(1)} -> {account_m.group(2)}")
             return
 
         # INVITE
@@ -742,9 +947,10 @@ class IRCBot:
             return
 
         # JOIN
-        join_m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)", line)
+        # JOIN — supports extended-join (IRCv3): ":nick!user@host JOIN #chan account :realname"
+        join_m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)(?:\s+(\S+))?", line)
         if join_m:
-            j_nick, j_host, j_chan = join_m.groups()
+            j_nick, j_host, j_chan = join_m.group(1), join_m.group(2), join_m.group(3)
             if j_nick.lower() == NICKNAME.lower():
                 self._on_bot_join(j_chan)
             else:
