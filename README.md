@@ -2,7 +2,7 @@
 
 A modular IRC bot with worldwide weather, calculator, dice roller, Urban Dictionary, translation, and a hot-reload system so you never have to take it offline to update.
 
-> **Disclaimer:** This entire bot was vibe coded with Claude because I was too lazy to do any actual work. It works though, so whatever.
+> **Disclaimer:** This entire bot was vibe coded with Claude because I'm too busy manually writing code for a different project and needed something spunup fast. It works though, so whatever.
 
 ---
 
@@ -349,5 +349,3 @@ scrypt auto-probes for the strongest parameters your OpenSSL build allows. On Ar
 - Admin sessions are in-memory only and do not persist across restarts — re-authenticate after `.restart`
 
 ---
-
-*Vibe coded with [Claude](https://claude.ai) because writing IRC bots from scratch is a lot of work and the vibes were immaculate.*
