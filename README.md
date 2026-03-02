@@ -2,7 +2,7 @@
 
 A modular IRC bot with worldwide weather, calculator, dice roller, Urban Dictionary, translation, and a live hot-reload system so you never have to take it offline to update.
 
-> **Disclaimer:** This entire bot was vibe coded with Claude because I was too lazy to do any actual work. It works though, so whatever.
+> **Disclaimer:** This entire bot was vibe coded with Claude because I'm busy actually coding something else and needed to spinup something quick. It works though, so whatever.
 
 ---
 
@@ -470,5 +470,3 @@ password_hash = scrypt$16384$8$2$<salt>$<hash>
 - Admin commands bypass both rate limiting tiers
 
 ---
-
-*Vibe coded with [Claude](https://claude.ai) because writing IRC bots from scratch is a lot of work and the vibes were immaculate.*
