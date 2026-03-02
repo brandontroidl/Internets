@@ -50,7 +50,10 @@ USERS_FILE    = cfg["bot"].get("users_file",       "users.json")
 MODULES_DIR   = Path(cfg["bot"].get("modules_dir", "modules"))
 AUTO_LOAD     = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
 
-ADMIN_HASH    = cfg["admin"].get("password_hash", "").strip()
+def _get_admin_hash() -> str:
+    """Read password_hash fresh from config.ini each time — supports live rehash."""
+    cfg.read("config.ini")
+    return cfg["admin"].get("password_hash", "").strip()
 
 LOG_LEVEL     = cfg["logging"]["level"]
 LOG_FILE      = cfg["logging"]["log_file"]
@@ -70,14 +73,15 @@ log = logging.getLogger("internets")
 # ─── Startup hash validation ──────────────────────────────────────────────────
 
 def _validate_hash_on_startup():
-    if not ADMIN_HASH:
+    h = _get_admin_hash()
+    if not h:
         log.warning(
             "No admin password_hash set in config.ini. "
             "Module management will be disabled. "
             "Run: python hashpw.py  to generate one."
         )
         return
-    prefix = ADMIN_HASH.split("$")[0] if "$" in ADMIN_HASH else ""
+    prefix = h.split("$")[0] if "$" in h else ""
     if prefix not in ("scrypt", "bcrypt", "argon2"):
         log.critical(
             f"Invalid password_hash format in config.ini (got prefix '{prefix}'). "
@@ -339,7 +343,8 @@ class IRCBot:
         return nick in self._authed_nicks
 
     def cmd_auth(self, nick: str, reply_to: str, arg):
-        if not ADMIN_HASH:
+        h = _get_admin_hash()
+        if not h:
             self.privmsg(reply_to,
                 f"{nick}: no password_hash configured. "
                 f"Run hashpw.py and set password_hash in config.ini.")
@@ -348,7 +353,7 @@ class IRCBot:
             self.privmsg(reply_to, f"{nick}: usage: /MSG {NICKNAME} AUTH <password>")
             return
         try:
-            ok = verify_password(arg.strip(), ADMIN_HASH)
+            ok = verify_password(arg.strip(), h)
         except ValueError as e:
             self.privmsg(reply_to, f"{nick}: configuration error — {e}")
             log.error(f"Auth config error: {e}")
@@ -384,6 +389,7 @@ class IRCBot:
             f"  {p}reload    <module>   Reload a module      [admin]",
             f"  {p}reloadall            Reload all modules   [admin]",
             f"  {p}restart              Restart bot process  [admin]",
+            f"  {p}rehash               Reload config.ini / new password [admin]",
             f"────────────────────────────────────────────────────────────────────",
         ]
         for mod_name, instance in self._modules.items():
@@ -472,6 +478,47 @@ class IRCBot:
         # Replace current process with a fresh copy of itself
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
+    def cmd_rehash(self, nick: str, reply_to: str, arg):
+        """
+        Re-read config.ini live — picks up a new password_hash without restarting.
+        Also reloads [bot] cooldown values and [weather] user_agent.
+        Drops all active admin sessions since the password may have changed.
+        """
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+
+        try:
+            cfg.read("config.ini")
+        except Exception as e:
+            self.privmsg(reply_to, f"{nick}: failed to read config.ini — {e}")
+            log.error(f"Rehash failed: {e}")
+            return
+
+        h = _get_admin_hash()
+        if not h:
+            self.privmsg(reply_to,
+                f"{nick}: config reloaded but no password_hash is set — "
+                f"module management disabled until one is configured.")
+            log.warning("Rehash: no password_hash in config")
+        else:
+            prefix = h.split("$")[0] if "$" in h else ""
+            if prefix not in ("scrypt", "bcrypt", "argon2"):
+                self.privmsg(reply_to,
+                    f"{nick}: config reloaded but password_hash format is invalid "
+                    f"(got '{prefix}$...'). Must be scrypt$, bcrypt$, or argon2$.")
+                log.error(f"Rehash: invalid hash prefix '{prefix}'")
+                return
+            self.privmsg(reply_to, f"{nick}: config reloaded — new {prefix} hash active.")
+            log.info(f"Rehash: new {prefix} hash loaded by {nick}")
+
+        # Drop all authed sessions — password may have changed
+        count = len(self._authed_nicks)
+        self._authed_nicks.clear()
+        if count:
+            log.info(f"Rehash: cleared {count} active admin session(s)")
+            self.privmsg(reply_to,
+                f"All admin sessions have been cleared — re-authenticate to continue.")
+
     # ── dispatcher ─────────────────────────────────────────────────────────
 
     _CORE_COMMANDS = {
@@ -482,6 +529,7 @@ class IRCBot:
         "reload":    "cmd_reload",
         "reloadall": "cmd_reloadall",
         "restart":   "cmd_restart",
+        "rehash":    "cmd_rehash",
         "auth":      "cmd_auth",
         "deauth":    "cmd_deauth",
     }

@@ -294,10 +294,11 @@ Authenticate first in a **private message** — auth commands do not work in cha
 | `.reload <module>` | Reload a single module in-place |
 | `.reloadall` | Reload every loaded module in-place |
 | `.restart` | Full process restart — picks up changes to `internets.py` |
+| `.rehash` | Reload `config.ini` live — new password active immediately |
 | `.modules` | List loaded modules and what's available to load |
 | `.users [#channel]` | Show known users for a channel |
 
-Admin sessions are in-memory only and do not survive a `.restart` — re-authenticate after restarting.
+Admin sessions are in-memory only and do not survive a `.restart` or `.rehash` — re-authenticate after either.
 
 ### Typical update workflow
 
@@ -308,6 +309,11 @@ Admin sessions are in-memory only and do not survive a `.restart` — re-authent
 
 # Edited internets.py itself:
 /MSG Internets RESTART          # brief disconnect, rejoins automatically
+
+# Changed password in config.ini:
+# 1. Run hashpw.py, paste new hash into config.ini
+/MSG Internets REHASH           # new hash active, all sessions cleared
+/MSG Internets AUTH yournewpassword
 ```
 
 ---
