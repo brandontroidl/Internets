@@ -1,6 +1,6 @@
 # Internets 🌤️
 
-A modular IRC bot with worldwide weather, calculator, dice roller, Urban Dictionary, translation, and a hot-reload system so you never have to take it offline to update.
+A modular IRC bot with worldwide weather, calculator, dice roller, Urban Dictionary, translation, and a live hot-reload system so you never have to take it offline to update.
 
 > **Disclaimer:** This entire bot was vibe coded with Claude because I was too lazy to do any actual work. It works though, so whatever.
 
@@ -9,26 +9,24 @@ A modular IRC bot with worldwide weather, calculator, dice roller, Urban Diction
 ## Features
 
 - **Worldwide weather** — US locations use weather.gov (NWS), everywhere else uses Open-Meteo. No API keys required for either.
-- **Full NWS coverage for US** — current conditions, 4-day forecast, 8-hour hourly, active alerts, and forecaster discussion
-- **Global flood protection** — all commands rate-limited per-nick. Excessive commands silently dropped.
-- **Smart response routing** — regular command output goes to the channel; help and privileged command responses are sent as NOTICE to the user only; everything in PM stays as PRIVMSG
-- **Context-aware `.help`** — users see user commands only; authed admins see the full command list
-- Classic IRC output style (`:: City, ST :: Conditions Clear :: Temperature 29.1C / 84.3F :: ...`)
-- City name, zip code, or raw `lat,lon` — works globally
-- `-n nick` flag to look up another user's registered location
-- Per-nick location registration saved to `locations.json`
-- Per-channel user registry — tracks joins, parts, quits, nick changes, last seen
-- Calculator, dice roller, Urban Dictionary, Google Translate
-- **Invite-only** — no channels in config; bot joins when `/INVITE`d and remembers channels across restarts
-- **Dynamic module loading** — load, unload, and reload modules without restarting
-- **Hot reload** — `.reloadall` reloads all modules in-place; `.restart` does a full process restart from IRC
-- **Live rehash** — `.rehash` reloads `config.ini` and activates a new password without restarting
-- **Hashed admin passwords** — scrypt, bcrypt, or argon2. Plaintext passwords rejected at startup.
-- Server password (`PASS`) support for networks/bouncers that require it
-- IRC operator (`OPER`) support for networks where the bot needs oper access
-- SSL with optional cert verification bypass (self-signed cert support)
+- **Full NWS feature set for US** — current conditions, 4-day forecast, 8-hour hourly, active alerts with severity, and formatted forecaster discussion (AFD)
+- **Smart response routing** — regular command output goes to the channel; help and privileged command responses come back as NOTICE to the requesting user only; everything in PM stays as PRIVMSG
+- **Two-tier flood protection** — a global per-nick flood gate silently drops commands sent too fast; a separate API cooldown rate-limits expensive weather lookups
+- **Invite-only** — no channels in config; bot joins via `/INVITE` and remembers channels across restarts in `channels.json`
+- **Per-channel user registry** — tracks joins, parts, quits, nick changes, and last seen timestamps for every user
+- **Dynamic module system** — load, unload, and reload individual modules without restarting
+- **Hot reload** — `.reloadall` reloads all modules in-place; `.restart` does a full process restart, all from IRC
+- **Live config rehash** — `.rehash` reloads `config.ini` and activates a new admin password without restarting
+- **Hashed admin passwords** — scrypt, bcrypt, or argon2; plaintext passwords are rejected at startup
+- **Admin-aware `.help`** — non-authed users see only user commands; authed admins see the full list
+- Server connection password (`PASS`) for networks and bouncers that require one
+- IRC operator (`OPER`) support, sent automatically after connect
+- NickServ identification support
+- SSL with optional cert verification bypass for self-signed certs
 - Plain TCP support for non-SSL servers
 - Auto-reconnect on disconnect with keepalive ping thread
+- City name, zip code, or raw `lat,lon` supported — works globally
+- `-n nick` flag on weather commands to look up another user's registered location
 
 ---
 
@@ -43,7 +41,7 @@ requests
 pip install requests
 ```
 
-Optional stronger password hashing (scrypt works out of the box, no packages needed):
+Optional stronger password hashing (scrypt is built-in and works without any extras):
 ```bash
 pip install bcrypt          # alternative
 pip install argon2-cffi     # strongest option
@@ -55,18 +53,13 @@ pip install argon2-cffi     # strongest option
 
 **1. Generate an admin password hash:**
 ```bash
-python hashpw.py --algo scrypt    # default, no extra packages
+python hashpw.py --algo scrypt    # default, no extra packages needed
 python hashpw.py --algo bcrypt    # pip install bcrypt
 python hashpw.py --algo argon2    # pip install argon2-cffi
 ```
-Paste the output into `config.ini` under `[admin]`.
+Paste the output into `config.ini` under `[admin] password_hash`.
 
-**2. Fill in `config.ini`:**
-- Set `server`, `nickname`, `nickserv_password` (if needed)
-- Set `user_agent` to something with your email — required by weather.gov ToS
-- Set `ssl_verify = false` if your server uses a self-signed cert
-- Set `server_password` if your network requires a connection password
-- Set `oper_name` / `oper_password` if the bot needs IRC operator access
+**2. Fill in `config.ini`** — server, nickname, user_agent (required by weather.gov ToS), and any optional fields.
 
 **3. Run it:**
 ```bash
@@ -94,19 +87,19 @@ realname = IRC Bot
 ; NickServ identification — leave blank if not registered
 nickserv_password =
 
-; Server password — sent as PASS before NICK/USER on connect.
-; Required by some networks and bouncers. Leave blank if not needed.
+; Server/bouncer connection password — sent as PASS before NICK/USER
+; Leave blank if not needed
 server_password =
 
-; IRC operator access — sent as OPER after the motd.
-; Leave both blank if not needed.
+; IRC operator access — sent as OPER <name> <password> after motd
+; Leave both blank if not needed
 oper_name =
 oper_password =
 
 [bot]
 command_prefix = .
 api_cooldown = 10          ; seconds between weather/api commands per nick
-flood_cooldown = 3         ; seconds between ANY commands per nick (flood gate)
+flood_cooldown = 3         ; seconds between ANY commands per nick (global flood gate)
 locations_file = locations.json
 channels_file = channels.json
 users_file = users.json
@@ -114,12 +107,11 @@ modules_dir = modules
 autoload = weather,location,calc,dice,urbandictionary,translate,channels
 
 [admin]
-; Run python hashpw.py to generate this value
-; Leave blank to disable module management
+; Run python hashpw.py to generate — plaintext passwords are rejected at startup
 password_hash =
 
 [weather]
-; REQUIRED by weather.gov API Terms of Service
+; Required by weather.gov API Terms of Service
 user_agent = Internets/1.0 (your@email.com)
 
 [logging]
@@ -137,84 +129,56 @@ log_file = internets.log
 
 ### Connection Sequence
 
-On connect the bot sends in order:
+On every connect the bot sends in this order:
 1. `PASS <server_password>` — only if `server_password` is set
 2. `NICK <nickname>`
 3. `USER <nickname> 0 * :<realname>`
-4. `PRIVMSG NickServ :IDENTIFY <password>` — only if `nickserv_password` is set (after motd)
-5. `OPER <oper_name> <oper_password>` — only if both oper fields are set (after motd)
+4. *(after motd)* `PRIVMSG NickServ :IDENTIFY <password>` — only if `nickserv_password` is set
+5. *(after motd)* `OPER <oper_name> <oper_password>` — only if both oper fields are set
 
 ### Rate Limiting
 
-Two independent tiers:
-
 | Tier | Config key | Default | Scope | On trigger |
 |---|---|---|---|---|
-| Flood gate | `flood_cooldown` | 3s | All commands | Silently dropped |
-| API cooldown | `api_cooldown` | 10s | Weather commands | User notified |
+| Flood gate | `flood_cooldown` | 3s | Every command | Silently dropped — no response |
+| API cooldown | `api_cooldown` | 10s | Weather commands only | User is notified |
 
-The flood gate silently discards commands sent faster than `flood_cooldown`. The API cooldown is a separate per-nick limit for expensive weather lookups.
+The flood gate is the first line of defence against abuse — commands sent within `flood_cooldown` seconds of the last one are silently discarded. Admin commands bypass both tiers.
+
+---
+
+## Response Routing
+
+How the bot responds depends on where the command came from and what type it is:
+
+| Context | Regular commands | Privileged commands |
+|---|---|---|
+| In a channel | `PRIVMSG` → channel | `NOTICE` → requesting user only |
+| Via `/MSG` (PM) | `PRIVMSG` → you | `PRIVMSG` → you |
+
+**Privileged commands** (routed privately): `.help`, `.auth`, `.deauth`, `.modules`, `.load`, `.unload`, `.reload`, `.reloadall`, `.restart`, `.rehash`, `.users`
+
+**Regular commands** (output in channel): `.weather`, `.forecast`, `.hourly`, `.alerts`, `.discuss`, `.regloc`, `.myloc`, `.delloc`, `.cc`, `.d`, `.t`, `.u`, `.join`, `.part`
 
 ---
 
 ## Commands
 
-All commands use `.` as the prefix (configurable). In a private message the prefix is optional.
-
-### Response Routing
-
-The bot routes responses differently depending on where the command was sent and what type it is:
-
-| Context | Regular commands | Help & privileged commands |
-|---|---|---|
-| In a channel | `PRIVMSG` → channel | `NOTICE` → requesting user only |
-| Via `/MSG` (PM) | `PRIVMSG` → you | `PRIVMSG` → you |
-
-**Privileged commands** are: `.help`, `.auth`, `.deauth`, `.modules`, `.load`, `.unload`, `.reload`, `.reloadall`, `.restart`, `.rehash`, `.users`
-
-**Regular commands** are everything else: `.weather`, `.forecast`, `.calc`, `.dice`, `.t`, `.u`, `.join`, `.part`, etc.
-
-### Help
-
-`.help` is a privileged command — in a channel it comes back as a NOTICE to you only, in PM it's a normal PRIVMSG. What's shown depends on whether you're authenticated.
-
-**Regular users** see:
-```
--Internets- ── Internets Commands ──────────────────────────────────────────
--Internets-   .help               This message
--Internets-   .modules            List loaded/available modules
--Internets-   .auth <pw>          Authenticate as admin (PM only)
--Internets- ────────────────────────────────────────────────────────────────
--Internets-   [weather] ...
-```
-
-**Authed admins** additionally see:
-```
--Internets-   .deauth             End admin session (PM only)
--Internets-   .load      <module>   Load a module        [admin]
--Internets-   .unload    <module>   Unload a module      [admin]
--Internets-   .reload    <module>   Reload a module      [admin]
--Internets-   .reloadall            Reload all modules   [admin]
--Internets-   .restart              Restart bot process  [admin]
--Internets-   .rehash               Reload config.ini    [admin]
-```
+All commands use `.` as the prefix by default (configurable in `config.ini`). In a private message the prefix is optional — `WEATHER 90210` works the same as `.weather 90210`.
 
 ### Weather
 
-US locations use **weather.gov (NWS)**. All other locations use **Open-Meteo**.
+US locations route to **weather.gov (NWS)**. All other locations route to **Open-Meteo**. Both are free and require no API keys.
 
-| Command | Description |
-|---|---|
-| `.weather [zip\|city\|-n nick]` | Current conditions — worldwide |
-| `.w [zip\|city\|-n nick]` | Alias for `.weather` |
-| `.forecast [zip\|city\|-n nick]` | 4-day forecast — worldwide |
-| `.f [zip\|city\|-n nick]` | Alias for `.forecast` |
-| `.hourly [zip\|city\|-n nick]` | Next 8-hour forecast — US only (NWS) |
-| `.fh [zip\|city\|-n nick]` | Alias for `.hourly` |
-| `.alerts [zip\|city\|-n nick]` | Active NWS weather alerts — US only |
-| `.wx [zip\|city\|-n nick]` | Alias for `.alerts` |
-| `.discuss [zip\|city\|-n nick]` | NWS forecaster's discussion — US only |
-| `.disc [zip\|city\|-n nick]` | Alias for `.discuss` |
+| Command | Alias | Description |
+|---|---|---|
+| `.weather [location]` | `.w` | Current conditions — worldwide |
+| `.forecast [location]` | `.f` | 4-day forecast — worldwide |
+| `.hourly [location]` | `.fh` | Next 8-hour forecast — US only (NWS) |
+| `.alerts [location]` | `.wx` | Active NWS weather alerts — US only |
+| `.discuss [location]` | `.disc` | NWS forecaster's discussion (AFD) — US only |
+
+`[location]` accepts: zip code, city name, `city, state`, `city, country`, or raw `lat,lon`. Omit to use your registered location. Use `-n nick` to look up another user's registered location.
 
 ```
 <brandon> .w 90210
@@ -228,25 +192,27 @@ US locations use **weather.gov (NWS)**. All other locations use **Open-Meteo**.
 
 <brandon> .wx tampa, fl
 <Internets> :: Tampa, FL :: 2 active alert(s) ::
-<Internets> ⚠ Flood Watch [Moderate/Watch] | 02 PM → 08 PM :: Flood Watch in effect ...
+<Internets> ⚠ Flood Watch [Moderate/Watch] | 02 PM → 08 PM :: Flood Watch in effect for low-lying areas ...
+<Internets> 🌀 Tropical Storm Warning [Severe/Immediate] | expires 08 PM :: Tropical Storm Warning in effect ...
 
 <brandon> .disc
-<Internets> :: Tampa, FL :: NWS TBW Forecast Discussion ::
-<Internets> Moisture continues to increase across the region as an upper low tracks northeast ...
+<Internets> :: San Dimas, CA :: NWS LOX Forecast Discussion ::
+<Internets> [SYNOPSIS] Gusty northwest to northeast winds will continue through the week. Clear skies and above normal temperatures expected, peaking this weekend ...
+<Internets> [SHORT TERM (TDY-WED)] Another surge of offshore flow expected tonight through Tuesday, with gusts to 50 mph possible in the mountains ...
+<Internets> [LONG TERM (THU-MON)] High pressure dominant through the extended period. Temperatures warming significantly by the weekend ...
 ```
 
-**US-only features** (`.hourly`, `.alerts`, `.discuss`) require a US location. NWS grid gaps (some US territories) fall back to Open-Meteo automatically for `.weather` and `.forecast`.
+US-only features require a US location — non-US queries get a friendly error. NWS grid gaps (some US territories) automatically fall back to Open-Meteo for `.weather` and `.forecast`.
 
 ### Location Registration
 
-| Command | Description |
-|---|---|
-| `.regloc <zip\|city>` | Save your default location — worldwide |
-| `.register_location <zip\|city>` | Alias for `.regloc` |
-| `.myloc` | Show your saved location |
-| `.delloc` | Remove your saved location |
+| Command | Alias | Description |
+|---|---|---|
+| `.regloc <location>` | `.register_location` | Save your default location — worldwide |
+| `.myloc` | | Show your saved location |
+| `.delloc` | | Remove your saved location |
 
-Once registered, all weather commands work without an argument. Other users can look up your location with `-n yournick`.
+Once registered, all weather commands work without a location argument. Other users can look up your location with `-n yournick`.
 
 ```
 <brandon> .regloc panama city, fl
@@ -254,23 +220,26 @@ Once registered, all weather commands work without an argument. Other users can 
 
 <KnownSyntax> .regloc gävle, sweden
 <Internets> KnownSyntax: registered location Gävle, Sweden
+
+<brandon> .f -n KnownSyntax
+<Internets> :: Gävle, Sweden :: Monday Partly Cloudy -1.0C / 30.2F -8.0C / 17.6F :: ...
 ```
 
-Locations stored in `locations.json` and persist across restarts.
+Locations are stored in `locations.json` and persist across restarts.
 
 ### Channel Management
 
-The bot is **invite-only** — no channels in `config.ini`. Joined channels persist in `channels.json` and are rejoined on restart.
+The bot is invite-only — no channels in `config.ini`. Joined channels are saved to `channels.json` and rejoined automatically on restart.
 
 | Command | Description |
 |---|---|
-| `.join <#channel>` | Ask bot to join a channel |
+| `.join <#channel>` | Ask bot to join a channel (or just `/INVITE` it) |
 | `.part <#channel>` | Ask bot to leave a channel |
-| `.users [#channel]` | Show known users in a channel **[admin]** |
+| `.users [#channel]` | Show known users in a channel — **[admin]**, response via NOTICE |
+
+The user registry is updated on every JOIN, PART, QUIT, KICK, and NICK change event. Last seen is also updated on every message. The current channel is assumed if `#channel` is omitted from `.users`.
 
 ```
-/INVITE Internets #yourchannel
-
 <brandon> .users #chatnplay
 -Internets- Known users in #chatnplay (2):
 -Internets-   brandon!brandon@host  first: 2026-03-01 11:39  last: 2026-03-01 14:22
@@ -279,19 +248,36 @@ The bot is **invite-only** — no channels in `config.ini`. Joined channels pers
 
 ### Calculator
 
+| Command | Description |
+|---|---|
+| `.cc <expr>` | Evaluate a math expression |
+
 ```
 <brandon> .cc 2pi
 <Internets> [calc] 2pi = 6.2831853
 
 <brandon> .cc sqrt(144) + 3^2
 <Internets> [calc] sqrt(144) + 3^2 = 21
+
+<brandon> .cc sin(pi/2)
+<Internets> [calc] sin(pi/2) = 1
 ```
 
-Sandboxed eval using Python's `math` module — no arbitrary code execution. Implicit multiplication works (`2pi`, `3e`).
+Sandboxed eval using Python's `math` module — no builtins, no arbitrary code execution. Implicit multiplication works (`2pi` → `2*pi`, `3e` → `3*e`).
 
 ### Dice Roller
 
+| Command | Description |
+|---|---|
+| `.d <expr>` | Roll dice |
+
 ```
+<brandon> .d 6
+<Internets> :: Total 4 / 6 [60%] :: Results [4] ::
+
+<brandon> .d 3d6
+<Internets> :: Total 11 / 18 [53%] :: Results [2, 4, 5] ::
+
 <brandon> .d 3d6+6
 <Internets> :: Total 17 / 24 [65%] :: Results [4, 5, 2] ::
 ```
@@ -299,6 +285,11 @@ Sandboxed eval using Python's `math` module — no arbitrary code execution. Imp
 Format: `[count]d<sides>[+/-modifier]`. Limits: 1–100 dice, 2–10000 sides.
 
 ### Urban Dictionary
+
+| Command | Alias | Description |
+|---|---|---|
+| `.u <term>` | `.urbandictionary` | Look up a term |
+| `.u <term> /N` | | Get the Nth definition |
 
 ```
 <brandon> .u jason
@@ -308,23 +299,31 @@ Format: `[count]d<sides>[+/-modifier]`. Limits: 1–100 dice, 2–10000 sides.
 <Internets> [4/7] Leader of the Argonauts ...
 ```
 
-Append `/N` to jump to a specific definition.
+Uses the official Urban Dictionary API — no key needed.
 
 ### Translation
+
+| Command | Alias | Description |
+|---|---|---|
+| `.t <to> <text>` | `.translate` | Translate text (auto-detect source) |
+| `.t <from> <to> <text>` | | Translate with explicit source language |
 
 ```
 <brandon> .t en es Hello World!
 <Internets> [t] [from en] -> ¡Hola Mundo!
 
+<brandon> .t es en ¿Cómo te llamas?
+<Internets> [t] [from es] -> What's your name?
+
 <brandon> .t fr What is your name?
 <Internets> [t] [from auto] -> Quel est votre nom ?
 ```
 
-Source language is optional — auto-detected if omitted. Uses Google Translate `gtx` endpoint, no API key needed.
+Source language is optional — auto-detected if omitted. Uses the Google Translate `gtx` endpoint, no API key needed. Note this is an unofficial endpoint and could change without notice.
 
 ### Admin
 
-Authenticate first in a **private message** — `.auth` and `.deauth` do not work in channels:
+`.auth` and `.deauth` only work in a **private message**. All other admin commands work in channels too, but responses always come back as NOTICE to you only.
 
 ```
 /MSG Internets AUTH yourpassword
@@ -340,25 +339,33 @@ Authenticate first in a **private message** — `.auth` and `.deauth` do not wor
 | `.reload <module>` | Reload a single module in-place |
 | `.reloadall` | Reload every loaded module in-place |
 | `.restart` | Full process restart — picks up changes to `internets.py` |
-| `.rehash` | Reload `config.ini` live — new password active immediately |
+| `.rehash` | Reload `config.ini` live — new password hash active immediately |
 | `.modules` | List loaded modules and what's available to load |
-| `.users [#channel]` | Show known users for a channel |
+| `.users [#channel]` | Show known users in a channel |
 
-Admin sessions are in-memory only and do not survive `.restart` or `.rehash` — re-authenticate after either.
+Admin sessions are in-memory only — they do not survive `.restart` or `.rehash`. Re-authenticate after either.
 
-### Typical update workflow
+### Help
+
+`.help` is a privileged command. In a channel the output comes back as a NOTICE to you only. In PM it's a normal PRIVMSG. What's shown depends on whether you're authenticated:
+
+**Regular users** see user-facing commands and the `.auth` prompt.
+
+**Authed admins** additionally see all `[admin]` commands.
+
+### Typical Update Workflow
 
 ```bash
-# Edit a module file, then from IRC:
+# Edit a module file on the server, then from IRC:
 /MSG Internets AUTH yourpassword
-/MSG Internets RELOADALL        # picks up module changes instantly
+/MSG Internets RELOADALL            # picks up module changes instantly, no disconnect
 
 # Edited internets.py itself:
-/MSG Internets RESTART          # brief disconnect, rejoins automatically
+/MSG Internets RESTART              # brief disconnect, bot rejoins automatically
 
 # Changed password in config.ini:
-# 1. Run: python hashpw.py, paste new hash into config.ini
-/MSG Internets REHASH           # new hash active, all sessions cleared
+# 1. Run: python hashpw.py  and paste the new hash into config.ini
+/MSG Internets REHASH               # new hash active, all admin sessions cleared
 /MSG Internets AUTH yournewpassword
 ```
 
@@ -366,13 +373,19 @@ Admin sessions are in-memory only and do not survive `.restart` or `.rehash` —
 
 ## Module System
 
-Modules live in `modules/`. Each file needs a `setup(bot)` function returning a `BotModule` instance. The `autoload` key in `config.ini` controls what loads on startup.
+Modules live in `modules/`. Each file needs a `setup(bot)` function that returns a `BotModule` instance. The `autoload` key in `config.ini` controls what loads on startup. Everything else can be loaded/unloaded live.
 
 ```python
 from modules.base import BotModule
 
 class HelloModule(BotModule):
-    COMMANDS = {"hello": "cmd_hello"}
+    COMMANDS = {"hello": "cmd_hello", "hi": "cmd_hello"}
+
+    def on_load(self):
+        pass  # optional setup
+
+    def on_unload(self):
+        pass  # optional cleanup
 
     def cmd_hello(self, nick, reply_to, arg):
         self.bot.privmsg(reply_to, f"Hello, {nick}!")
@@ -389,15 +402,31 @@ Drop it in `modules/hello.py` and load without restarting:
 /MSG Internets LOAD hello
 ```
 
-**`self.bot` API:** `privmsg(target, msg)`, `notice(target, msg)`, `reply(nick, reply_to, msg, privileged=False)`, `preply(nick, reply_to, msg)`, `send(raw)`, `rate_limited(nick)`, `loc_get(nick)`, `loc_set(nick, raw)`, `loc_del(nick)`, `channel_users(channel)`, `is_admin(nick)`, `cfg` (ConfigParser).
+### Bot API Reference
 
-Use `privmsg(reply_to, msg)` for regular output (goes to channel or PM naturally). Use `preply(nick, reply_to, msg)` for privileged output (NOTICE in channel, PRIVMSG in PM).
+Methods available on `self.bot` inside modules:
+
+| Method | Description |
+|---|---|
+| `privmsg(target, msg)` | Send a PRIVMSG to a channel or nick |
+| `notice(target, msg)` | Send a NOTICE to a channel or nick |
+| `reply(nick, reply_to, msg, privileged=False)` | Route-aware reply — PM→PRIVMSG, channel regular→PRIVMSG to channel, channel privileged→NOTICE to nick |
+| `preply(nick, reply_to, msg)` | Shortcut for `reply(..., privileged=True)` |
+| `send(raw)` | Send a raw IRC line |
+| `rate_limited(nick)` | Returns True and records the call if nick is within `api_cooldown`; use for expensive API calls |
+| `flood_limited(nick)` | Returns True if nick is within `flood_cooldown`; silently gate commands |
+| `loc_get(nick)` | Get a nick's saved location string |
+| `loc_set(nick, raw)` | Save a location string for a nick |
+| `loc_del(nick)` | Delete a nick's saved location |
+| `channel_users(channel)` | Returns the user registry dict for a channel |
+| `is_admin(nick)` | Returns True if nick is currently authenticated as admin |
+| `cfg` | The live `ConfigParser` instance |
 
 ---
 
 ## Admin Password Setup
 
-Plaintext passwords are **rejected at startup**. Generate a hash with `hashpw.py`:
+Plaintext passwords are **rejected at startup**. Always generate a hash first:
 
 ```bash
 python hashpw.py --algo scrypt    # recommended — no extra packages
@@ -413,7 +442,7 @@ password_hash = scrypt$16384$8$2$<salt>$<hash>
 
 | Algorithm | Extra package | Notes |
 |---|---|---|
-| `scrypt` | none | Auto-detects strongest params OpenSSL allows. Arch/Fedora (OpenSSL 3.x) uses N=16384 r=8 p=2 due to 32MB cap. |
+| `scrypt` | none | Auto-probes for strongest params your OpenSSL build allows. Arch/Fedora (OpenSSL 3.x with 32MB cap) uses N=16384 r=8 p=2; most other systems use higher values. |
 | `bcrypt` | `pip install bcrypt` | cost=12 |
 | `argon2` | `pip install argon2-cffi` | Strongest; 64MB memory + time hardened |
 
@@ -423,21 +452,22 @@ password_hash = scrypt$16384$8$2$<salt>$<hash>
 
 | API | Key Required | Used For |
 |---|---|---|
-| [weather.gov (NWS)](https://www.weather.gov/documentation/services-web-api) | No | Current, forecast, hourly, alerts, discussion — US |
-| [Open-Meteo](https://open-meteo.com) | No | Current conditions and forecast — non-US |
+| [weather.gov (NWS)](https://www.weather.gov/documentation/services-web-api) | No | Current, forecast, hourly, alerts, discussion — US locations |
+| [Open-Meteo](https://open-meteo.com) | No | Current conditions and forecast — non-US locations |
 | [Nominatim (OpenStreetMap)](https://nominatim.org/) | No | Geocoding — worldwide |
 | [Urban Dictionary](https://api.urbandictionary.com) | No | Dictionary lookups |
-| [Google Translate (gtx)](https://translate.googleapis.com) | No | Translation |
+| [Google Translate (gtx)](https://translate.googleapis.com) | No | Translation (unofficial endpoint) |
 
 ---
 
-## Notes
+## Platform Notes
 
-- weather.gov requires a `User-Agent` with contact info per their [ToS](https://www.weather.gov/documentation/services-web-api) — set `user_agent` in `config.ini`
-- The Google Translate endpoint is unofficial and could break if Google changes it
+- Tested on **Linux** (Arch, Ubuntu, Debian), **macOS**, **Windows** (Python 3.10+), and **WSL**
+- `scrypt` parameters are auto-detected at runtime — no manual tuning needed
+- On Windows with SSL certificate errors: `pip install certifi`
+- weather.gov requires a `User-Agent` header with contact info per their [ToS](https://www.weather.gov/documentation/services-web-api) — set `user_agent` in `config.ini`
 - The flood gate silently drops commands — abusers get no response at all
-- Admin commands are hidden from non-authed users in `.help`
-- Rate limiting is per-nick; admin commands are not rate-limited
+- Admin commands bypass both rate limiting tiers
 
 ---
 
