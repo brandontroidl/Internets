@@ -22,6 +22,7 @@ import threading
 import logging
 import configparser
 import sys
+import os
 import re
 import json
 import importlib
@@ -346,9 +347,11 @@ class IRCBot:
             f"  {p}modules            List loaded/available modules",
             f"  {p}auth <pw>          Authenticate as admin (PM only)",
             f"  {p}deauth             End admin session (PM only)",
-            f"  {p}load   <module>    Load a module   [admin]",
-            f"  {p}unload <module>    Unload a module [admin]",
-            f"  {p}reload <module>    Reload a module [admin]",
+            f"  {p}load      <module>   Load a module        [admin]",
+            f"  {p}unload    <module>   Unload a module      [admin]",
+            f"  {p}reload    <module>   Reload a module      [admin]",
+            f"  {p}reloadall            Reload all modules   [admin]",
+            f"  {p}restart              Restart bot process  [admin]",
             f"────────────────────────────────────────────────────────────────────",
         ]
         for mod_name, instance in self._modules.items():
@@ -399,16 +402,56 @@ class IRCBot:
         _, msg = self.reload_module(arg.strip().lower())
         self.privmsg(reply_to, msg)
 
+    def cmd_reloadall(self, nick: str, reply_to: str, arg):
+        """Reload every currently loaded module in sequence."""
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        names = list(self._modules.keys())
+        if not names:
+            self.privmsg(reply_to, "No modules are loaded."); return
+        self.privmsg(reply_to, f"Reloading {len(names)} module(s): {', '.join(names)}")
+        ok_list, fail_list = [], []
+        for name in names:
+            ok, msg = self.reload_module(name)
+            (ok_list if ok else fail_list).append(name)
+            log.info(f"reloadall: {msg}")
+        parts = []
+        if ok_list:
+            parts.append(f"OK: {', '.join(ok_list)}")
+        if fail_list:
+            parts.append(f"FAILED: {', '.join(fail_list)}")
+        self.privmsg(reply_to, " | ".join(parts))
+
+    def cmd_restart(self, nick: str, reply_to: str, arg):
+        """
+        Full process restart via os.execv — picks up changes to internets.py itself.
+        The process replaces itself in-place; the bot will reconnect automatically.
+        """
+        if not self.is_admin(nick):
+            self.privmsg(reply_to, f"{nick}: you must {CMD_PREFIX}auth first (PM only)."); return
+        self.privmsg(reply_to, f"{nick}: restarting process — back in a moment ...")
+        log.info(f"Process restart requested by {nick}")
+        # Brief pause so the PRIVMSG flushes before the socket closes
+        import time as _t; _t.sleep(1)
+        try:
+            self.send("QUIT :Restarting ...")
+        except Exception:
+            pass
+        # Replace current process with a fresh copy of itself
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
     # ── dispatcher ─────────────────────────────────────────────────────────
 
     _CORE_COMMANDS = {
-        "help":    "cmd_help",
-        "modules": "cmd_modules",
-        "load":    "cmd_load",
-        "unload":  "cmd_unload",
-        "reload":  "cmd_reload",
-        "auth":    "cmd_auth",
-        "deauth":  "cmd_deauth",
+        "help":      "cmd_help",
+        "modules":   "cmd_modules",
+        "load":      "cmd_load",
+        "unload":    "cmd_unload",
+        "reload":    "cmd_reload",
+        "reloadall": "cmd_reloadall",
+        "restart":   "cmd_restart",
+        "auth":      "cmd_auth",
+        "deauth":    "cmd_deauth",
     }
 
     def dispatch(self, nick: str, reply_to: str, cmd: str, arg, is_pm: bool):

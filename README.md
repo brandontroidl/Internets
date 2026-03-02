@@ -1,25 +1,27 @@
 # Internets 🌤️
 
-An IRC bot does things
+A modular IRC bot with worldwide weather, calculator, dice roller, Urban Dictionary, translation, and a hot-reload system so you never have to take it offline to update.
 
-> **Disclaimer:** This entire bot was vibe coded because I'm too busy with other projects I'm actually developing myself and needed to spinup something fast. It works though, so whatever.
+> **Disclaimer:** This entire bot was vibe coded with Claude because I was too lazy to do any actual work. It works though, so whatever.
 
 ---
 
 ## Features
 
-- Current conditions, hourly forecast, 7-day forecast, and active weather alerts
-- Classic IRC bot output style (`:: City, ST :: Conditions Clear :: Temp 72F :: ...`)
-- City name **and** zip code support (e.g. `.w panama city, fl` or `.w 90210`)
+- **Worldwide weather** — US locations use weather.gov (NWS), everywhere else uses Open-Meteo. No API keys required for either.
+- Classic IRC output style (`:: City, ST :: Conditions Clear :: Temperature 29.1C / 84.3F :: ...`)
+- City name, zip code, or raw `lat,lon` support — works globally
 - `-n nick` flag to look up another user's registered location
 - Per-nick location registration saved to `locations.json`
+- Per-channel user registry — tracks joins, parts, quits, nick changes, last seen
 - Calculator, dice roller, Urban Dictionary, and Google Translate built in
+- **Invite-only** — no channels in config, bot joins when `/INVITE`d. Joined channels persist across restarts in `channels.json`
+- **Dynamic module loading** — load, unload, and reload modules without restarting
+- **Hot reload** — `.reloadall` reloads all modules in-place; `.restart` does a full process restart from IRC, no terminal needed
+- **Hashed admin passwords** — scrypt, bcrypt, or argon2. Plaintext passwords are rejected at startup
 - SSL with optional cert verification bypass (for servers with self-signed certs)
-- Plain TCP support for non-SSL ports
-- Auto-reconnect on disconnect
-- Keepalive ping thread to prevent idle timeouts
-- Commands work in channels and via `/MSG BotNick` private message
-- In PM, you can drop the command prefix entirely
+- Plain TCP support for non-SSL servers
+- Auto-reconnect on disconnect with keepalive ping thread
 
 ---
 
@@ -34,16 +36,37 @@ requests
 pip install requests
 ```
 
+Optional stronger password hashing (scrypt is built-in and works out of the box):
+```bash
+pip install bcrypt          # alternative
+pip install argon2-cffi     # strongest option
+```
+
 ---
 
 ## Setup
 
-1. Copy `config.ini` and fill in your server details
-2. Set your email in `user_agent` — required by the weather.gov API
-3. Run it:
+**1. Generate an admin password hash:**
+```bash
+python hashpw.py --algo scrypt    # default, no extra packages
+python hashpw.py --algo bcrypt    # pip install bcrypt
+python hashpw.py --algo argon2    # pip install argon2-cffi
+```
+Paste the output into `config.ini` under `[admin]`.
 
+**2. Fill in `config.ini`:**
+- Set `server`, `nickname`, `nickserv_password` (if needed)
+- Set `user_agent` to something with your email — required by weather.gov ToS
+- Set `ssl_verify = false` if your server uses a self-signed cert
+
+**3. Run it:**
 ```bash
 python internets.py
+```
+
+**4. Invite it to a channel:**
+```
+/INVITE Internets #yourchannel
 ```
 
 ---
@@ -52,32 +75,33 @@ python internets.py
 
 ```ini
 [irc]
-server = irc.chatnplay.org
-port   = 6697
-ssl    = true
-
-# Set to false if your server has a self-signed cert
-ssl_verify = false
-
+server = irc.example.com
+port = 6697
+ssl = true
+ssl_verify = true          ; set false for self-signed certs
 nickname = Internets
-channels = #chatnplay,#bots
-
-# Optional — leave blank if your nick isn't registered
-nickserv_password =
+realname = IRC Bot
+nickserv_password =        ; leave blank if not registered
 
 [bot]
-command_prefix  = .
-api_cooldown    = 10
-default_location = 40.7128,-74.0060
-locations_file  = locations.json
+command_prefix = .
+api_cooldown = 10
+locations_file = locations.json
+channels_file = channels.json
+users_file = users.json
+modules_dir = modules
+autoload = weather,location,calc,dice,urbandictionary,translate,channels
+
+[admin]
+; Run python hashpw.py to generate this value
+; Leave blank to disable module management
+password_hash =
 
 [weather]
-# Your contact info — required by weather.gov API ToS
 user_agent = Internets/1.0 (your@email.com)
-units = us
 
 [logging]
-level    = INFO
+level = INFO
 log_file = internets.log
 ```
 
@@ -93,9 +117,11 @@ log_file = internets.log
 
 ## Commands
 
-All commands use `.` as the prefix by default (configurable). In a private message, the prefix is optional.
+All commands use `.` as the prefix by default (configurable). In a private message the prefix is optional — `AUTH yourpassword` works the same as `.auth yourpassword`.
 
 ### Weather
+
+US locations use **weather.gov**. All other locations use **Open-Meteo**.
 
 | Command | Description |
 |---|---|
@@ -105,33 +131,57 @@ All commands use `.` as the prefix by default (configurable). In a private messa
 | `.f [zip\|city\|-n nick]` | Alias for `.forecast` |
 
 ```
-<brandon> .weather 90210
+<brandon> .w 90210
 <Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 29.1C / 84.3F :: Dew point 17.0C / 62.6F :: Pressure 1013mb / 29.92in :: Humidity 47% :: Visibility 16.1km / 10.0mi :: Wind Calm :: Last Updated on August 26, 11:24 AM UTC ::
 
-<brandon> .w panama city, fl
-<Internets> :: Panama City, FL :: Conditions Partly Cloudy :: Temperature 30.1C / 86.2F :: ...
+<brandon> .w stockholm, sweden
+<Internets> :: Stockholm, Sweden :: Conditions Partly Cloudy :: Temperature -2.1C / 28.2F :: Feels like -7.3C / 18.9F :: Dew point -5.0C / 23.0F :: Pressure 1021mb / 30.15in :: Humidity 78% :: Wind from NW at 18.0km/h / 11.2 mph :: Last Updated on March 01, 02:00 PM UTC ::
 
-<brandon> .f -n hell
-<Internets> :: London, GB :: Monday Clear 110C / 49F 9C / 48.2F :: ...
+<brandon> .f -n KnownSyntax
+<Internets> :: Gävle, Sweden :: Monday Partly Cloudy -1.0C / 30.2F -8.0C / 17.6F :: Tuesday Clear 2.0C / 35.6F -5.0C / 23.0F :: ...
 ```
 
 ### Location Registration
 
 | Command | Description |
 |---|---|
-| `.register_location <zip\|city>` | Save your default location |
-| `.regloc <zip\|city>` | Alias for `.register_location` |
+| `.regloc <zip\|city>` | Save your default location (worldwide) |
+| `.register_location <zip\|city>` | Alias for `.regloc` |
 | `.myloc` | Show your saved location |
 | `.delloc` | Remove your saved location |
 
-Once registered, you can run `.weather` or `.forecast` with no argument and it will use your saved location automatically. Other users can look up your location with `-n yournick`.
+Once registered, `.weather` and `.forecast` work with no argument. Other users can look up your location with `-n yournick`.
 
 ```
-<brandon> .regloc 90210
-<Internets> brandon: registered location Beverly Hills, CA
+<brandon> .regloc panama city, fl
+<Internets> brandon: registered location Panama City, FL
+
+<KnownSyntax> .regloc gävle, sweden
+<Internets> KnownSyntax: registered location Gävle, Sweden
 ```
 
 Locations are stored in `locations.json` and persist across restarts.
+
+### Channel Management
+
+The bot is **invite-only** — there are no channels in `config.ini`. Invite it to a channel and it joins and remembers. Joined channels persist in `channels.json` and are rejoined on restart.
+
+| Command | Description |
+|---|---|
+| `.join <#channel>` | Ask bot to join a channel (also works with `/INVITE`) |
+| `.part <#channel>` | Ask bot to leave a channel |
+| `.users [#channel]` | Show known users in a channel **[admin]** |
+
+```
+/INVITE Internets #yourchannel
+
+<brandon> .users #chatnplay
+<Internets> Known users in #chatnplay (3):
+<Internets>   brandon!brandon@host  first: 2026-03-01 11:39  last: 2026-03-01 12:15
+<Internets>   KnownSyntax!ks@host   first: 2026-02-28 09:00  last: 2026-03-01 11:58
+```
+
+The user registry tracks JOIN, PART, QUIT, KICK, and NICK change events. Last seen is updated on every message.
 
 ### Calculator
 
@@ -141,9 +191,12 @@ Locations are stored in `locations.json` and persist across restarts.
 
 <brandon> .cc sqrt(144) + 3^2
 <Internets> [calc] sqrt(144) + 3^2 = 21
+
+<brandon> .cc sin(pi/2)
+<Internets> [calc] sin(pi/2) = 1
 ```
 
-Uses Python's `math` module sandboxed with no builtins — no arbitrary code execution. Implicit multiplication works (`2pi` → `2*pi`).
+Uses Python's `math` module in a sandboxed eval — no builtins, no code execution. Implicit multiplication works (`2pi` → `2*pi`, `3e` → `3*e`).
 
 ### Dice Roller
 
@@ -158,7 +211,7 @@ Uses Python's `math` module sandboxed with no builtins — no arbitrary code exe
 <Internets> :: Total 17 / 24 [65%] :: Results [4, 5, 2] ::
 ```
 
-Format: `[count]d<sides>[+/-modifier]`
+Format: `[count]d<sides>[+/-modifier]`. Limits: 1–100 dice, 2–10000 sides.
 
 ### Urban Dictionary
 
@@ -170,7 +223,7 @@ Format: `[count]d<sides>[+/-modifier]`
 <Internets> [4/7] Leader of the Argonauts ...
 ```
 
-Uses the official Urban Dictionary API — no key needed.
+Append `/N` to get a specific definition. Uses the official Urban Dictionary API — no key needed.
 
 ### Translation
 
@@ -187,34 +240,91 @@ Uses the official Urban Dictionary API — no key needed.
 
 Uses the Google Translate `gtx` endpoint — no API key needed. Source language is optional (auto-detected if omitted).
 
-### Channel Management
+### Admin
 
+Authenticate first in a **private message**:
 ```
-/MSG Internets JOIN #newchannel
-/MSG Internets PART #somechannel
+/MSG Internets AUTH yourpassword
+/MSG Internets DEAUTH
 ```
 
-Anyone can ask the bot to join or leave a channel, from any channel or via PM.
+| Command | Description |
+|---|---|
+| `.auth <password>` | Authenticate as admin **(PM only)** |
+| `.deauth` | End admin session **(PM only)** |
+| `.load <module>` | Load a module from `modules/` |
+| `.unload <module>` | Unload a loaded module |
+| `.reload <module>` | Reload a single module in-place |
+| `.reloadall` | Reload every loaded module in-place |
+| `.restart` | Full process restart (picks up changes to `internets.py`) |
+| `.modules` | List loaded and available modules |
+| `.users [#channel]` | Show known users for a channel |
 
-### Help
+### Typical update workflow
 
-```
-<brandon> .help
-<brandon> /MSG Internets HELP
+```bash
+# Edit a module file on the server, then from IRC:
+/MSG Internets AUTH yourpassword
+/MSG Internets RELOADALL        # picks up module changes instantly
+
+# If you edited internets.py itself:
+/MSG Internets RESTART          # brief disconnect, comes back automatically
 ```
 
 ---
 
-## Private Message Usage
+## Module System
 
-All commands work via `/MSG BotNick` and the prefix is optional in PM:
+Modules live in the `modules/` directory. Each file exposes a `setup(bot)` function returning a `BotModule` instance. The `autoload` key in `config.ini` controls which modules load on startup.
 
+To write a new module, subclass `BotModule` from `modules/base.py`:
+
+```python
+from modules.base import BotModule
+
+class HelloModule(BotModule):
+    COMMANDS = {"hello": "cmd_hello", "hi": "cmd_hello"}
+
+    def cmd_hello(self, nick, reply_to, arg):
+        self.bot.privmsg(reply_to, f"Hello, {nick}!")
+
+    def help_lines(self, prefix):
+        return [f"  {prefix}hello   Say hello"]
+
+def setup(bot):
+    return HelloModule(bot)
 ```
-/MSG Internets WEATHER 90210
-/MSG Internets FORECAST -n brandon
-/MSG Internets SETLOC 85048
-/MSG Internets T en ja Good morning
+
+Drop it in `modules/hello.py` and load it without restarting:
 ```
+/MSG Internets LOAD hello
+```
+
+---
+
+## Admin Password Setup
+
+Plaintext passwords are **rejected at startup**. You must use a hashed password.
+
+```bash
+python hashpw.py --algo scrypt    # recommended default — no extra packages
+python hashpw.py --algo bcrypt    # pip install bcrypt
+python hashpw.py --algo argon2    # pip install argon2-cffi (strongest)
+```
+
+Paste the output into `config.ini`:
+```ini
+[admin]
+password_hash = scrypt$16384$8$2$<salt>$<hash>
+```
+
+| Algorithm | Memory cost | Extra package |
+|---|---|---|
+| `scrypt` | auto-detected (16–128MB) | none |
+| `bcrypt` | time-based, cost=12 | `pip install bcrypt` |
+| `argon2` | 64MB + time-based | `pip install argon2-cffi` |
+
+scrypt auto-probes for the strongest parameters your OpenSSL build allows. On Arch/Fedora (OpenSSL 3.x) it will use `N=16384, r=8, p=2` due to a 32MB memory cap; on most other systems it uses higher values.
 
 ---
 
@@ -222,8 +332,9 @@ All commands work via `/MSG BotNick` and the prefix is optional in PM:
 
 | API | Key Required | Used For |
 |---|---|---|
-| [weather.gov](https://www.weather.gov/documentation/services-web-api) | No | Weather data |
-| [Nominatim (OpenStreetMap)](https://nominatim.org/) | No | Geocoding city names & zip codes |
+| [weather.gov (NWS)](https://www.weather.gov/documentation/services-web-api) | No | Weather data — US locations |
+| [Open-Meteo](https://open-meteo.com) | No | Weather data — non-US locations |
+| [Nominatim (OpenStreetMap)](https://nominatim.org/) | No | Geocoding, worldwide |
 | [Urban Dictionary](https://api.urbandictionary.com) | No | Dictionary lookups |
 | [Google Translate (gtx)](https://translate.googleapis.com) | No | Translation |
 
@@ -231,9 +342,12 @@ All commands work via `/MSG BotNick` and the prefix is optional in PM:
 
 ## Notes
 
-- weather.gov only covers US locations
-- weather.gov requires a `User-Agent` header with contact info per their [ToS](https://www.weather.gov/documentation/services-web-api) — set this in `config.ini`
+- weather.gov requires a `User-Agent` with contact info per their [ToS](https://www.weather.gov/documentation/services-web-api) — set `user_agent` in `config.ini`
+- US territories without NWS grid coverage (Guam, Puerto Rico, etc.) automatically fall back to Open-Meteo
 - The Google Translate endpoint is unofficial and could break if Google changes it
-- Rate limiting is per-nick and applies to weather commands only (configurable via `api_cooldown`)
+- Rate limiting is per-nick and applies to weather commands only (`api_cooldown` in config)
+- Admin sessions are in-memory only and do not persist across restarts — re-authenticate after `.restart`
 
 ---
+
+*Vibe coded with [Claude](https://claude.ai) because writing IRC bots from scratch is a lot of work and the vibes were immaculate.*

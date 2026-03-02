@@ -34,7 +34,7 @@ def geocode(query: str, user_agent: str):
         r = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": query, "format": "json", "limit": 1,
-                    "addressdetails": 1, "countrycodes": "us"},
+                    "addressdetails": 1},
             headers={"User-Agent": user_agent}, timeout=10
         )
         results = r.json()
@@ -43,10 +43,15 @@ def geocode(query: str, user_agent: str):
         lat   = float(hit["lat"])
         lon   = float(hit["lon"])
         addr  = hit.get("address", {})
-        city  = (addr.get("city") or addr.get("town") or
-                 addr.get("village") or addr.get("county") or "")
-        state = STATE_ABBR.get(addr.get("state",""), addr.get("state",""))
-        display = f"{city}, {state}".strip(", ") if city or state else hit["display_name"]
+        cc   = addr.get("country_code", "").lower()
+        city = (addr.get("city") or addr.get("town") or
+                addr.get("village") or addr.get("county") or "")
+        if cc == "us":
+            state   = STATE_ABBR.get(addr.get("state",""), addr.get("state",""))
+            display = f"{city}, {state}".strip(", ") if city or state else hit["display_name"]
+        else:
+            country = addr.get("country", "")
+            display = f"{city}, {country}".strip(", ") if city or country else hit["display_name"]
         return lat, lon, display
     except Exception as e:
         log.warning(f"Geocode error: {e}")
@@ -72,7 +77,7 @@ class LocationModule(BotModule):
             return
         geo = geocode(arg, self.user_agent)
         if geo is None:
-            self.bot.privmsg(reply_to, f"{nick}: couldn't find '{arg}' (US locations only).")
+            self.bot.privmsg(reply_to, f"{nick}: couldn't find '{arg}'.")
             return
         _, _, display = geo
         self.bot.loc_set(nick, arg)
