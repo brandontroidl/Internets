@@ -1,13 +1,15 @@
 """
-Weather module — current conditions and 4-day forecast.
+Weather module — current conditions, forecasts, alerts, hourly, and
+forecast discussion via weather.gov (US) and Open-Meteo (non-US).
 
-Routing:
-  US locations   → weather.gov API (NWS)   — no key required
-  Non-US         → Open-Meteo API          — no key required, worldwide
+Commands:
+  .weather  (.w)    Current conditions        — worldwide
+  .forecast (.f)    4-day forecast            — worldwide
+  .hourly   (.fh)   Next 8-hour forecast      — US only (NWS)
+  .alerts   (.wx)   Active NWS alerts         — US only (NWS)
+  .discuss  (.disc) Forecaster's discussion   — US only (NWS)
 
-Geocoding via OpenStreetMap Nominatim — worldwide, no key required.
-
-Commands: .weather (.w), .forecast (.f)
+No API keys required for any of these.
 """
 
 import re
@@ -34,6 +36,16 @@ WMO_CODES = {
     85: "Snow Showers", 86: "Heavy Snow Showers",
     95: "Thunderstorm",
     96: "Thunderstorm w/ Hail", 99: "Thunderstorm w/ Heavy Hail",
+}
+
+# ── NWS alert severity/urgency short labels ───────────────────────────────────
+
+ALERT_SEVERITY = {
+    "Extreme":  "‼",
+    "Severe":   "!",
+    "Moderate": "~",
+    "Minor":    "-",
+    "Unknown":  "?",
 }
 
 # ── US state abbreviations ────────────────────────────────────────────────────
@@ -92,6 +104,14 @@ def fmt_updated(iso: str) -> str:
     except Exception:
         return iso or "N/A"
 
+def fmt_time_short(iso: str) -> str:
+    """e.g. 'Mon 3:00 PM'"""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%a %I:%M %p").lstrip("0")
+    except Exception:
+        return iso or "N/A"
+
 # ── Geocoding — worldwide ─────────────────────────────────────────────────────
 
 def geocode(query: str, user_agent: str):
@@ -107,7 +127,7 @@ def geocode(query: str, user_agent: str):
     if m:
         lat, lon = float(m.group(1)), float(m.group(2))
         try:
-            r  = requests.get(
+            r    = requests.get(
                 "https://nominatim.openstreetmap.org/reverse",
                 params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
                 headers=hdrs, timeout=10
@@ -148,7 +168,7 @@ def geocode(query: str, user_agent: str):
         log.warning(f"Geocode error '{query}': {e}")
     return None
 
-# ── weather.gov (NWS) — US only ───────────────────────────────────────────────
+# ── NWS helpers ───────────────────────────────────────────────────────────────
 
 def nws_get_gridpoint(lat, lon, headers):
     try:
@@ -161,6 +181,8 @@ def nws_get_gridpoint(lat, lon, headers):
     except Exception as e:
         log.warning(f"NWS gridpoint error: {e}")
     return None
+
+# ── NWS current conditions ────────────────────────────────────────────────────
 
 def nws_current(lat, lon, grid, headers) -> str:
     try:
@@ -175,6 +197,7 @@ def nws_current(lat, lon, grid, headers) -> str:
         temp_c   = obs.get("temperature",       {}).get("value")
         dewpt_c  = obs.get("dewpoint",           {}).get("value")
         hi_c     = obs.get("heatIndex",          {}).get("value")
+        wc_c     = obs.get("windChill",          {}).get("value")
         humidity = obs.get("relativeHumidity",   {}).get("value")
         wind_ms  = obs.get("windSpeed",          {}).get("value")
         wind_deg = obs.get("windDirection",      {}).get("value")
@@ -194,6 +217,8 @@ def nws_current(lat, lon, grid, headers) -> str:
         parts = [f"Conditions {desc}", f"Temperature {cf(temp_c)}"]
         if hi_c is not None:
             parts.append(f"Heat index {cf(hi_c)}")
+        if wc_c is not None:
+            parts.append(f"Wind chill {cf(wc_c)}")
         parts += [
             f"Dew point {cf(dewpt_c)}",
             f"Pressure {mb_in_from_pa(pressure)}",
@@ -206,6 +231,8 @@ def nws_current(lat, lon, grid, headers) -> str:
     except Exception as e:
         log.warning(f"NWS observation error: {e}")
     return None
+
+# ── NWS 4-day forecast ────────────────────────────────────────────────────────
 
 def nws_forecast(grid, headers) -> str:
     try:
@@ -234,6 +261,149 @@ def nws_forecast(grid, headers) -> str:
         )
     except Exception as e:
         log.warning(f"NWS forecast error: {e}")
+    return None
+
+# ── NWS hourly forecast ───────────────────────────────────────────────────────
+
+def nws_hourly(grid, headers) -> str:
+    """Next 8 hours as a single IRC line."""
+    try:
+        r = requests.get(grid["forecastHourly"], headers=headers, timeout=10)
+        periods = r.json()["properties"]["periods"][:8]
+        chunks  = []
+        for p in periods:
+            t_c    = (p["temperature"]-32)*5/9 if p["temperatureUnit"]=="F" else p["temperature"]
+            label  = fmt_time_short(p["startTime"])
+            desc   = p.get("shortForecast", "")
+            precip = p.get("probabilityOfPrecipitation", {})
+            pop    = precip.get("value") if isinstance(precip, dict) else None
+            pop_s  = f" {pop:.0f}%🌧" if pop and pop >= 20 else ""
+            chunks.append(f"{label} {desc} {cf(t_c)}{pop_s}")
+        return " :: ".join(chunks)
+    except Exception as e:
+        log.warning(f"NWS hourly error: {e}")
+    return None
+
+# ── NWS active alerts ─────────────────────────────────────────────────────────
+
+def nws_alerts(lat, lon, headers) -> list:
+    """
+    Returns a list of formatted alert strings for the given point.
+    Each string is one IRC message line.
+    """
+    try:
+        r = requests.get(
+            f"https://api.weather.gov/alerts/active",
+            params={"point": f"{lat:.4f},{lon:.4f}", "status": "actual"},
+            headers=headers, timeout=10
+        )
+        r.raise_for_status()
+        features = r.json().get("features", [])
+        if not features:
+            return []
+
+        lines = []
+        for feat in features[:5]:   # cap at 5 to avoid flooding
+            p        = feat.get("properties", {})
+            event    = p.get("event", "Unknown Alert")
+            severity = p.get("severity", "Unknown")
+            urgency  = p.get("urgency", "")
+            headline = p.get("headline", "") or p.get("description", "")[:120]
+            onset    = p.get("onset", "") or p.get("effective", "")
+            expires  = p.get("expires", "") or p.get("ends", "")
+            icon     = ALERT_SEVERITY.get(severity, "?")
+
+            # Trim headline to fit IRC
+            if headline and len(headline) > 200:
+                headline = headline[:197] + "..."
+            headline = headline.replace("\n", " ").strip()
+
+            onset_s   = fmt_time_short(onset)   if onset   else ""
+            expires_s = fmt_time_short(expires) if expires else ""
+            time_s    = ""
+            if onset_s and expires_s:
+                time_s = f" | {onset_s} → {expires_s}"
+            elif expires_s:
+                time_s = f" | expires {expires_s}"
+
+            lines.append(
+                f"{icon} {event} [{severity}/{urgency}]{time_s} :: {headline}"
+            )
+        return lines
+    except Exception as e:
+        log.warning(f"NWS alerts error: {e}")
+    return None   # None = API error, [] = no alerts
+
+# ── NWS forecast discussion ───────────────────────────────────────────────────
+
+def nws_discussion(grid, headers) -> list:
+    """
+    Fetches the forecaster's written discussion for the grid's CWA (office).
+    Returns a list of IRC-sized strings (one paragraph per line, capped at 6).
+    """
+    try:
+        office = grid.get("cwa", "")
+        if not office:
+            return None
+        r = requests.get(
+            f"https://api.weather.gov/products/types/AFD/locations/{office}",
+            headers=headers, timeout=10
+        )
+        r.raise_for_status()
+        items = r.json().get("@graph", [])
+        if not items:
+            return None
+        # Get the most recent discussion
+        latest_id = items[0].get("id", "")
+        if not latest_id:
+            return None
+        r2 = requests.get(
+            f"https://api.weather.gov/products/{latest_id}",
+            headers=headers, timeout=10
+        )
+        r2.raise_for_status()
+        text = r2.json().get("productText", "")
+        if not text:
+            return None
+
+        # Strip header lines (all-caps metadata at the top)
+        lines = text.strip().splitlines()
+        body_lines = []
+        in_body = False
+        for line in lines:
+            stripped = line.strip()
+            if not in_body:
+                # Skip until we hit a line with mixed case (actual prose)
+                if stripped and not stripped.isupper() and len(stripped) > 20:
+                    in_body = True
+                else:
+                    continue
+            if stripped:
+                body_lines.append(stripped)
+
+        # Collapse into paragraphs split by blank lines
+        paragraphs = []
+        current = []
+        for line in body_lines:
+            if line:
+                current.append(line)
+            else:
+                if current:
+                    paragraphs.append(" ".join(current))
+                    current = []
+        if current:
+            paragraphs.append(" ".join(current))
+
+        # Trim each paragraph to IRC-safe length and return up to 4
+        out = []
+        for para in paragraphs[:4]:
+            if len(para) > 420:
+                para = para[:417] + "..."
+            out.append(para)
+        return out if out else None
+
+    except Exception as e:
+        log.warning(f"NWS discussion error: {e}")
     return None
 
 # ── Open-Meteo — worldwide (non-US) ──────────────────────────────────────────
@@ -343,6 +513,12 @@ class WeatherModule(BotModule):
         "w":        "cmd_weather",
         "forecast": "cmd_forecast",
         "f":        "cmd_forecast",
+        "hourly":   "cmd_hourly",
+        "fh":       "cmd_hourly",
+        "alerts":   "cmd_alerts",
+        "wx":       "cmd_alerts",
+        "discuss":  "cmd_discuss",
+        "disc":     "cmd_discuss",
     }
 
     def on_load(self):
@@ -372,50 +548,156 @@ class WeatherModule(BotModule):
         p = self.bot.cfg["bot"]["command_prefix"]
         return None, f"{nick}: no location saved — try {p}regloc <city or zip> first."
 
-    def _fetch(self, nick, reply_to, arg, mode):
-        if self.bot.rate_limited(nick):
-            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
-            return
-
+    def _resolve_geo(self, nick, reply_to, arg):
+        """Shared geocode resolution. Returns (lat, lon, display, cc) or None."""
         raw, err = self._resolve_arg(nick, arg)
         if raw is None:
             self.bot.privmsg(reply_to, err)
-            return
-
+            return None
         geo = geocode(raw, self.user_agent)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: couldn't find '{raw}'.")
-            return
+            return None
+        return geo
 
+    def _us_grid(self, nick, reply_to, lat, lon, display):
+        """Get NWS gridpoint, messaging user on failure. Returns grid or None."""
+        grid = nws_get_gridpoint(lat, lon, self.nws_headers)
+        if grid is None:
+            self.bot.privmsg(reply_to,
+                f"{nick}: {display} is a US location but weather.gov has no "
+                f"grid data for it (try a nearby city).")
+        return grid
+
+    # ── .weather / .w ─────────────────────────────────────────────────────
+
+    def cmd_weather(self, nick, reply_to, arg):
+        if self.bot.rate_limited(nick):
+            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
+            return
+        geo = self._resolve_geo(nick, reply_to, arg)
+        if geo is None: return
         lat, lon, display, cc = geo
-        is_us = (cc == "us")
-        log.info(f"Weather lookup: '{raw}' -> {display} ({cc.upper() or '?'}) [{lat:.4f},{lon:.4f}]")
+        log.info(f"Weather: '{display}' ({cc.upper() or '?'}) [{lat:.4f},{lon:.4f}]")
 
         body = None
-        if is_us:
-            # Try weather.gov first; fall back to Open-Meteo for territories without NWS coverage
+        if cc == "us":
             grid = nws_get_gridpoint(lat, lon, self.nws_headers)
             if grid:
-                body = (nws_current(lat, lon, grid, self.nws_headers)
-                        if mode == "weather"
-                        else nws_forecast(grid, self.nws_headers))
+                body = nws_current(lat, lon, grid, self.nws_headers)
             else:
-                log.info(f"NWS has no grid for {display} — falling back to Open-Meteo")
-
+                log.info(f"NWS no grid for {display}, falling back to Open-Meteo")
         if body is None:
-            # Non-US or NWS fallback
-            body = om_current(lat, lon) if mode == "weather" else om_forecast(lat, lon)
+            body = om_current(lat, lon)
 
         if body:
             self.bot.privmsg(reply_to, f":: {display} :: {body} ::")
         else:
             self.bot.privmsg(reply_to, f"{nick}: couldn't fetch weather data right now.")
 
-    def cmd_weather(self, nick, reply_to, arg):
-        self._fetch(nick, reply_to, arg, "weather")
+    # ── .forecast / .f ────────────────────────────────────────────────────
 
     def cmd_forecast(self, nick, reply_to, arg):
-        self._fetch(nick, reply_to, arg, "forecast")
+        if self.bot.rate_limited(nick):
+            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
+            return
+        geo = self._resolve_geo(nick, reply_to, arg)
+        if geo is None: return
+        lat, lon, display, cc = geo
+        log.info(f"Forecast: '{display}' ({cc.upper() or '?'}) [{lat:.4f},{lon:.4f}]")
+
+        body = None
+        if cc == "us":
+            grid = nws_get_gridpoint(lat, lon, self.nws_headers)
+            if grid:
+                body = nws_forecast(grid, self.nws_headers)
+            else:
+                log.info(f"NWS no grid for {display}, falling back to Open-Meteo")
+        if body is None:
+            body = om_forecast(lat, lon)
+
+        if body:
+            self.bot.privmsg(reply_to, f":: {display} :: {body} ::")
+        else:
+            self.bot.privmsg(reply_to, f"{nick}: couldn't fetch forecast right now.")
+
+    # ── .hourly / .fh ─────────────────────────────────────────────────────
+
+    def cmd_hourly(self, nick, reply_to, arg):
+        if self.bot.rate_limited(nick):
+            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
+            return
+        geo = self._resolve_geo(nick, reply_to, arg)
+        if geo is None: return
+        lat, lon, display, cc = geo
+
+        if cc != "us":
+            self.bot.privmsg(reply_to,
+                f"{nick}: hourly forecast is only available for US locations (weather.gov).")
+            return
+
+        grid = self._us_grid(nick, reply_to, lat, lon, display)
+        if grid is None: return
+
+        body = nws_hourly(grid, self.nws_headers)
+        if body:
+            self.bot.privmsg(reply_to, f":: {display} — Next 8 Hours :: {body} ::")
+        else:
+            self.bot.privmsg(reply_to, f"{nick}: couldn't fetch hourly forecast right now.")
+
+    # ── .alerts / .wx ─────────────────────────────────────────────────────
+
+    def cmd_alerts(self, nick, reply_to, arg):
+        if self.bot.rate_limited(nick):
+            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
+            return
+        geo = self._resolve_geo(nick, reply_to, arg)
+        if geo is None: return
+        lat, lon, display, cc = geo
+
+        if cc != "us":
+            self.bot.privmsg(reply_to,
+                f"{nick}: NWS alerts are only available for US locations.")
+            return
+
+        lines = nws_alerts(lat, lon, self.nws_headers)
+        if lines is None:
+            self.bot.privmsg(reply_to, f"{nick}: couldn't fetch alerts right now.")
+        elif not lines:
+            self.bot.privmsg(reply_to, f":: {display} :: No active NWS alerts.")
+        else:
+            self.bot.privmsg(reply_to, f":: {display} :: {len(lines)} active alert(s) ::")
+            for line in lines:
+                self.bot.privmsg(reply_to, line)
+
+    # ── .discuss / .disc ──────────────────────────────────────────────────
+
+    def cmd_discuss(self, nick, reply_to, arg):
+        if self.bot.rate_limited(nick):
+            self.bot.privmsg(reply_to, f"{nick}: slow down! ({self.cooldown}s cooldown)")
+            return
+        geo = self._resolve_geo(nick, reply_to, arg)
+        if geo is None: return
+        lat, lon, display, cc = geo
+
+        if cc != "us":
+            self.bot.privmsg(reply_to,
+                f"{nick}: forecast discussions are only available for US locations (NWS).")
+            return
+
+        grid = self._us_grid(nick, reply_to, lat, lon, display)
+        if grid is None: return
+
+        office = grid.get("cwa", "?")
+        paras  = nws_discussion(grid, self.nws_headers)
+        if paras is None:
+            self.bot.privmsg(reply_to,
+                f"{nick}: couldn't fetch forecast discussion for {display} ({office}).")
+        else:
+            self.bot.privmsg(reply_to,
+                f":: {display} :: NWS {office} Forecast Discussion ::")
+            for para in paras:
+                self.bot.privmsg(reply_to, para)
 
     def help_lines(self, prefix):
         return [
@@ -423,6 +705,12 @@ class WeatherModule(BotModule):
             f"  {prefix}w        [zip|city|-n nick]   Alias for {prefix}weather",
             f"  {prefix}forecast [zip|city|-n nick]   4-day forecast (worldwide)",
             f"  {prefix}f        [zip|city|-n nick]   Alias for {prefix}forecast",
+            f"  {prefix}hourly   [zip|city|-n nick]   Next 8-hour forecast (US only)",
+            f"  {prefix}fh       [zip|city|-n nick]   Alias for {prefix}hourly",
+            f"  {prefix}alerts   [zip|city|-n nick]   Active NWS alerts (US only)",
+            f"  {prefix}wx       [zip|city|-n nick]   Alias for {prefix}alerts",
+            f"  {prefix}discuss  [zip|city|-n nick]   NWS forecast discussion (US only)",
+            f"  {prefix}disc     [zip|city|-n nick]   Alias for {prefix}discuss",
         ]
 
 

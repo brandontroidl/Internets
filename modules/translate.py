@@ -41,6 +41,7 @@ class TranslateModule(BotModule):
         log.info("TranslateModule loaded")
 
     def cmd_translate(self, nick, reply_to, arg):
+        if self.bot.flood_limited(nick): return
         p = self.bot.cfg["bot"]["command_prefix"]
         if not arg:
             self.bot.privmsg(reply_to,

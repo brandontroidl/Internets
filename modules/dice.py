@@ -37,6 +37,7 @@ class DiceModule(BotModule):
         log.info("DiceModule loaded")
 
     def cmd_dice(self, nick, reply_to, arg):
+        if self.bot.flood_limited(nick): return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: usage: {p}d [X]dN[+/-M]  e.g. {p}d 3d6+2")

@@ -40,6 +40,7 @@ class CalcModule(BotModule):
         log.info("CalcModule loaded")
 
     def cmd_calc(self, nick, reply_to, arg):
+        if self.bot.flood_limited(nick): return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: usage: {p}cc <expression>  e.g. {p}cc 2pi")

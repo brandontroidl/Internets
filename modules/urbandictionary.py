@@ -44,6 +44,7 @@ class UDModule(BotModule):
         log.info("UDModule loaded")
 
     def cmd_ud(self, nick, reply_to, arg):
+        if self.bot.flood_limited(nick): return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: usage: {p}u <word> [/N]  e.g. {p}u jason /4")

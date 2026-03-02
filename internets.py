@@ -42,7 +42,8 @@ REALNAME      = cfg["irc"]["realname"]
 NICKSERV_PW   = cfg["irc"].get("nickserv_password", "").strip()
 
 CMD_PREFIX    = cfg["bot"]["command_prefix"]
-API_COOLDOWN  = int(cfg["bot"]["api_cooldown"])
+API_COOLDOWN    = int(cfg["bot"]["api_cooldown"])
+FLOOD_COOLDOWN  = int(cfg["bot"].get("flood_cooldown", "3"))
 LOC_FILE      = cfg["bot"].get("locations_file",  "locations.json")
 CHANNELS_FILE = cfg["bot"].get("channels_file",   "channels.json")
 USERS_FILE    = cfg["bot"].get("users_file",       "users.json")
@@ -193,8 +194,17 @@ def channel_users(channel: str) -> dict:
     return _load_users().get(channel.lower(), {})
 
 # ─── Rate limiting ────────────────────────────────────────────────────────────
+#
+# Two tiers:
+#   flood  — all commands:   FLOOD_COOLDOWN seconds (default 3s)  silently dropped
+#   api    — api commands:   API_COOLDOWN seconds   (default 10s) notified
+#
+# _flood_calls  : { nick -> last_any_command_time }
+# _api_calls    : { nick -> last_api_command_time }
 
-_last_call: dict = {}
+_rate_lock   = threading.Lock()
+_flood_calls: dict = {}
+_api_calls:   dict = {}
 
 # ─── IRC Bot ──────────────────────────────────────────────────────────────────
 
@@ -221,11 +231,32 @@ class IRCBot:
             log.debug(f">> {msg}")
             self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
 
-    def rate_limited(self, nick: str) -> bool:
+    def flood_limited(self, nick: str) -> bool:
+        """
+        Global per-nick flood gate applied to every command.
+        Returns True (drop silently) if nick is sending faster than FLOOD_COOLDOWN.
+        Does NOT update the timestamp if limited — lets the timer keep running.
+        """
         now = time.time()
-        if nick in _last_call and now - _last_call[nick] < API_COOLDOWN:
-            return True
-        _last_call[nick] = now
+        with _rate_lock:
+            last = _flood_calls.get(nick.lower(), 0)
+            if now - last < FLOOD_COOLDOWN:
+                return True
+            _flood_calls[nick.lower()] = now
+        return False
+
+    def rate_limited(self, nick: str) -> bool:
+        """
+        Per-nick API cooldown for expensive external requests (weather etc).
+        Returns True if nick is within API_COOLDOWN of their last API call.
+        Callers are expected to notify the user when True.
+        """
+        now = time.time()
+        with _rate_lock:
+            last = _api_calls.get(nick.lower(), 0)
+            if now - last < API_COOLDOWN:
+                return True
+            _api_calls[nick.lower()] = now
         return False
 
     def loc_get(self, nick: str):
@@ -347,6 +378,7 @@ class IRCBot:
             f"  {p}modules            List loaded/available modules",
             f"  {p}auth <pw>          Authenticate as admin (PM only)",
             f"  {p}deauth             End admin session (PM only)",
+            f"  {p}modules              List loaded/available modules",
             f"  {p}load      <module>   Load a module        [admin]",
             f"  {p}unload    <module>   Unload a module      [admin]",
             f"  {p}reload    <module>   Reload a module      [admin]",
@@ -457,6 +489,11 @@ class IRCBot:
     def dispatch(self, nick: str, reply_to: str, cmd: str, arg, is_pm: bool):
         if cmd in ("auth", "deauth") and not is_pm:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in a private message.")
+            return
+
+        # Global flood gate — silently drop if nick is sending too fast
+        if self.flood_limited(nick):
+            log.debug(f"Flood gate: dropped {cmd!r} from {nick}")
             return
 
         def run(fn, *a):
