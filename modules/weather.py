@@ -63,7 +63,7 @@ def _om_current(lat, lon):
             wind_str = "N/A"
 
         parts = [f"Conditions {desc}", f"Temperature {cf(temp_c)}"]
-        if feels_c is not None and abs((feels_c or 0) - (temp_c or 0)) >= 2:
+        if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:
             parts.append(f"Feels like {cf(feels_c)}")
         parts += [
             f"Dew point {cf(cur.get('dew_point_2m'))}",

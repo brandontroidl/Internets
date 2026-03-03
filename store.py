@@ -70,11 +70,13 @@ class Store:
                 with os.fdopen(fd, "w") as f:
                     json.dump(data, f, indent=2)
                 os.replace(tmp, str(p))
+                return True
             except Exception:
                 os.unlink(tmp)
                 raise
         except Exception as e:
             log.warning(f"Store save {path}: {e}")
+            return False
 
     # ── Flush ────────────────────────────────────────────────────────
 
@@ -86,18 +88,18 @@ class Store:
         """Write any dirty datasets to disk.  Safe to call from any thread."""
         with self._loc_lock:
             if self._dirty_locs:
-                self._write(self._lf, self._locs)
-                self._dirty_locs = False
+                if self._write(self._lf, self._locs):
+                    self._dirty_locs = False
 
         with self._chan_lock:
             if self._dirty_chans:
-                self._write(self._cf, sorted(self._channels))
-                self._dirty_chans = False
+                if self._write(self._cf, sorted(self._channels)):
+                    self._dirty_chans = False
 
         with self._user_lock:
             if self._dirty_users:
-                self._write(self._uf, self._users)
-                self._dirty_users = False
+                if self._write(self._uf, self._users):
+                    self._dirty_users = False
 
     def stop(self):
         """Stop the flush timer and write pending data."""
@@ -174,7 +176,8 @@ class Store:
 
     def channel_users(self, channel):
         with self._user_lock:
-            return dict(self._users.get(channel.lower(), {}))
+            ch = self._users.get(channel.lower(), {})
+            return {k: dict(v) for k, v in ch.items()}
 
 
 class RateLimiter:

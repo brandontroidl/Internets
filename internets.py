@@ -375,7 +375,6 @@ class IRCBot:
         # Save state and unload modules before replacing process.
         try:
             self._store.channels_save(self.active_channels)
-            self._store.stop()
         except Exception:
             pass
         with self._mod_lock:
@@ -385,6 +384,10 @@ class IRCBot:
                 self.unload_module(name)
             except Exception:
                 pass
+        try:
+            self._store.stop()
+        except Exception:
+            pass
 
         try:
             self.send("QUIT :Restarting ...", priority=0)
@@ -452,13 +455,10 @@ class IRCBot:
     def graceful_shutdown(self, quit_msg="QUIT :Shutting down"):
         log.info("Graceful shutdown initiated.")
 
-        # Save current channel list, then flush all store data to disk.
         try:
             self._store.channels_save(self.active_channels)
-            self._store.stop()
-            log.info("Store flushed to disk.")
         except Exception as e:
-            log.warning(f"Store flush failed: {e}")
+            log.warning(f"Channel save failed: {e}")
 
         with self._mod_lock:
             names = list(self._modules)
@@ -468,6 +468,14 @@ class IRCBot:
                 log.info(f"Unload {name}: {msg}")
             except Exception as e:
                 log.warning(f"Unload {name} failed: {e}")
+
+        # Flush all store data after modules are unloaded (on_unload may
+        # write state), then stop the periodic flush timer.
+        try:
+            self._store.stop()
+            log.info("Store flushed to disk.")
+        except Exception as e:
+            log.warning(f"Store flush failed: {e}")
 
         try:
             self.send(quit_msg, priority=0)
@@ -496,7 +504,12 @@ class IRCBot:
             return
 
         def run(fn, *a):
-            threading.Thread(target=fn, args=a, daemon=True).start()
+            def _wrapper():
+                try:
+                    fn(*a)
+                except Exception as e:
+                    log.error(f"Command {cmd!r} from {nick} crashed: {e}", exc_info=True)
+            threading.Thread(target=_wrapper, daemon=True).start()
 
         if cmd in self._CORE:
             run(getattr(self, self._CORE[cmd]), nick, reply_to, arg)
