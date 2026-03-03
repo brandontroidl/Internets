@@ -192,8 +192,7 @@ class IRCBot:
 
     def load_module(self, name):
         with self._mod_lock:
-            # SEC: Reject names with path separators or parent refs to prevent
-            # loading arbitrary files outside MODULES_DIR.
+            # Reject path separators / parent refs.
             if not re.match(r"^[a-z][a-z0-9_]*$", name):
                 return False, f"Invalid module name '{name}' — lowercase alphanumeric and _ only."
             if name in self._modules:
@@ -260,9 +259,14 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
             return
 
-        # SEC: Brute-force protection — lock out after repeated failures.
+        # Prune stale lockout entries every 50 attempts.
         k = nick.lower()
         now = time.time()
+        if len(self._auth_fails) > 50:
+            self._auth_fails = {
+                n: (f, t) for n, (f, t) in self._auth_fails.items()
+                if now - t < self._AUTH_LOCKOUT
+            }
         fails, last_t = self._auth_fails.get(k, (0, 0))
         if now - last_t > self._AUTH_LOCKOUT:
             fails = 0  # Reset after lockout expires
@@ -415,7 +419,6 @@ class IRCBot:
         if not arg:
             self.preply(nick, reply_to, f"usage: {p}mode <+/-modes>  e.g. {p}mode +ix")
             return
-        # Validate: only mode chars, +/-, and spaces allowed.
         mode_str = arg.strip()
         if not re.match(r"^[a-zA-Z+\- ]+$", mode_str):
             self.preply(nick, reply_to, f"{nick}: invalid mode string.")
@@ -446,17 +449,14 @@ class IRCBot:
         self.graceful_shutdown(f"QUIT :{reason}")
 
     def graceful_shutdown(self, quit_msg="QUIT :Shutting down"):
-        """Save state, unload modules, send QUIT, and exit cleanly."""
         log.info("Graceful shutdown initiated.")
 
-        # 1. Save channel list.
         try:
             self._store.channels_save(self.active_channels)
             log.info(f"Saved {len(self.active_channels)} channel(s).")
         except Exception as e:
             log.warning(f"Channel save failed: {e}")
 
-        # 2. Unload all modules (calls each module's on_unload).
         with self._mod_lock:
             names = list(self._modules)
         for name in names:
@@ -466,14 +466,12 @@ class IRCBot:
             except Exception as e:
                 log.warning(f"Unload {name} failed: {e}")
 
-        # 3. Send QUIT and give the sender time to flush.
         try:
             self.send(quit_msg, priority=0)
         except Exception:
             pass
         time.sleep(2)
 
-        # 4. Stop sender thread and close socket.
         self._ka_stop.set()
         self._sender.stop()
         try:
@@ -573,13 +571,7 @@ class IRCBot:
             log.info(f"Rejoined {ch}")
 
     def _deferred_rejoin(self):
-        """Wait for NickServ identification, then rejoin saved channels.
-
-        If NS_PW is set, waits up to 10 seconds for NickServ to confirm
-        (via _ns_identified flag set by _process). This prevents join
-        failures on +R channels or channels where the bot needs its
-        NickServ account for ChanServ access.
-        """
+        """Wait for NickServ confirmation (up to 10s) then rejoin saved channels."""
         if NS_PW:
             deadline = time.time() + 10
             while not self._ns_identified and time.time() < deadline:
@@ -623,7 +615,7 @@ class IRCBot:
                 buf += data
                 while "\r\n" in buf:
                     line, buf = buf.split("\r\n", 1)
-                    # SEC: Redact passwords from incoming debug log.
+                    # Redact auth passwords from debug log.
                     if re.search(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", line, re.IGNORECASE):
                         log.debug(f"<< {line.split(':',2)[0]}:*** AUTH [REDACTED] ***")
                     else:
@@ -654,8 +646,7 @@ class IRCBot:
                     BrokenPipeError, ssl.SSLError, OSError) as e:
                 log.warning(f"Lost connection: {e} — reconnect in 15s")
                 self._sender.stop()
-                # SEC: Clear admin sessions — nicks may belong to different people
-                # on the new connection.
+                # Nicks may belong to different people after reconnect.
                 if self._authed:
                     log.info(f"Cleared {len(self._authed)} admin session(s) on disconnect.")
                     self._authed.clear()
@@ -734,9 +725,14 @@ class IRCBot:
                 self._cap_busy = False
             return
 
-        # 433 = "Nickname in use"
+        # 433 = "Nickname in use" — try alternatives, capped at 9 chars of suffix.
         if re.match(r":\S+ 433 ", line):
-            self._nick = self._nick + "_"
+            base = NICKNAME.rstrip("_")
+            if len(self._nick) < len(base) + 3:
+                self._nick = self._nick + "_"
+            else:
+                import random
+                self._nick = base + str(random.randint(10, 99))
             self.send(f"NICK {self._nick}", priority=0)
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
@@ -918,8 +914,11 @@ class IRCBot:
         m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
         if m:
             old_nick, host, new_nick = m.group(1), m.group(2), m.group(3)
+            # Track our own nick changes (NickServ ghost/reclaim, SVSNICK, etc.)
+            if old_nick.lower() == self._nick.lower():
+                self._nick = new_nick
+                log.info(f"Own nick changed: {old_nick} -> {new_nick}")
             self._store.user_rename(old_nick, new_nick, host)
-            # Migrate admin session to new nick so the old nick can't be hijacked
             if old_nick in self._authed:
                 self._authed.discard(old_nick)
                 self._authed.add(new_nick)

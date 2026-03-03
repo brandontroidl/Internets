@@ -120,7 +120,7 @@ def hourly(grid, headers):
 
 
 def alerts(lat, lon, headers):
-    """Returns a list of formatted alert lines, [] if none active, None on API error."""
+    """Return list of formatted alert lines, [] if none, None on error."""
     try:
         r = requests.get(
             f"{_NWS_BASE}/alerts/active",
@@ -156,13 +156,7 @@ def alerts(lat, lon, headers):
 
 
 def discussion(grid, headers):
-    """
-    Fetch and parse the Area Forecast Discussion (AFD) for the grid's CWA.
-
-    NWS AFD format: sections separated by && (inline or on its own line),
-    each beginning with a .LABEL... line followed by prose wrapped at ~66 chars.
-    Returns up to 4 formatted [LABEL] summary lines, or None on any failure.
-    """
+    """Fetch and return up to 4 [LABEL] sections from the Area Forecast Discussion."""
     try:
         office = grid.get("cwa", "")
         if not office:

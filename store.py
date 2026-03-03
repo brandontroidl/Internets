@@ -29,7 +29,7 @@ class Store:
         return default
 
     def _save(self, path, data):
-        """Atomic write: temp file + rename prevents corruption on crash."""
+        """Write via temp file + rename to avoid corruption on crash."""
         try:
             p = Path(path)
             fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
@@ -131,7 +131,6 @@ class RateLimiter:
         self._last_cleanup = time.time()
 
     def _cleanup(self, now):
-        """Remove entries older than their cooldown. Called under lock."""
         if now - self._last_cleanup < self._CLEANUP_INTERVAL:
             return
         self._flood = {k: v for k, v in self._flood.items() if now - v < self._flood_cd}

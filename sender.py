@@ -39,9 +39,9 @@ class Sender:
     _REDACT_OUT = ("PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ")
 
     def _write(self, msg):
-        # SEC: Strip any embedded CR/LF to prevent IRC command injection.
-        msg = msg.replace("\r", "").replace("\n", "")
-        # SEC: Redact credentials from debug logs.
+        # Strip embedded CR/LF/NUL to prevent protocol injection.
+        msg = msg.replace("\r", "").replace("\n", "").replace("\x00", "")
+        # Redact credentials from logs.
         log_msg = msg
         for prefix in self._REDACT_OUT:
             if msg.upper().startswith(prefix.upper()):

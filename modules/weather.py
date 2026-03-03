@@ -140,20 +140,19 @@ class WeatherModule(BotModule):
         return None, f"{nick}: no location saved — use {p}regloc <city or zip> first."
 
     def _geo(self, nick, reply_to, arg):
+        """Resolve location to coordinates. Checks rate limit before any API call."""
         raw, err = self._resolve(nick, arg)
         if raw is None:
             self.bot.privmsg(reply_to, err)
+            return None
+        # Rate-check here: after the local lookup succeeds but before any API call.
+        if self.bot.rate_limited(nick):
+            self.bot.notice(nick, f"{nick}: slow down ({self._cooldown}s cooldown)")
             return None
         geo = geocode(raw, self._ua)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{raw}'")
         return geo
-
-    def _rate_check(self, nick, reply_to):
-        if self.bot.rate_limited(nick):
-            self.bot.privmsg(reply_to, f"{nick}: slow down ({self._cooldown}s cooldown)")
-            return True
-        return False
 
     def _nws_grid(self, nick, reply_to, lat, lon, display):
         grid = nws.get_grid(lat, lon, self._headers)
@@ -165,7 +164,6 @@ class WeatherModule(BotModule):
         self.bot.privmsg(reply_to, f"{nick}: {feature} requires a US location (NWS).")
 
     def cmd_weather(self, nick, reply_to, arg):
-        if self._rate_check(nick, reply_to): return
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -185,7 +183,6 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: weather data unavailable right now.")
 
     def cmd_forecast(self, nick, reply_to, arg):
-        if self._rate_check(nick, reply_to): return
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -205,7 +202,6 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: forecast unavailable right now.")
 
     def cmd_hourly(self, nick, reply_to, arg):
-        if self._rate_check(nick, reply_to): return
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -219,7 +215,6 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: hourly forecast unavailable right now.")
 
     def cmd_alerts(self, nick, reply_to, arg):
-        if self._rate_check(nick, reply_to): return
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -235,7 +230,6 @@ class WeatherModule(BotModule):
                 self.bot.privmsg(reply_to, line)
 
     def cmd_discuss(self, nick, reply_to, arg):
-        if self._rate_check(nick, reply_to): return
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo

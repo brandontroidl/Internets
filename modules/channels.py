@@ -47,21 +47,12 @@ class ChannelsModule(BotModule):
     """
     Join/part management and user roster queries.
 
-    .join and .part require the user to be either:
-      - authenticated as a bot admin (.auth), or
-      - the registered channel founder, verified via IRC services
+    .join and .part require the user to be either an authenticated admin
+    or the registered channel founder.  Founder verification is async:
+    WHOIS for the user's NickServ account, INFO on the channel via
+    services, then compare.  Times out after 15s.
 
-    Founder verification flow:
-      1. WHOIS the requesting user -> extract NickServ account (330 numeric)
-      2. Query services INFO on target channel -> extract founder name
-      3. Compare account == founder (case-insensitive)
-      4. Join/part on match, deny on mismatch, timeout after 15s
-
-    The services bot nick is configurable via ``services_nick`` in config.ini
-    (default: ChanServ).  Tested patterns cover Anope, Atheme, Epona, X2, X3.
-
-    /INVITE is handled by the core and is always accepted -- IRC servers
-    enforce their own permission model for INVITE.
+    /INVITE bypasses all of this — handled by the core, always accepted.
     """
 
     COMMANDS = {
@@ -174,7 +165,6 @@ class ChannelsModule(BotModule):
     # ── Verification machinery ───────────────────────────────────────────
 
     def _start_verify(self, nick, channel, reply_to, action="join"):
-        """Kick off the async founder verification flow."""
         key = channel.lower()
 
         with self._lock:
@@ -184,23 +174,13 @@ class ChannelsModule(BotModule):
                 return
             self._pending[key] = _PendingJoin(nick, channel, reply_to, action)
 
-        # Step 1: WHOIS the user to get their NickServ account (330 numeric).
         self.bot.send(f"WHOIS {nick}", priority=1)
-        # Step 2: Ask services for the channel founder.
         self.bot.send(f"PRIVMSG {self._services} :INFO {channel}", priority=1)
         self.bot.privmsg(reply_to,
             f"{nick}: verifying channel ownership for {channel} ...")
         log.info(f"Verify started ({action}): {nick} -> {channel}")
 
     def on_raw(self, line):
-        """
-        Intercept WHOIS numerics and services NOTICEs to complete pending
-        founder verifications.
-
-        330 = RPL_WHOISACCOUNT  -- user's NickServ account
-        318 = RPL_ENDOFWHOIS    -- no more WHOIS data coming
-        NOTICE from services    -- parse founder / not-registered
-        """
         # Fast bail if nothing is pending.
         with self._lock:
             if not self._pending:
@@ -298,31 +278,19 @@ class ChannelsModule(BotModule):
                                      key=lambda x: x[1], reverse=True)]
 
     def _try_complete(self, p):
-        """
-        Attempt to resolve a pending verification.  Called under self._lock.
-
-        Resolution matrix:
-          info_failed                        -> deny  (channel not registered)
-          whois_done + no account            -> deny  (not identified)
-          account + founder + match          -> approve
-          account + founder + mismatch       -> deny
-          otherwise                          -> wait  (still collecting data)
-        """
-        # Channel not registered with services.
+        """Resolve a pending verification if enough data has arrived.  Under lock."""
         if p.info_failed:
             self._resolve(p, False,
                 f"{p.channel} is not registered with {self._services} "
                 f"— cannot verify ownership. Try /INVITE or ask a bot admin.")
             return
 
-        # WHOIS done but user had no NickServ account.
         if p.whois_done and p.account is None:
             self._resolve(p, False,
                 "you must be identified with NickServ to use this command "
                 "— try /INVITE or ask a bot admin.")
             return
 
-        # Have both account and founder — compare.
         if p.account is not None and p.founder is not None:
             if p.account.lower() == p.founder.lower():
                 self._resolve(p, True, None)
@@ -332,9 +300,7 @@ class ChannelsModule(BotModule):
                     f"founder of {p.channel} ({p.founder}). "
                     f"Try /INVITE or ask a bot admin.")
             return
-
-        # Still waiting for more data — will be called again when new info arrives,
-        # or the cleanup thread will time it out.
+        # Otherwise still collecting data; cleanup thread handles timeouts.
 
     def _resolve(self, p, approved, reason):
         """Complete a pending verification.  Called under self._lock."""

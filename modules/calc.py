@@ -39,12 +39,18 @@ _IMPLICIT_MUL = [
     (re.compile(r"([a-zA-Z])(\d)"), r"\1*\2"),
 ]
 
+# Function/constant names containing digits that implicit multiplication
+# would mangle (log2 -> log*2).  Protected before regex runs.
+_DIGIT_NAMES = sorted(
+    [n for n in list(_FUNCS) + list(_CONSTS) if any(c.isdigit() for c in n)],
+    key=len, reverse=True,
+)
 
-_MAX_DEPTH = 50  # Prevent stack overflow from deeply nested expressions
+
+_MAX_DEPTH = 50
 
 
 def _safe_factorial(n):
-    """Factorial with input cap to prevent DoS."""
     if not isinstance(n, (int, float)) or n < 0 or n != int(n):
         raise ValueError("factorial requires a non-negative integer")
     if n > 170:
@@ -55,7 +61,6 @@ _FUNCS["factorial"] = _safe_factorial
 
 
 def _safe_eval(node, depth=0):
-    """Recursively evaluate an AST node using only whitelisted operations."""
     if depth > _MAX_DEPTH:
         raise ValueError("expression too deeply nested")
     if isinstance(node, ast.Expression):
@@ -93,8 +98,17 @@ def _safe_eval(node, depth=0):
 
 def _calc(expr: str) -> str:
     expr = expr.strip()
+    # Temporarily hide function names that contain digits (log2, log10, atan2)
+    # so the implicit multiplication regex doesn't split them.
+    held = {}
+    for i, name in enumerate(_DIGIT_NAMES):
+        tag = f"\x01{i}\x01"
+        expr = expr.replace(name, tag)
+        held[tag] = name
     for pattern, sub in _IMPLICIT_MUL:
         expr = pattern.sub(sub, expr)
+    for tag, name in held.items():
+        expr = expr.replace(tag, name)
     try:
         tree   = ast.parse(expr, mode="eval")
         result = _safe_eval(tree)

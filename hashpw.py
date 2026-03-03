@@ -19,18 +19,7 @@ import argparse
 
 
 def _best_scrypt_params():
-    """
-    Find the strongest scrypt params the current OpenSSL build allows.
-
-    Memory cost = N * r * 128 bytes. The ceiling varies widely:
-      Linux/glibc OpenSSL 1.x: typically allows N=131072 (128 MB)
-      Arch/Fedora OpenSSL 3.x: 32 MB cap → need N=16384 r=8 p=2
-      macOS LibreSSL:          usually N=131072
-      Windows/WSL:             WSL2 usually fine, native Windows varies
-
-    Different builds raise ValueError, OSError, or MemoryError for the
-    same limit, so we catch all three.
-    """
+    """Probe for the strongest scrypt (N, r, p) the current OpenSSL allows."""
     import hashlib
     salt = os.urandom(16)
     for N, r, p in [
@@ -77,10 +66,6 @@ def hash_argon2(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """
-    Verify a plaintext password against a stored hash string.
-    Raises ValueError for unknown algorithm prefixes or missing libraries.
-    """
     if not stored:
         raise ValueError("No password hash configured.")
     if stored.startswith("scrypt$"):
@@ -135,7 +120,6 @@ def _verify_argon2(password: str, stored: str) -> bool:
 
 
 def _ct_eq(a: bytes, b: bytes) -> bool:
-    """Constant-time bytes comparison — prevents timing side-channels."""
     import hmac
     return hmac.compare_digest(a, b)
 

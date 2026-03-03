@@ -23,7 +23,6 @@ _COORD_RE = re.compile(r"^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$")
 
 
 def _format_name(addr, fallback):
-    """Build a human-readable city/region string from a Nominatim address block."""
     cc   = addr.get("country_code", "").lower()
     city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("county") or ""
     if cc == "us":
@@ -35,11 +34,8 @@ def _format_name(addr, fallback):
 
 def geocode(query, user_agent):
     """
-    Resolve a location string to coordinates.
-
-    Returns (lat, lon, display_name, country_code) or None on failure.
-    country_code is lowercase ISO 3166-1 alpha-2 ('us', 'gb', etc.).
-    Accepts free-text place names, zip codes, or raw 'lat,lon' pairs.
+    Resolve a location string to (lat, lon, display_name, country_code).
+    Returns None on failure.  Accepts place names, zip codes, or 'lat,lon'.
     """
     query = query.strip().strip("'\"")
     hdrs  = {"User-Agent": user_agent}
