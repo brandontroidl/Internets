@@ -2,6 +2,8 @@ import json
 import threading
 import time
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -27,8 +29,17 @@ class Store:
         return default
 
     def _save(self, path, data):
+        """Atomic write: temp file + rename prevents corruption on crash."""
         try:
-            Path(path).write_text(json.dumps(data, indent=2))
+            p = Path(path)
+            fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp, str(p))
+            except Exception:
+                os.unlink(tmp)
+                raise
         except Exception as e:
             log.warning(f"Save {path}: {e}")
 
@@ -104,7 +115,8 @@ class Store:
                 self._save(self._uf, data)
 
     def channel_users(self, channel):
-        return self._load(self._uf, {}).get(channel.lower(), {})
+        with self._lock:
+            return self._load(self._uf, {}).get(channel.lower(), {})
 
 
 class RateLimiter:

@@ -194,6 +194,22 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Module conflicts:** If two modules try to register the same command, the second load is rejected with a conflict error.
 
+## Security
+
+**Admin auth brute-force protection:** After 5 failed password attempts, the nick is locked out for 5 minutes. Counter resets after the lockout expires or on successful auth.
+
+**Admin sessions cleared on reconnect:** When the bot loses connection, all `_authed` sessions are wiped. Nicks may belong to different people on a new connection, so sessions cannot safely persist.
+
+**Credential redaction in logs:** Outgoing `PASS`, `IDENTIFY`, and `OPER` commands are redacted in the sender's debug log. Incoming `AUTH` messages are redacted in the main loop debug log. The command dispatch log also redacts auth arguments.
+
+**IRC injection prevention:** All outgoing messages have `\r` and `\n` stripped before writing to the socket. This prevents CRLF injection of arbitrary IRC protocol commands.
+
+**Module path traversal prevention:** Module names are validated against `^[a-z][a-z0-9_]*$` before loading. Path components like `..`, `/`, and `.` in module names are rejected.
+
+**Calculator sandboxing:** The calculator uses a recursive AST walker with a strict whitelist of operators and functions. No `eval()`, no `exec()`, no attribute access, no list comprehensions. Exponent inputs are capped at 10,000. Factorial inputs are capped at 170. Expression nesting depth is limited to 50.
+
+**Atomic file writes:** All JSON persistence (locations, channels, users) uses write-to-temp-then-`os.replace()`. A crash during write cannot corrupt the data file.
+
 ## Known Limitations
 
 The translation module uses an undocumented Google Translate endpoint (`translate.googleapis.com`). It has no SLA and may break or be rate-limited without notice.

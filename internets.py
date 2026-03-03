@@ -106,6 +106,9 @@ class IRCBot:
         self._commands       = {}
         self._mod_lock       = threading.Lock()
         self._authed         = set()
+        self._auth_fails     = {}  # nick_lower -> (fail_count, last_fail_time)
+        self._AUTH_MAX_FAILS = 5
+        self._AUTH_LOCKOUT   = 300  # 5-minute lockout after max failures
         self._ka_stop        = threading.Event()
         self._sender         = Sender()
         self._store          = Store(
@@ -170,6 +173,10 @@ class IRCBot:
 
     def load_module(self, name):
         with self._mod_lock:
+            # SEC: Reject names with path separators or parent refs to prevent
+            # loading arbitrary files outside MODULES_DIR.
+            if not re.match(r"^[a-z][a-z0-9_]*$", name):
+                return False, f"Invalid module name '{name}' — lowercase alphanumeric and _ only."
             if name in self._modules:
                 return False, f"'{name}' already loaded."
             path = MODULES_DIR / f"{name}.py"
@@ -221,7 +228,7 @@ class IRCBot:
 
     def _require_admin(self, nick, reply_to):
         if not self.is_admin(nick):
-            self.preply(nick, reply_to, f"{nick}: auth first — /MSG {NICKNAME} AUTH <pw>")
+            self.preply(nick, reply_to, f"{nick}: auth first — /MSG {self._nick} AUTH <pw>")
             return False
         return True
 
@@ -231,20 +238,36 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: no password_hash configured — run hashpw.py")
             return
         if not arg:
-            self.preply(nick, reply_to, f"{nick}: /MSG {NICKNAME} AUTH <password>")
+            self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
             return
+
+        # SEC: Brute-force protection — lock out after repeated failures.
+        k = nick.lower()
+        now = time.time()
+        fails, last_t = self._auth_fails.get(k, (0, 0))
+        if now - last_t > self._AUTH_LOCKOUT:
+            fails = 0  # Reset after lockout expires
+        if fails >= self._AUTH_MAX_FAILS:
+            remaining = int(self._AUTH_LOCKOUT - (now - last_t))
+            self.preply(nick, reply_to,
+                f"{nick}: too many failed attempts — try again in {remaining}s")
+            log.warning(f"Auth lockout: {nick} ({fails} failures)")
+            return
+
         try:
             ok = verify_password(arg.strip(), h)
         except ValueError as e:
             self.preply(nick, reply_to, f"{nick}: config error — {e}")
             return
         if ok:
+            self._auth_fails.pop(k, None)
             self._authed.add(nick)
             self.preply(nick, reply_to, f"{nick}: authenticated.")
             log.info(f"Auth granted: {nick}")
         else:
+            self._auth_fails[k] = (fails + 1, now)
             self.preply(nick, reply_to, f"{nick}: wrong password.")
-            log.warning(f"Failed auth: {nick}")
+            log.warning(f"Failed auth: {nick} ({fails + 1}/{self._AUTH_MAX_FAILS})")
 
     def cmd_deauth(self, nick, reply_to, arg):
         if nick in self._authed:
@@ -256,7 +279,7 @@ class IRCBot:
     def cmd_help(self, nick, reply_to, arg):
         p     = CMD_PREFIX
         lines = [
-            f"── {NICKNAME} ──────────────────────────────────────────────────",
+            f"── {self._nick} ──────────────────────────────────────────────────",
             f"  {p}help  {p}modules  {p}auth <pw>",
         ]
         if self.is_admin(nick):
@@ -469,7 +492,11 @@ class IRCBot:
                 buf += data
                 while "\r\n" in buf:
                     line, buf = buf.split("\r\n", 1)
-                    log.debug(f"<< {line}")
+                    # SEC: Redact passwords from incoming debug log.
+                    if re.search(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", line, re.IGNORECASE):
+                        log.debug(f"<< {line.split(':',2)[0]}:*** AUTH [REDACTED] ***")
+                    else:
+                        log.debug(f"<< {line}")
                     self._process(line)
 
                     if not identified and re.match(r":\S+ (376|422) ", line):
@@ -488,6 +515,11 @@ class IRCBot:
                     BrokenPipeError, ssl.SSLError, OSError) as e:
                 log.warning(f"Lost connection: {e} — reconnect in 15s")
                 self._sender.stop()
+                # SEC: Clear admin sessions — nicks may belong to different people
+                # on the new connection.
+                if self._authed:
+                    log.info(f"Cleared {len(self._authed)} admin session(s) on disconnect.")
+                    self._authed.clear()
                 identified, registered, buf = False, False, ""
                 time.sleep(15)
                 while True:
@@ -720,17 +752,20 @@ class IRCBot:
         cmd = arg = None
 
         if text.startswith(CMD_PREFIX):
-            parts = text[len(CMD_PREFIX):].split(None, 1)
-            cmd   = parts[0].lower()
-            arg   = parts[1].strip() if len(parts) > 1 else None
+            rest = text[len(CMD_PREFIX):]
+            parts = rest.split(None, 1)
+            if parts:
+                cmd   = parts[0].lower()
+                arg   = parts[1].strip() if len(parts) > 1 else None
         elif is_pm:
             parts = text.split(None, 1)
-            if parts[0].lower() in all_cmds:
+            if parts and parts[0].lower() in all_cmds:
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else None
 
         if cmd and cmd in all_cmds:
-            log.info(f"cmd={cmd!r} arg={arg!r} from {nick}!{host} "
+            log_arg = "[REDACTED]" if cmd in ("auth", "deauth") else arg
+            log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{host} "
                      f"{'(PM)' if is_pm else 'in ' + reply_to}")
             self.dispatch(nick, reply_to, cmd, arg, is_pm)
 

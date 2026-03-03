@@ -17,9 +17,11 @@ _FUNCS = {
     "log": math.log, "log2": math.log2, "log10": math.log10,
     "exp": math.exp, "floor": math.floor, "ceil": math.ceil,
     "degrees": math.degrees, "radians": math.radians,
-    "factorial": math.factorial, "gcd": math.gcd,
+    "gcd": math.gcd,
     "hypot": math.hypot, "pow": math.pow,
 }
+# factorial is handled separately with an input cap — see _safe_factorial.
+_FUNCS["factorial"] = None  # placeholder, replaced after _safe_factorial is defined
 
 _CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
 
@@ -38,10 +40,26 @@ _IMPLICIT_MUL = [
 ]
 
 
-def _safe_eval(node):
+_MAX_DEPTH = 50  # Prevent stack overflow from deeply nested expressions
+
+
+def _safe_factorial(n):
+    """Factorial with input cap to prevent DoS."""
+    if not isinstance(n, (int, float)) or n < 0 or n != int(n):
+        raise ValueError("factorial requires a non-negative integer")
+    if n > 170:
+        raise ValueError("factorial input too large (max 170)")
+    return math.factorial(int(n))
+
+_FUNCS["factorial"] = _safe_factorial
+
+
+def _safe_eval(node, depth=0):
     """Recursively evaluate an AST node using only whitelisted operations."""
+    if depth > _MAX_DEPTH:
+        raise ValueError("expression too deeply nested")
     if isinstance(node, ast.Expression):
-        return _safe_eval(node.body)
+        return _safe_eval(node.body, depth + 1)
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, ast.Name):
@@ -52,7 +70,7 @@ def _safe_eval(node):
         op = _BIN_OPS.get(type(node.op))
         if op is None:
             raise ValueError(f"unsupported operator: {type(node.op).__name__}")
-        left, right = _safe_eval(node.left), _safe_eval(node.right)
+        left, right = _safe_eval(node.left, depth + 1), _safe_eval(node.right, depth + 1)
         # Guard against exponent bombs (e.g. 9**9**9**9)
         if isinstance(node.op, ast.Pow):
             if isinstance(right, (int, float)) and abs(right) > 10000:
@@ -62,10 +80,10 @@ def _safe_eval(node):
         op = _UNARY_OPS.get(type(node.op))
         if op is None:
             raise ValueError(f"unsupported operator: {type(node.op).__name__}")
-        return op(_safe_eval(node.operand))
+        return op(_safe_eval(node.operand, depth + 1))
     if isinstance(node, ast.Call):
         if isinstance(node.func, ast.Name) and node.func.id in _FUNCS:
-            args = [_safe_eval(a) for a in node.args]
+            args = [_safe_eval(a, depth + 1) for a in node.args]
             if node.keywords:
                 raise ValueError("keyword arguments not supported")
             return _FUNCS[node.func.id](*args)

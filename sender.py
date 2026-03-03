@@ -35,8 +35,19 @@ class Sender:
             self._seq += 1
             self._q.put((priority, self._seq, msg))
 
+    # Prefixes of outgoing IRC commands whose arguments contain secrets.
+    _REDACT_OUT = ("PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ")
+
     def _write(self, msg):
-        log.debug(f">> {msg}")
+        # SEC: Strip any embedded CR/LF to prevent IRC command injection.
+        msg = msg.replace("\r", "").replace("\n", "")
+        # SEC: Redact credentials from debug logs.
+        log_msg = msg
+        for prefix in self._REDACT_OUT:
+            if msg.upper().startswith(prefix.upper()):
+                log_msg = prefix + "[REDACTED]"
+                break
+        log.debug(f">> {log_msg}")
         try:
             self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
         except Exception as e:
