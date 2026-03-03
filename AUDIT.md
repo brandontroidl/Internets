@@ -413,15 +413,35 @@ Auth hint and help header used the global `NICKNAME` constant instead of `self._
 
 ---
 
+### BUG-016: Channels Not Rejoined After Reboot
+
+**Severity:** High
+**File:** `internets.py` (_rejoin_channels, _process)
+**Status:** Fixed
+
+Channels are correctly saved to `channels.json` on invite/join, but rejoin after reboot/reconnect fails silently for two reasons:
+
+1. **Invite-only channels (`+i`):** The original invite expires when the bot disconnects. On reconnect, `JOIN #channel` gets 473 (ERR_INVITEONLYCHAN). The bot ignored 473 entirely — no retry, no log, no error.
+
+2. **NickServ timing race:** The bot only waited 1 second after `IDENTIFY` before sending JOINs. If NickServ hasn't confirmed yet, channels requiring registered nicks (`+R`) or ChanServ access lists reject the JOIN.
+
+**Resolution:**
+
+- Added 473 handler: on invite-only rejection, bot sends `PRIVMSG ChanServ :INVITE #channel`. ChanServ re-invites the bot (if the bot's NickServ account has channel access), triggering the existing `_on_invite` → `JOIN` flow.
+- Added 471/474/475 handlers: log the rejection and remove the channel from saved channels (user must re-invite).
+- Replaced the fixed 1-second `time.sleep` with a background thread (`_deferred_rejoin`) that waits up to 10 seconds for NickServ confirmation (NOTICE containing "identified"/"recognized", or 900 numeric) before rejoining. Falls back to rejoining anyway after the timeout.
+
+---
+
 ## Summary
 
 | Category | Count | Status |
 |----------|-------|--------|
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
-| High bugs | 4 | All fixed |
+| High bugs | 5 | All fixed |
 | High security | 3 | All fixed |
 | Medium issues | 4 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Documented (known limitation) |
-| **Total** | **32** | **All resolved** |
+| **Total** | **33** | **All resolved** |

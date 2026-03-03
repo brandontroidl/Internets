@@ -99,7 +99,7 @@ The bot verifies ownership by checking the user's NickServ account against the c
 
 The bot reads `config.ini` at startup. Relevant sections:
 
-**`[irc]`** — Server connection. Supports SSL (default on), optional certificate verification bypass for self-signed certs, NickServ identification, server password (for bouncers), and IRC operator credentials.
+**`[irc]`** — Server connection. Supports SSL (default on), optional certificate verification bypass for self-signed certs, NickServ identification, server password (for bouncers), and IRC operator credentials. Also configurable: `user_modes` (applied after connect, e.g. `+ix`), `oper_modes` (applied after OPER succeeds, e.g. `+s`), and `oper_snomask` (server notice mask, e.g. `+cCkKoO`).
 
 **`[bot]`** — Command prefix (default `.`), rate limiting (`api_cooldown`, `flood_cooldown`), file paths for persistent storage, modules directory, and autoload list.
 
@@ -153,6 +153,8 @@ Authenticate first: `/MSG Internets AUTH <password>`
 | `.reloadall` | Reload all loaded modules |
 | `.restart` | Full process restart via `execv` |
 | `.rehash` | Reload `config.ini` and clear admin sessions |
+| `.mode <+/-modes>` | Set bot user modes (e.g. `.mode +ix`) |
+| `.snomask <+/-flags>` | Set server notice mask (e.g. `.snomask +cCkK`) |
 
 ## Writing a Module
 
@@ -184,7 +186,7 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Nick collision recovery:** If the configured nick is taken, the bot appends `_` and retries.
 
-**Auto-reconnect:** On disconnect, the bot waits 15 seconds and reconnects. Channel list is restored from `channels.json`.
+**Auto-reconnect:** On disconnect, the bot waits 15 seconds and reconnects. Channel list is restored from `channels.json`. If NickServ password is configured, the bot waits for identification confirmation (up to 10 seconds) before sending JOINs so that `+R` channels and ChanServ access lists work. If a saved channel is invite-only (`+i`), the bot asks ChanServ to re-invite it. Channels that reject with 471 (full), 474 (banned), or 475 (bad key) are logged and removed from the saved list.
 
 **Keepalive:** A background thread sends `PING` every 90 seconds. If the socket is dead, the reconnect logic takes over.
 

@@ -39,6 +39,12 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
   the IRC services bot name. Defaults to `ChanServ`. Set to `X3`, `Q`, etc. for
   non-ChanServ networks.
 
+- **Configurable user modes, oper modes, and snomask** — Three new `[irc]`
+  config options: `user_modes` (applied after MOTD, e.g. `+ix`), `oper_modes`
+  (applied after successful OPER, e.g. `+s`), and `oper_snomask` (server notice
+  mask applied after OPER, e.g. `+cCkKoO`). All validated at startup. Also added
+  `.mode` and `.snomask` admin commands for runtime changes without restart.
+
 - **Chanop tracking** — The core now parses `353` (NAMES) replies and `MODE`
   changes to track which users hold `~` (owner), `&` (admin), and `@` (op)
   status in each channel. Exposed via `bot.is_chanop(channel, nick)`. Maintained
@@ -155,3 +161,12 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
 - **Calculator DoS mitigated** — `factorial(99999)` could hang a thread; deeply
   nested expressions could blow the stack. Inputs and depth are now capped.
   See AUDIT.md BUG-015.
+
+### Fixed (post-audit)
+
+- **Channels not rejoined after reboot** — Invite-only (`+i`) channels silently
+  failed to rejoin because the original invite expired on disconnect. The bot now
+  handles 473 (ERR_INVITEONLYCHAN) by asking ChanServ to re-invite it. Also,
+  NickServ identification now completes before rejoin attempts, so `+R` channels
+  and ChanServ access lists work. Join errors 471 (full), 474 (banned), and 475
+  (bad key) are logged and the channel is removed from the saved list.

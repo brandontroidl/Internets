@@ -37,6 +37,9 @@ NS_PW     = cfg["irc"].get("nickserv_password", "").strip()
 SERVER_PW = cfg["irc"].get("server_password",   "").strip()
 OPER_N    = cfg["irc"].get("oper_name",          "").strip()
 OPER_PW   = cfg["irc"].get("oper_password",      "").strip()
+USER_MODES = cfg["irc"].get("user_modes",         "").strip()
+OPER_MODES = cfg["irc"].get("oper_modes",         "").strip()
+OPER_SNOMASK = cfg["irc"].get("oper_snomask",     "").strip()
 
 CMD_PREFIX  = cfg["bot"]["command_prefix"]
 API_CD      = int(cfg["bot"]["api_cooldown"])
@@ -80,6 +83,16 @@ def _validate_hash():
 
 _validate_hash()
 
+_MODE_VALID = re.compile(r"^[a-zA-Z+\- ]*$")
+for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
+                     ("oper_snomask", OPER_SNOMASK)]:
+    if _val and not _MODE_VALID.match(_val):
+        log.critical(f"Invalid {_name} = {_val!r} in config.ini — "
+                     f"only letters, +, -, and spaces allowed.")
+        sys.exit(1)
+    if _val:
+        log.info(f"Config {_name} = {_val}")
+
 
 class IRCBot:
     # IRC line limit is 512 bytes incl. CRLF; 400 bytes body leaves room for any prefix.
@@ -96,6 +109,8 @@ class IRCBot:
         "reloadall": "cmd_reloadall",
         "restart":   "cmd_restart",
         "rehash":    "cmd_rehash",
+        "mode":      "cmd_mode",
+        "snomask":   "cmd_snomask",
     }
 
     def __init__(self):
@@ -124,6 +139,8 @@ class IRCBot:
         # Populated from 353 (NAMES) and maintained via MODE +o/-o/+a/-a/+q/-q.
         # Prefixes ~(owner), &(admin), @(op) all count as "chanop" for ACL purposes.
         self._chanops  = {}
+        self._ns_identified = False
+        self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
 
     def send(self, msg, priority=1):
         self._sender.enqueue(msg, priority)
@@ -285,7 +302,7 @@ class IRCBot:
         if self.is_admin(nick):
             lines += [
                 f"  {p}deauth  {p}load/unload/reload <mod>  {p}reloadall",
-                f"  {p}restart  {p}rehash                        [admin]",
+                f"  {p}restart  {p}rehash  {p}mode  {p}snomask      [admin]",
             ]
         lines.append("────────────────────────────────────────────────────────────")
         for name, inst in self._modules.items():
@@ -375,6 +392,35 @@ class IRCBot:
             self.preply(nick, reply_to, f"Cleared {n} admin session(s) — re-authenticate.")
         log.info(f"Rehash by {nick}")
 
+    def cmd_mode(self, nick, reply_to, arg):
+        if not self._require_admin(nick, reply_to): return
+        p = CMD_PREFIX
+        if not arg:
+            self.preply(nick, reply_to, f"usage: {p}mode <+/-modes>  e.g. {p}mode +ix")
+            return
+        # Validate: only mode chars, +/-, and spaces allowed.
+        mode_str = arg.strip()
+        if not re.match(r"^[a-zA-Z+\- ]+$", mode_str):
+            self.preply(nick, reply_to, f"{nick}: invalid mode string.")
+            return
+        self.send(f"MODE {self._nick} {mode_str}")
+        self.preply(nick, reply_to, f"MODE {self._nick} {mode_str}")
+        log.info(f"Mode set by {nick}: {mode_str}")
+
+    def cmd_snomask(self, nick, reply_to, arg):
+        if not self._require_admin(nick, reply_to): return
+        p = CMD_PREFIX
+        if not arg:
+            self.preply(nick, reply_to, f"usage: {p}snomask <+/-flags>  e.g. {p}snomask +cCkK")
+            return
+        mask = arg.strip()
+        if not re.match(r"^[a-zA-Z+\-]+$", mask):
+            self.preply(nick, reply_to, f"{nick}: invalid snomask string.")
+            return
+        self.send(f"MODE {self._nick} +s {mask}")
+        self.preply(nick, reply_to, f"MODE {self._nick} +s {mask}")
+        log.info(f"Snomask set by {nick}: {mask}")
+
     def dispatch(self, nick, reply_to, cmd, arg, is_pm):
         if cmd in ("auth", "deauth") and not is_pm:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM.")
@@ -429,6 +475,7 @@ class IRCBot:
         self._cap_busy = False
         self._caps     = set()
         self._chanops  = {}  # Wipe stale op data; rebuilt from 353 after rejoin
+        self._ns_identified = False
         self.sock      = self._make_socket()
         self._sender.start(self.sock)
         self._start_keepalive()
@@ -459,6 +506,25 @@ class IRCBot:
             self.send(f"JOIN {ch}")
             self.active_channels.add(ch.lower())
             log.info(f"Rejoined {ch}")
+
+    def _deferred_rejoin(self):
+        """Wait for NickServ identification, then rejoin saved channels.
+
+        If NS_PW is set, waits up to 10 seconds for NickServ to confirm
+        (via _ns_identified flag set by _process). This prevents join
+        failures on +R channels or channels where the bot needs its
+        NickServ account for ChanServ access.
+        """
+        if NS_PW:
+            deadline = time.time() + 10
+            while not self._ns_identified and time.time() < deadline:
+                time.sleep(0.25)
+            if self._ns_identified:
+                log.info("NickServ confirmed — rejoining channels.")
+            else:
+                log.warning("NickServ did not confirm within 10s — "
+                            "rejoining anyway (some +R channels may reject).")
+        self._rejoin_channels()
 
     def run(self):
         self.autoload_modules()
@@ -503,12 +569,20 @@ class IRCBot:
                         if self._cap_busy:
                             self.send("CAP END", priority=0)
                             self._cap_busy = False
+                        # Set user modes before anything else (e.g. +ix for
+                        # cloaking before joining channels).
+                        if USER_MODES:
+                            self.send(f"MODE {self._nick} {USER_MODES}")
+                            log.info(f"User modes: MODE {self._nick} {USER_MODES}")
                         if NS_PW:
                             self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
-                            time.sleep(1)
                         if OPER_N and OPER_PW:
                             self.send(f"OPER {OPER_N} {OPER_PW}")
-                        self._rejoin_channels()
+                        # Rejoin in background: waits for NickServ confirmation
+                        # (if applicable) before sending JOINs, so +R channels
+                        # and ChanServ access lists work.
+                        threading.Thread(target=self._deferred_rejoin,
+                                         daemon=True, name="rejoin").start()
                         identified = True
 
             except (ConnectionResetError, ConnectionAbortedError,
@@ -601,6 +675,64 @@ class IRCBot:
             self.send(f"NICK {self._nick}", priority=0)
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
+
+        # 473 = ERR_INVITEONLYCHAN — channel is +i and we have no invite.
+        # Ask ChanServ to re-invite us (works if bot's NickServ account has
+        # channel access). Format: :server 473 botnick #channel :Cannot join
+        m = re.match(r":\S+ 473 \S+ (\S+)", line)
+        if m:
+            chan = m.group(1)
+            svc  = self._services_nick
+            log.info(f"Cannot join {chan} (invite-only) — asking {svc} for INVITE")
+            self.send(f"PRIVMSG {svc} :INVITE {chan}")
+            return
+
+        # 471/474/475 = Channel full / Banned / Bad key — log and remove from
+        # active_channels so we don't retry endlessly. User must re-invite.
+        m = re.match(r":\S+ (471|474|475) \S+ (\S+)", line)
+        if m:
+            num, chan = m.group(1), m.group(2)
+            reasons  = {"471": "channel full", "474": "banned", "475": "bad key"}
+            log.warning(f"Cannot join {chan} ({reasons.get(num, num)}) — "
+                        f"removing from saved channels")
+            self.active_channels.discard(chan.lower())
+            self._store.channels_save(self.active_channels)
+            return
+
+        # 381 = RPL_YOUREOPER — OPER succeeded.
+        # Apply oper-only modes and server notice mask.
+        if re.match(r":\S+ 381 ", line):
+            log.info("OPER granted by server.")
+            if OPER_MODES:
+                self.send(f"MODE {self._nick} {OPER_MODES}")
+                log.info(f"Oper modes: MODE {self._nick} {OPER_MODES}")
+            if OPER_SNOMASK:
+                self.send(f"MODE {self._nick} +s {OPER_SNOMASK}")
+                log.info(f"Snomask: MODE {self._nick} +s {OPER_SNOMASK}")
+            return
+
+        # 491 = ERR_NOOPERHOST — OPER failed (wrong host/credentials).
+        if re.match(r":\S+ 491 ", line):
+            log.warning("OPER failed — wrong credentials or host not permitted.")
+            return
+
+        # NickServ identification confirmation.
+        # Matches NOTICE from NickServ containing "identified" or "recognized",
+        # and numeric 900 (RPL_LOGGEDIN) sent by some services on IDENTIFY.
+        if not self._ns_identified:
+            if re.match(r":\S+ 900 ", line):
+                self._ns_identified = True
+                log.info("NickServ: identified (900 numeric)")
+                return
+            m = re.match(r":([^!]+)!\S+ NOTICE \S+ :(.*)", line)
+            if m:
+                src, text = m.group(1), m.group(2).lower()
+                if src.lower() == "nickserv" and (
+                    "identified" in text or "recognized" in text
+                ):
+                    self._ns_identified = True
+                    log.info("NickServ: identified (NOTICE)")
+                    # Don't return — let other NOTICE handlers see it too
 
         # 353 = RPL_NAMREPLY — parse channel operator prefixes from NAMES list.
         # Format: :server 353 botnick [=*@] #channel :@nick1 +nick2 nick3
