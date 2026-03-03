@@ -17,6 +17,7 @@ import os
 import time
 import threading
 import logging
+import logging.handlers
 import configparser
 import importlib
 import importlib.util
@@ -53,15 +54,142 @@ DESIRED_CAPS = {
     "extended-join", "server-time", "message-tags",
 }
 
-logging.basicConfig(
-    level=getattr(logging, cfg["logging"]["level"]),
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(cfg["logging"]["log_file"]),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+import argparse
+
+_cli = argparse.ArgumentParser(
+    description="Internets — modular IRC bot",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    epilog="""\
+debug examples:
+  %(prog)s --debug                   global debug (all subsystems)
+  %(prog)s --debug weather store     debug only weather + store
+  %(prog)s --loglevel WARNING        suppress INFO from console + main log
+  %(prog)s --debug-file debug.log    capture all DEBUG to separate file
+  %(prog)s --no-console              disable stdin command loop (for daemons)
+
+interactive console (type 'help' at the > prompt while running):
+  debug, loglevel, status, shutdown""")
+_cli.add_argument("--debug", nargs="*", metavar="SUBSYSTEM", default=None,
+                   help="enable debug output.  No args = global debug.  "
+                        "With args = per-subsystem (e.g. --debug weather store)")
+_cli.add_argument("--loglevel", metavar="LEVEL", default=None,
+                   help="base log level: DEBUG, INFO, WARNING, ERROR")
+_cli.add_argument("--debug-file", metavar="PATH", default=None,
+                   help="write all DEBUG output to this file (overrides config)")
+_cli.add_argument("--no-console", action="store_true", default=False,
+                   help="disable interactive stdin console (for daemonized use)")
+_args = _cli.parse_args()
+
+# CLI overrides applied before logging setup.
+LOG_LEVEL   = (_args.loglevel or cfg["logging"]["level"]).upper()
+LOG_FILE    = cfg["logging"]["log_file"]
+LOG_MAX     = int(cfg["logging"].get("max_bytes",    "5242880"))  # 5 MB default
+LOG_BACKUPS = int(cfg["logging"].get("backup_count", "3"))
+LOG_DEBUG   = _args.debug_file or cfg["logging"].get("debug_file", "").strip()
+LOG_FMT     = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+
+class _DebugFilter(logging.Filter):
+    """
+    Attached to main-log and console handlers.  Passes a record if:
+      - record level >= self.base_level (normal output), OR
+      - global_debug is True (`.debug on`), OR
+      - record's logger name is in the subsystem debug set (`.debug weather`)
+    """
+
+    def __init__(self, base_level=logging.INFO):
+        super().__init__()
+        self.base_level   = base_level
+        self.global_debug = False
+        self._subsystems  = set()  # e.g. {"internets.weather", "internets.store"}
+        self._lock        = threading.Lock()
+
+    def filter(self, record):
+        if record.levelno >= self.base_level:
+            return True
+        if self.global_debug:
+            return True
+        with self._lock:
+            # Check if this record's logger or any parent is in the debug set.
+            name = record.name
+            for sub in self._subsystems:
+                if name == sub or name.startswith(sub + "."):
+                    return True
+        return False
+
+    def set_base_level(self, level):
+        self.base_level = level
+
+    def add_subsystem(self, name):
+        with self._lock:
+            self._subsystems.add(name)
+
+    def remove_subsystem(self, name):
+        with self._lock:
+            self._subsystems.discard(name)
+
+    def clear_subsystems(self):
+        with self._lock:
+            self._subsystems.clear()
+
+    def active_subsystems(self):
+        with self._lock:
+            return set(self._subsystems)
+
+
+def _setup_logging():
+    """Configure the internets logger with rotating file + console + optional debug file."""
+    root = logging.getLogger("internets")
+    root.setLevel(logging.DEBUG)  # let handlers decide what to emit
+    root.handlers.clear()
+
+    fmt = logging.Formatter(LOG_FMT)
+
+    filt = _DebugFilter(getattr(logging, LOG_LEVEL, logging.INFO))
+
+    # Main log file — level from config, rotated.
+    fh = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=LOG_MAX, backupCount=LOG_BACKUPS, encoding="utf-8")
+    fh.setLevel(logging.DEBUG)  # filter does the real gating
+    fh.setFormatter(fmt)
+    fh.addFilter(filt)
+    root.addHandler(fh)
+
+    # Console — same level as file.
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(fmt)
+    ch.addFilter(filt)
+    root.addHandler(ch)
+
+    # Optional debug file — always DEBUG, no filter, captures everything.
+    if LOG_DEBUG:
+        dh = logging.handlers.RotatingFileHandler(
+            LOG_DEBUG, maxBytes=LOG_MAX, backupCount=LOG_BACKUPS, encoding="utf-8")
+        dh.setLevel(logging.DEBUG)
+        dh.setFormatter(fmt)
+        dh._debug_file = True  # tag so runtime commands skip it
+        root.addHandler(dh)
+
+    return filt
+
+
+_log_filter = _setup_logging()
 log = logging.getLogger("internets")
+
+# Apply --debug CLI flags.
+if _args.debug is not None:
+    if len(_args.debug) == 0:
+        # --debug with no args: global debug
+        _log_filter.global_debug = True
+        log.info("CLI: global debug enabled")
+    else:
+        # --debug weather store: per-subsystem
+        for sub in _args.debug:
+            full = f"internets.{sub}" if not sub.startswith("internets") else sub
+            logging.getLogger(full).setLevel(logging.DEBUG)
+            _log_filter.add_subsystem(full)
+            log.info(f"CLI: debug enabled for {full}")
 
 
 def _get_hash():
@@ -113,6 +241,8 @@ class IRCBot:
         "snomask":   "cmd_snomask",
         "shutdown":  "cmd_shutdown",
         "die":       "cmd_shutdown",
+        "loglevel":  "cmd_loglevel",
+        "debug":     "cmd_debug",
     }
 
     def __init__(self):
@@ -310,6 +440,8 @@ class IRCBot:
                 f"  {p}deauth  {p}load/unload/reload <mod>  {p}reloadall",
                 f"  {p}restart  {p}rehash  {p}mode  {p}snomask      [admin]",
                 f"  {p}shutdown [reason]  / {p}die [reason]           [admin]",
+                f"  {p}loglevel [LEVEL | <logger> LEVEL]              [admin]",
+                f"  {p}debug [on|off|<subsystem> [off]]               [admin]",
             ]
         lines.append("────────────────────────────────────────────────────────────")
         for name, inst in self._modules.items():
@@ -402,6 +534,16 @@ class IRCBot:
             cfg.read("config.ini")
         except Exception as e:
             self.preply(nick, reply_to, f"Failed to read config.ini: {e}"); return
+
+        # Apply log level from config.
+        new_level = cfg["logging"].get("level", "INFO").upper()
+        lvl = getattr(logging, new_level, None)
+        if lvl:
+            _log_filter.set_base_level(lvl)
+            _log_filter.global_debug = False
+            _log_filter.clear_subsystems()
+            self.preply(nick, reply_to, f"Log level: {new_level}")
+
         h = _get_hash()
         if not h:
             self.preply(nick, reply_to, "Config reloaded — no password_hash set.")
@@ -444,6 +586,97 @@ class IRCBot:
         self.send(f"MODE {self._nick} +s {mask}")
         self.preply(nick, reply_to, f"MODE {self._nick} +s {mask}")
         log.info(f"Snomask set by {nick}: {mask}")
+
+    _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+
+    def cmd_loglevel(self, nick, reply_to, arg):
+        if not self._require_admin(nick, reply_to): return
+        p = CMD_PREFIX
+
+        if not arg:
+            lvl_name = logging.getLevelName(_log_filter.base_level)
+            lines = [f"  base level = {lvl_name}"]
+            if _log_filter.global_debug:
+                lines.append("  global debug = ON")
+            active = _log_filter.active_subsystems()
+            if active:
+                lines.append(f"  debug subsystems: {', '.join(sorted(active))}")
+            if LOG_DEBUG:
+                lines.append(f"  debug file = {LOG_DEBUG}")
+            self.preply(nick, reply_to, "Log levels:")
+            for line in lines:
+                self.preply(nick, reply_to, line)
+            return
+
+        parts = arg.strip().split()
+        if len(parts) == 1:
+            level = parts[0].upper()
+            if level not in self._VALID_LEVELS:
+                self.preply(nick, reply_to,
+                    f"{nick}: invalid level — use: {', '.join(self._VALID_LEVELS)}")
+                return
+            _log_filter.set_base_level(getattr(logging, level))
+            _log_filter.global_debug = False
+            self.preply(nick, reply_to, f"Base level set to {level}")
+            log.info(f"Log level set to {level} by {nick}")
+        elif len(parts) == 2:
+            target, level = parts[0], parts[1].upper()
+            if not target.startswith("internets"):
+                self.preply(nick, reply_to, f"{nick}: logger must start with 'internets'")
+                return
+            if level == "DEBUG":
+                full = target if "." in target else f"internets.{target}"
+                logging.getLogger(full).setLevel(logging.DEBUG)
+                _log_filter.add_subsystem(full)
+                self.preply(nick, reply_to, f"{full} = DEBUG")
+                log.info(f"Log level {full} = DEBUG by {nick}")
+            elif level == "NOTSET":
+                full = target if "." in target else f"internets.{target}"
+                logging.getLogger(full).setLevel(logging.NOTSET)
+                _log_filter.remove_subsystem(full)
+                self.preply(nick, reply_to, f"{full} = NOTSET (inherits parent)")
+                log.info(f"Log level {full} = NOTSET by {nick}")
+            elif level in self._VALID_LEVELS:
+                logging.getLogger(target).setLevel(getattr(logging, level))
+                _log_filter.remove_subsystem(target)
+                self.preply(nick, reply_to, f"{target} = {level}")
+                log.info(f"Log level {target} = {level} by {nick}")
+            else:
+                self.preply(nick, reply_to,
+                    f"{nick}: invalid level — use: {', '.join(self._VALID_LEVELS)} or NOTSET")
+        else:
+            self.preply(nick, reply_to, f"usage: {p}loglevel [LEVEL | <logger> <LEVEL>]")
+
+    def cmd_debug(self, nick, reply_to, arg):
+        """Quick toggle: .debug [on|off|<subsystem> [off]]"""
+        if not self._require_admin(nick, reply_to): return
+
+        if not arg or arg.strip().lower() == "on":
+            _log_filter.global_debug = True
+            self.preply(nick, reply_to, "Debug output ON (all subsystems)")
+            log.info(f"Debug ON by {nick}")
+            return
+
+        parts = arg.strip().lower().split()
+        if parts[0] == "off":
+            _log_filter.global_debug = False
+            _log_filter.clear_subsystems()
+            self.preply(nick, reply_to, f"Debug output OFF (back to {LOG_LEVEL})")
+            log.info(f"Debug OFF by {nick}")
+            return
+
+        # .debug weather  or  .debug weather off
+        subsys = f"internets.{parts[0]}" if not parts[0].startswith("internets") else parts[0]
+        if len(parts) >= 2 and parts[1] == "off":
+            logging.getLogger(subsys).setLevel(logging.NOTSET)
+            _log_filter.remove_subsystem(subsys)
+            self.preply(nick, reply_to, f"{subsys} debug OFF")
+            log.info(f"Debug {subsys} OFF by {nick}")
+        else:
+            logging.getLogger(subsys).setLevel(logging.DEBUG)
+            _log_filter.add_subsystem(subsys)
+            self.preply(nick, reply_to, f"{subsys} debug ON")
+            log.info(f"Debug {subsys} ON by {nick}")
 
     def cmd_shutdown(self, nick, reply_to, arg):
         if not self._require_admin(nick, reply_to): return
@@ -982,6 +1215,115 @@ class IRCBot:
             self.dispatch(nick, reply_to, cmd, arg, is_pm)
 
 
+# ── Interactive console ──────────────────────────────────────────────
+
+_CONSOLE_HELP = """\
+  debug [on|off]            global debug toggle
+  debug <sub> [off]         per-subsystem debug (e.g. debug weather)
+  loglevel [LEVEL]          show or set base level (DEBUG/INFO/WARNING/ERROR)
+  loglevel <logger> LEVEL   set a specific logger
+  status                    show bot state (nick, channels, modules, log levels)
+  shutdown [reason]         graceful shutdown
+  quit                      alias for shutdown"""
+
+
+def _run_console(bot):
+    """Stdin command loop.  Runs in a daemon thread; exits when stdin closes."""
+    while True:
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not line:
+            continue
+
+        parts = line.split()
+        cmd   = parts[0].lower()
+        args  = parts[1:]
+
+        if cmd == "help":
+            print(_CONSOLE_HELP)
+
+        elif cmd == "debug":
+            if not args or args[0] == "on":
+                _log_filter.global_debug = True
+                print("Debug output ON (all subsystems)")
+            elif args[0] == "off":
+                _log_filter.global_debug = False
+                _log_filter.clear_subsystems()
+                print(f"Debug output OFF (back to {LOG_LEVEL})")
+            else:
+                sub = f"internets.{args[0]}" if not args[0].startswith("internets") else args[0]
+                if len(args) >= 2 and args[1] == "off":
+                    logging.getLogger(sub).setLevel(logging.NOTSET)
+                    _log_filter.remove_subsystem(sub)
+                    print(f"{sub} debug OFF")
+                else:
+                    logging.getLogger(sub).setLevel(logging.DEBUG)
+                    _log_filter.add_subsystem(sub)
+                    print(f"{sub} debug ON")
+
+        elif cmd == "loglevel":
+            valid = ("DEBUG", "INFO", "WARNING", "ERROR")
+            if not args:
+                lvl_name = logging.getLevelName(_log_filter.base_level)
+                print(f"  base level = {lvl_name}")
+                if _log_filter.global_debug:
+                    print("  global debug = ON")
+                active = _log_filter.active_subsystems()
+                if active:
+                    print(f"  debug subsystems: {', '.join(sorted(active))}")
+                if LOG_DEBUG:
+                    print(f"  debug file = {LOG_DEBUG}")
+            elif len(args) == 1:
+                level = args[0].upper()
+                if level not in valid:
+                    print(f"Invalid level — use: {', '.join(valid)}")
+                else:
+                    _log_filter.set_base_level(getattr(logging, level))
+                    _log_filter.global_debug = False
+                    print(f"Base level set to {level}")
+            elif len(args) == 2:
+                target, level = args[0], args[1].upper()
+                if not target.startswith("internets"):
+                    print("Logger must start with 'internets'")
+                elif level == "DEBUG":
+                    full = target if "." in target else f"internets.{target}"
+                    logging.getLogger(full).setLevel(logging.DEBUG)
+                    _log_filter.add_subsystem(full)
+                    print(f"{full} = DEBUG")
+                elif level in valid or level == "NOTSET":
+                    logging.getLogger(target).setLevel(getattr(logging, level))
+                    _log_filter.remove_subsystem(target)
+                    print(f"{target} = {level}")
+                else:
+                    print(f"Invalid level — use: {', '.join(valid)} or NOTSET")
+            else:
+                print("usage: loglevel [LEVEL | <logger> LEVEL]")
+
+        elif cmd == "status":
+            print(f"  nick     = {bot._nick}")
+            print(f"  channels = {', '.join(sorted(bot.active_channels)) or '(none)'}")
+            with bot._mod_lock:
+                mods = list(bot._modules)
+            print(f"  modules  = {', '.join(mods) or '(none)'}")
+            print(f"  admins   = {', '.join(sorted(bot._authed)) or '(none)'}")
+            lvl_name = logging.getLevelName(_log_filter.base_level)
+            print(f"  log level = {lvl_name}"
+                  f"{' (global debug ON)' if _log_filter.global_debug else ''}")
+            active = _log_filter.active_subsystems()
+            if active:
+                print(f"  debug subs = {', '.join(sorted(active))}")
+
+        elif cmd in ("shutdown", "quit"):
+            reason = " ".join(args) if args else "Console shutdown"
+            log.info(f"Console shutdown: {reason}")
+            bot.graceful_shutdown(f"QUIT :{reason}")
+
+        else:
+            print(f"Unknown command: {cmd!r} — type 'help' for commands.")
+
+
 if __name__ == "__main__":
     import signal
     bot = IRCBot()
@@ -992,6 +1334,11 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
+
+    if not _args.no_console and sys.stdin.isatty():
+        threading.Thread(target=_run_console, args=(bot,),
+                         daemon=True, name="console").start()
+        log.info("Interactive console enabled (type 'help' for commands)")
 
     while True:
         try:

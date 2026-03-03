@@ -7,7 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-log = logging.getLogger("internets")
+log = logging.getLogger("internets.store")
 
 _utcnow = lambda: datetime.now(timezone.utc).isoformat()
 

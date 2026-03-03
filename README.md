@@ -107,7 +107,11 @@ The bot reads `config.ini` at startup. Relevant sections:
 
 **`[weather]`** — User-Agent string (required by weather.gov ToS) and default unit system.
 
-**`[logging]`** — Log level and output file.
+**`[logging]`** — Log level, output file, rotation, and optional debug file.  The
+main log is rotated at `max_bytes` (default 5 MB) keeping `backup_count` old
+copies (default 3).  Set `debug_file` to a path to capture ALL output at DEBUG
+level regardless of the main `level` setting — useful for protocol diagnostics.
+Runtime control via `.loglevel` and `.debug` admin commands (see below).
 
 Config can be reloaded at runtime with `.rehash`, which also invalidates all active admin sessions.
 
@@ -155,7 +159,28 @@ Authenticate first: `/MSG Internets AUTH <password>`
 | `.rehash` | Reload `config.ini` and clear admin sessions |
 | `.mode <+/-modes>` | Set bot user modes (e.g. `.mode +ix`) |
 | `.snomask <+/-flags>` | Set server notice mask (e.g. `.snomask +cCkK`) |
+| `.loglevel [LEVEL]` | Show or set log output level (DEBUG/INFO/WARNING/ERROR) |
+| `.loglevel <logger> <LEVEL>` | Set level for a specific subsystem (e.g. `.loglevel internets.weather DEBUG`) |
+| `.debug [on\|off]` | Toggle global debug output |
+| `.debug <subsystem> [off]` | Debug a single subsystem (e.g. `.debug weather`) |
 | `.shutdown [reason]` / `.die [reason]` | Save state, unload modules, quit cleanly |
+
+### Console Commands
+
+When running interactively (stdin is a TTY), the bot starts a console thread.
+Type commands at the `>` prompt — no auth required.  Disable with `--no-console`
+or when running under a process manager (auto-detected: console is skipped when
+stdin is not a TTY).
+
+| Console Command | IRC Equivalent |
+|-----------------|----------------|
+| `debug [on\|off]` | `.debug [on\|off]` |
+| `debug <sub> [off]` | `.debug <sub> [off]` |
+| `loglevel [LEVEL]` | `.loglevel [LEVEL]` |
+| `loglevel <logger> LEVEL` | `.loglevel <logger> LEVEL` |
+| `status` | *(no equivalent — shows nick, channels, modules, admins, log state)* |
+| `shutdown [reason]` | `.shutdown [reason]` |
+| `help` | *(shows console commands)* |
 
 ## Writing a Module
 

@@ -49,6 +49,41 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
   mask applied after OPER, e.g. `+cCkKoO`). All validated at startup. Also added
   `.mode` and `.snomask` admin commands for runtime changes without restart.
 
+- **Runtime log control** — Two new admin commands: `.loglevel` and `.debug`.
+  `.loglevel` with no args shows current state; `.loglevel WARNING` changes
+  the base output level; `.loglevel internets.weather DEBUG` enables debug for
+  a single subsystem.  `.debug on/off` toggles global debug.  `.debug weather`
+  enables debug output for just the weather subsystem without flooding everything
+  else — only that module's debug records appear in the main log and console.
+  `.debug weather off` disables it.  Multiple subsystems can be debugged
+  simultaneously.  `.rehash` resets all debug state to config defaults.
+
+- **Log rotation** — Main log file and optional debug file are now rotated via
+  `RotatingFileHandler`. New config options: `max_bytes` (default 5 MB),
+  `backup_count` (default 3 rotated copies).
+
+- **Dedicated debug file** — Optional `debug_file` setting in `[logging]`.
+  When set, captures ALL log output at DEBUG level regardless of the main log
+  level. Useful for post-mortem analysis of protocol issues without enabling
+  verbose output in the main log.
+
+- **Hierarchical logger names** — All modules use `internets.<name>` logger
+  names (e.g. `internets.weather`, `internets.store`, `internets.sender`).
+  Log format now includes the logger name, making it easy to grep for a
+  specific subsystem's output.
+
+- **CLI debug flags** — `--debug` enables global debug at startup.
+  `--debug weather store` enables per-subsystem debug.  `--loglevel WARNING`
+  overrides the config file level.  `--debug-file debug.log` enables a
+  dedicated debug trace file.  `--no-console` disables the interactive
+  stdin console.
+
+- **Interactive console** — When running interactively (stdin is a TTY),
+  the bot provides a `>` prompt accepting `debug`, `loglevel`, `status`,
+  and `shutdown` commands without IRC auth.  `status` shows current nick,
+  channels, modules, admin sessions, and log levels.  Auto-disabled when
+  stdin is not a TTY (e.g. systemd, screen -dm).
+
 - **Chanop tracking** — The core now parses `353` (NAMES) replies and `MODE`
   changes to track which users hold `~` (owner), `&` (admin), and `@` (op)
   status in each channel. Exposed via `bot.is_chanop(channel, nick)`. Maintained
