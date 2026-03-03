@@ -33,6 +33,12 @@ WMO_CODES = {
 
 
 def _om_current(lat, lon):
+    """Return a dict of current conditions from Open-Meteo, or None on failure.
+
+    Keys match nws.current(): conditions, temp_c, feels_c, feels_label,
+    dewpoint_c, pressure_mb, humidity, visibility_m, wind_kph, wind_deg,
+    wind_gusts_kph, updated.
+    """
     try:
         r = requests.get(_OM_BASE, params={
             "latitude": lat, "longitude": lon,
@@ -45,38 +51,80 @@ def _om_current(lat, lon):
 
         temp_c   = cur.get("temperature_2m")
         feels_c  = cur.get("apparent_temperature")
-        wind_kph = cur.get("wind_speed_10m")
-        wind_deg = cur.get("wind_direction_10m")
-        gusts    = cur.get("wind_gusts_10m")
-        humidity = cur.get("relative_humidity_2m")
         wcode    = cur.get("weather_code")
-        desc     = WMO_CODES.get(wcode, f"Code {wcode}") if wcode is not None else "N/A"
+        desc     = WMO_CODES.get(wcode, f"Code {wcode}") if wcode is not None else None
 
-        if wind_kph is not None and wind_kph < 1:
-            wind_str = "Calm"
-        elif wind_kph is not None:
-            card     = deg_to_card(wind_deg)
-            wind_str = f"from {card} at {kph(wind_kph)}" if card else kph(wind_kph)
-            if gusts and gusts > wind_kph * 1.3:
-                wind_str += f" (gusts {kph(gusts)})"
-        else:
-            wind_str = "N/A"
-
-        parts = [f"Conditions {desc}", f"Temperature {cf(temp_c)}"]
-        if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:
-            parts.append(f"Feels like {cf(feels_c)}")
-        parts += [
-            f"Dew point {cf(cur.get('dew_point_2m'))}",
-            f"Pressure {mb(cur.get('surface_pressure'))}",
-            f"Humidity {f'{humidity:.0f}%' if humidity is not None else 'N/A'}",
-            f"Visibility {km_mi(cur.get('visibility'))}",
-            f"Wind {wind_str}",
-            f"Updated {fmt_dt(cur.get('time', ''))}",
-        ]
-        return " :: ".join(parts)
+        return {
+            "conditions":     desc,
+            "temp_c":         temp_c,
+            "feels_c":        feels_c,
+            "feels_label":    "Feels like" if feels_c is not None else None,
+            "dewpoint_c":     cur.get("dew_point_2m"),
+            "pressure_mb":    cur.get("surface_pressure"),
+            "humidity":       cur.get("relative_humidity_2m"),
+            "visibility_m":   cur.get("visibility"),
+            "wind_kph":       cur.get("wind_speed_10m"),
+            "wind_deg":       cur.get("wind_direction_10m"),
+            "wind_gusts_kph": cur.get("wind_gusts_10m"),
+            "updated":        cur.get("time", ""),
+        }
     except Exception as e:
         log.warning(f"Open-Meteo current: {e}")
     return None
+
+
+def _merge_current(primary, fallback):
+    """Merge two weather dicts.  Primary values win; fallback fills None gaps."""
+    if primary is None:
+        return fallback
+    if fallback is None:
+        return primary
+    merged = dict(fallback)
+    for k, v in primary.items():
+        if v is not None:
+            merged[k] = v
+    return merged
+
+
+def _format_current(d):
+    """Format a weather dict into a single IRC output line."""
+    if d is None:
+        return None
+
+    temp_c   = d.get("temp_c")
+    feels_c  = d.get("feels_c")
+    label    = d.get("feels_label", "Feels like")
+    wind_kph = d.get("wind_kph")
+    wind_deg = d.get("wind_deg")
+    gusts    = d.get("wind_gusts_kph")
+    humidity = d.get("humidity")
+
+    if wind_kph is not None and wind_kph < 1:
+        wind_str = "Calm"
+    elif wind_kph is not None:
+        card     = deg_to_card(wind_deg)
+        wind_str = f"from {card} at {kph(wind_kph)}" if card else kph(wind_kph)
+        if gusts and gusts > wind_kph * 1.3:
+            wind_str += f" (gusts {kph(gusts)})"
+    else:
+        wind_str = "N/A"
+
+    cond = d.get("conditions") or "N/A"
+    parts = [f"Conditions {cond}", f"Temperature {cf(temp_c)}"]
+
+    # Show feels-like / heat index / wind chill when meaningfully different.
+    if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:
+        parts.append(f"{label} {cf(feels_c)}")
+
+    parts += [
+        f"Dew point {cf(d.get('dewpoint_c'))}",
+        f"Pressure {mb(d.get('pressure_mb'))}",
+        f"Humidity {f'{humidity:.0f}%' if humidity is not None else 'N/A'}",
+        f"Visibility {km_mi(d.get('visibility_m'))}",
+        f"Wind {wind_str}",
+        f"Updated {fmt_dt(d.get('updated', ''))}",
+    ]
+    return " :: ".join(parts)
 
 
 def _om_forecast(lat, lon):
@@ -168,15 +216,19 @@ class WeatherModule(BotModule):
         if geo is None: return
         lat, lon, display, cc = geo
         log.info(f"weather {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
-        body = None
+
+        nws_data = None
         if cc == "us":
             grid = nws.get_grid(lat, lon, self._headers)
             if grid:
-                body = nws.current(lat, lon, grid, self._headers)
+                nws_data = nws.current(lat, lon, grid, self._headers)
             else:
                 log.info(f"NWS no grid for {display!r}, falling back to Open-Meteo")
-        if body is None:
-            body = _om_current(lat, lon)
+
+        om_data = _om_current(lat, lon)
+        merged  = _merge_current(nws_data, om_data)
+        body    = _format_current(merged)
+
         if body:
             self.bot.privmsg(reply_to, f":: {display} :: {body} ::")
         else:

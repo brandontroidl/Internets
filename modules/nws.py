@@ -1,7 +1,7 @@
 import re
 import logging
 import requests
-from .units import cf, kph_from_ms, km_mi, mb_from_pa, deg_to_card, fmt_dt, fmt_short
+from .units import cf, fmt_dt, fmt_short
 
 log = logging.getLogger("internets.nws")
 
@@ -20,6 +20,13 @@ def get_grid(lat, lon, headers):
 
 
 def current(lat, lon, grid, headers):
+    """Return a dict of current conditions, or None on failure.
+
+    Keys (all optional, may be None):
+        conditions, temp_c, feels_c, feels_label,
+        dewpoint_c, pressure_mb, humidity, visibility_m,
+        wind_kph, wind_deg, wind_gusts_kph, updated
+    """
     try:
         r   = requests.get(grid["observationStations"], headers=headers, timeout=10)
         sid = r.json()["features"][0]["properties"]["stationIdentifier"]
@@ -28,42 +35,43 @@ def current(lat, lon, grid, headers):
             headers=headers, timeout=10,
         ).json()["properties"]
 
+        temp_c   = obs.get("temperature",        {}).get("value")
         wind_ms  = obs.get("windSpeed",          {}).get("value")
         wind_deg = obs.get("windDirection",      {}).get("value")
+        gusts_ms = obs.get("windGust",           {}).get("value")
+        humidity = obs.get("relativeHumidity",   {}).get("value")
         hi_c     = obs.get("heatIndex",          {}).get("value")
         wc_c     = obs.get("windChill",          {}).get("value")
-        humidity = obs.get("relativeHumidity",   {}).get("value")
-        temp_c   = obs.get("temperature",        {}).get("value")
+        dew_c    = obs.get("dewpoint",           {}).get("value")
+        pres_pa  = obs.get("barometricPressure", {}).get("value")
+        vis_m    = obs.get("visibility",         {}).get("value")
+        desc     = obs.get("textDescription") or None
 
-        # If the core fields are all null, the station has no usable data —
-        # return None so the caller can fall back to Open-Meteo.
+        # If the core fields are all null, the station has no usable data.
         if temp_c is None and humidity is None and wind_ms is None:
             log.info("NWS observation has no usable data — all core fields null")
             return None
 
-        if wind_ms is not None and wind_ms < 0.5:
-            wind_str = "Calm"
-        elif wind_ms is not None:
-            card     = deg_to_card(wind_deg)
-            wind_str = f"from {card} at {kph_from_ms(wind_ms)}" if card else kph_from_ms(wind_ms)
-        else:
-            wind_str = "N/A"
+        feels_c = feels_label = None
+        if hi_c is not None:
+            feels_c, feels_label = hi_c, "Heat index"
+        elif wc_c is not None:
+            feels_c, feels_label = wc_c, "Wind chill"
 
-        parts = [
-            f"Conditions {obs.get('textDescription', 'N/A') or 'N/A'}",
-            f"Temperature {cf(temp_c)}",
-        ]
-        if hi_c is not None: parts.append(f"Heat index {cf(hi_c)}")
-        if wc_c is not None: parts.append(f"Wind chill {cf(wc_c)}")
-        parts += [
-            f"Dew point {cf(obs.get('dewpoint', {}).get('value'))}",
-            f"Pressure {mb_from_pa(obs.get('barometricPressure', {}).get('value'))}",
-            f"Humidity {f'{humidity:.0f}%' if humidity is not None else 'N/A'}",
-            f"Visibility {km_mi(obs.get('visibility', {}).get('value'))}",
-            f"Wind {wind_str}",
-            f"Updated {fmt_dt(obs.get('timestamp', ''))}",
-        ]
-        return " :: ".join(parts)
+        return {
+            "conditions":     desc,
+            "temp_c":         temp_c,
+            "feels_c":        feels_c,
+            "feels_label":    feels_label,
+            "dewpoint_c":     dew_c,
+            "pressure_mb":    pres_pa / 100 if pres_pa is not None else None,
+            "humidity":       humidity,
+            "visibility_m":   vis_m,
+            "wind_kph":       wind_ms * 3.6 if wind_ms is not None else None,
+            "wind_deg":       wind_deg,
+            "wind_gusts_kph": gusts_ms * 3.6 if gusts_ms is not None else None,
+            "updated":        obs.get("timestamp", ""),
+        }
     except Exception as e:
         log.warning(f"NWS current: {e}")
     return None
