@@ -155,6 +155,7 @@ Authenticate first: `/MSG Internets AUTH <password>`
 | `.rehash` | Reload `config.ini` and clear admin sessions |
 | `.mode <+/-modes>` | Set bot user modes (e.g. `.mode +ix`) |
 | `.snomask <+/-flags>` | Set server notice mask (e.g. `.snomask +cCkK`) |
+| `.shutdown [reason]` / `.die [reason]` | Save state, unload modules, quit cleanly |
 
 ## Writing a Module
 

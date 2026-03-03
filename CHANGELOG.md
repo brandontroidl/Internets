@@ -32,8 +32,12 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
   commands are redacted in the sender's debug log. Incoming `AUTH` messages are
   redacted in the main loop. Command dispatch log redacts auth arguments.
 
-- **Graceful shutdown** — `SIGTERM` and `SIGINT` now send `QUIT` to the server
-  and wait for the sender queue to flush before exiting. No more ghost sessions.
+- **Graceful shutdown** — `SIGTERM`, `SIGINT`, and the new `.shutdown` / `.die`
+  admin command all trigger the same clean exit path: save channel list to disk,
+  call `on_unload()` on every loaded module, send `QUIT` to the server, wait for
+  the sender queue to flush, then exit. `.restart` also saves state and unloads
+  modules before `execv`. Accepts an optional quit reason
+  (e.g. `.shutdown maintenance window`).
 
 - **`services_nick` config option** — New setting under `[bot]` for specifying
   the IRC services bot name. Defaults to `ChanServ`. Set to `X3`, `Q`, etc. for

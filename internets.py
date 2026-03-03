@@ -111,6 +111,8 @@ class IRCBot:
         "rehash":    "cmd_rehash",
         "mode":      "cmd_mode",
         "snomask":   "cmd_snomask",
+        "shutdown":  "cmd_shutdown",
+        "die":       "cmd_shutdown",
     }
 
     def __init__(self):
@@ -303,6 +305,7 @@ class IRCBot:
             lines += [
                 f"  {p}deauth  {p}load/unload/reload <mod>  {p}reloadall",
                 f"  {p}restart  {p}rehash  {p}mode  {p}snomask      [admin]",
+                f"  {p}shutdown [reason]  / {p}die [reason]           [admin]",
             ]
         lines.append("────────────────────────────────────────────────────────────")
         for name, inst in self._modules.items():
@@ -364,6 +367,20 @@ class IRCBot:
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
+
+        # Save state and unload modules before replacing process.
+        try:
+            self._store.channels_save(self.active_channels)
+        except Exception:
+            pass
+        with self._mod_lock:
+            names = list(self._modules)
+        for name in names:
+            try:
+                self.unload_module(name)
+            except Exception:
+                pass
+
         try:
             self.send("QUIT :Restarting ...", priority=0)
         except Exception:
@@ -420,6 +437,53 @@ class IRCBot:
         self.send(f"MODE {self._nick} +s {mask}")
         self.preply(nick, reply_to, f"MODE {self._nick} +s {mask}")
         log.info(f"Snomask set by {nick}: {mask}")
+
+    def cmd_shutdown(self, nick, reply_to, arg):
+        if not self._require_admin(nick, reply_to): return
+        reason = arg.strip() if arg else "Shutting down"
+        self.preply(nick, reply_to, f"Shutting down: {reason}")
+        log.info(f"Shutdown by {nick}: {reason}")
+        self.graceful_shutdown(f"QUIT :{reason}")
+
+    def graceful_shutdown(self, quit_msg="QUIT :Shutting down"):
+        """Save state, unload modules, send QUIT, and exit cleanly."""
+        log.info("Graceful shutdown initiated.")
+
+        # 1. Save channel list.
+        try:
+            self._store.channels_save(self.active_channels)
+            log.info(f"Saved {len(self.active_channels)} channel(s).")
+        except Exception as e:
+            log.warning(f"Channel save failed: {e}")
+
+        # 2. Unload all modules (calls each module's on_unload).
+        with self._mod_lock:
+            names = list(self._modules)
+        for name in names:
+            try:
+                ok, msg = self.unload_module(name)
+                log.info(f"Unload {name}: {msg}")
+            except Exception as e:
+                log.warning(f"Unload {name} failed: {e}")
+
+        # 3. Send QUIT and give the sender time to flush.
+        try:
+            self.send(quit_msg, priority=0)
+        except Exception:
+            pass
+        time.sleep(2)
+
+        # 4. Stop sender thread and close socket.
+        self._ka_stop.set()
+        self._sender.stop()
+        try:
+            if self.sock:
+                self.sock.close()
+        except Exception:
+            pass
+
+        log.info("Shutdown complete.")
+        sys.exit(0)
 
     def dispatch(self, nick, reply_to, cmd, arg, is_pm):
         if cmd in ("auth", "deauth") and not is_pm:
@@ -908,12 +972,7 @@ if __name__ == "__main__":
 
     def _shutdown(signum, frame):
         log.info(f"Received signal {signum}, shutting down.")
-        try:
-            bot.send("QUIT :Shutting down", priority=0)
-            time.sleep(2)
-        except Exception:
-            pass
-        sys.exit(0)
+        bot.graceful_shutdown("QUIT :Caught signal, shutting down")
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
@@ -923,6 +982,8 @@ if __name__ == "__main__":
             bot.run()
         except KeyboardInterrupt:
             _shutdown(2, None)
+        except SystemExit:
+            raise  # Let graceful_shutdown's sys.exit propagate
         except Exception as e:
             log.error(f"Crash: {e} — restart in 30s")
             time.sleep(30)
