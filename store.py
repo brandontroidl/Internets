@@ -11,25 +11,58 @@ log = logging.getLogger("internets")
 
 _utcnow = lambda: datetime.now(timezone.utc).isoformat()
 
+_FLUSH_INTERVAL = 30  # seconds between periodic disk writes
+
 
 class Store:
-    def __init__(self, loc_file, channels_file, users_file):
-        self._lf   = loc_file
-        self._cf   = channels_file
-        self._uf   = users_file
-        self._lock = threading.Lock()
+    """
+    In-memory state with periodic disk flush.
 
-    def _load(self, path, default):
+    Data is loaded once at startup and mutated in memory.  A background
+    thread writes dirty datasets to disk every _FLUSH_INTERVAL seconds.
+    flush() can be called manually (e.g. on shutdown) for immediate write.
+
+    Each dataset (locations, channels, users) has its own lock so a weather
+    lookup doesn't block behind a user-tracking write.
+    """
+
+    def __init__(self, loc_file, channels_file, users_file):
+        self._lf = loc_file
+        self._cf = channels_file
+        self._uf = users_file
+
+        self._loc_lock  = threading.Lock()
+        self._chan_lock  = threading.Lock()
+        self._user_lock = threading.Lock()
+
+        # Load from disk once.
+        self._locs     = self._read(loc_file, {})
+        self._channels = self._read(channels_file, [])
+        self._users    = self._read(users_file, {})
+
+        self._dirty_locs  = False
+        self._dirty_chans = False
+        self._dirty_users = False
+
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._flush_loop, daemon=True, name="store-flush")
+        self._thread.start()
+
+    # ── Disk I/O (private) ───────────────────────────────────────────
+
+    @staticmethod
+    def _read(path, default):
         try:
             p = Path(path)
             if p.exists():
                 return json.loads(p.read_text())
         except Exception as e:
-            log.warning(f"Load {path}: {e}")
+            log.warning(f"Store load {path}: {e}")
         return default
 
-    def _save(self, path, data):
-        """Write via temp file + rename to avoid corruption on crash."""
+    @staticmethod
+    def _write(path, data):
         try:
             p = Path(path)
             fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
@@ -41,86 +74,111 @@ class Store:
                 os.unlink(tmp)
                 raise
         except Exception as e:
-            log.warning(f"Save {path}: {e}")
+            log.warning(f"Store save {path}: {e}")
+
+    # ── Flush ────────────────────────────────────────────────────────
+
+    def _flush_loop(self):
+        while not self._stop.wait(timeout=_FLUSH_INTERVAL):
+            self.flush()
+
+    def flush(self):
+        """Write any dirty datasets to disk.  Safe to call from any thread."""
+        with self._loc_lock:
+            if self._dirty_locs:
+                self._write(self._lf, self._locs)
+                self._dirty_locs = False
+
+        with self._chan_lock:
+            if self._dirty_chans:
+                self._write(self._cf, sorted(self._channels))
+                self._dirty_chans = False
+
+        with self._user_lock:
+            if self._dirty_users:
+                self._write(self._uf, self._users)
+                self._dirty_users = False
+
+    def stop(self):
+        """Stop the flush timer and write pending data."""
+        self._stop.set()
+        self.flush()
+
+    # ── Locations ────────────────────────────────────────────────────
 
     def loc_get(self, nick):
-        with self._lock:
-            return self._load(self._lf, {}).get(nick.lower())
+        with self._loc_lock:
+            return self._locs.get(nick.lower())
 
     def loc_set(self, nick, raw):
-        with self._lock:
-            d = self._load(self._lf, {})
-            d[nick.lower()] = raw
-            self._save(self._lf, d)
+        with self._loc_lock:
+            self._locs[nick.lower()] = raw
+            self._dirty_locs = True
 
     def loc_del(self, nick):
-        with self._lock:
-            d = self._load(self._lf, {})
-            if nick.lower() not in d:
+        with self._loc_lock:
+            if nick.lower() not in self._locs:
                 return False
-            del d[nick.lower()]
-            self._save(self._lf, d)
+            del self._locs[nick.lower()]
+            self._dirty_locs = True
             return True
 
+    # ── Channels ─────────────────────────────────────────────────────
+
     def channels_load(self):
-        with self._lock:
-            return self._load(self._cf, [])
+        with self._chan_lock:
+            return list(self._channels)
 
     def channels_save(self, channels):
-        with self._lock:
-            self._save(self._cf, sorted(channels))
+        with self._chan_lock:
+            self._channels = sorted(channels)
+            self._dirty_chans = True
+
+    # ── User tracking ────────────────────────────────────────────────
 
     def user_join(self, channel, nick, hostmask):
         now = _utcnow()
-        with self._lock:
-            data  = self._load(self._uf, {})
-            ch    = data.setdefault(channel.lower(), {})
+        with self._user_lock:
+            ch    = self._users.setdefault(channel.lower(), {})
             entry = ch.setdefault(nick.lower(), {
                 "nick": nick, "hostmask": hostmask,
                 "first_seen": now, "last_seen": now,
             })
             entry.update({"last_seen": now, "hostmask": hostmask, "nick": nick})
-            self._save(self._uf, data)
+            self._dirty_users = True
 
     def user_part(self, channel, nick):
-        with self._lock:
-            data  = self._load(self._uf, {})
-            entry = data.get(channel.lower(), {}).get(nick.lower())
+        with self._user_lock:
+            entry = self._users.get(channel.lower(), {}).get(nick.lower())
             if entry:
                 entry["last_seen"] = _utcnow()
-                self._save(self._uf, data)
+                self._dirty_users = True
 
     def user_quit(self, nick):
         now = _utcnow()
-        with self._lock:
-            data    = self._load(self._uf, {})
-            touched = [ch for ch in data.values() if nick.lower() in ch]
-            for ch in touched:
-                ch[nick.lower()]["last_seen"] = now
-            if touched:
-                self._save(self._uf, data)
+        with self._user_lock:
+            for ch in self._users.values():
+                if nick.lower() in ch:
+                    ch[nick.lower()]["last_seen"] = now
+                    self._dirty_users = True
 
     def user_rename(self, old, new, hostmask):
         now = _utcnow()
-        with self._lock:
-            data    = self._load(self._uf, {})
-            touched = False
-            for ch in data.values():
+        with self._user_lock:
+            for ch in self._users.values():
                 if old.lower() in ch:
                     entry = ch.pop(old.lower())
                     entry.update({"nick": new, "hostmask": hostmask, "last_seen": now})
                     ch[new.lower()] = entry
-                    touched = True
-            if touched:
-                self._save(self._uf, data)
+                    self._dirty_users = True
 
     def channel_users(self, channel):
-        with self._lock:
-            return self._load(self._uf, {}).get(channel.lower(), {})
+        with self._user_lock:
+            return dict(self._users.get(channel.lower(), {}))
 
 
 class RateLimiter:
-    _CLEANUP_INTERVAL = 300  # Purge stale entries every 5 minutes
+    _CLEANUP_INTERVAL = 300
 
     def __init__(self, flood_cd, api_cd):
         self._flood_cd = flood_cd

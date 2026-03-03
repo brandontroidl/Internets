@@ -375,6 +375,7 @@ class IRCBot:
         # Save state and unload modules before replacing process.
         try:
             self._store.channels_save(self.active_channels)
+            self._store.stop()
         except Exception:
             pass
         with self._mod_lock:
@@ -451,11 +452,13 @@ class IRCBot:
     def graceful_shutdown(self, quit_msg="QUIT :Shutting down"):
         log.info("Graceful shutdown initiated.")
 
+        # Save current channel list, then flush all store data to disk.
         try:
             self._store.channels_save(self.active_channels)
-            log.info(f"Saved {len(self.active_channels)} channel(s).")
+            self._store.stop()
+            log.info("Store flushed to disk.")
         except Exception as e:
-            log.warning(f"Channel save failed: {e}")
+            log.warning(f"Store flush failed: {e}")
 
         with self._mod_lock:
             names = list(self._modules)

@@ -1,6 +1,6 @@
 # Security & Stability Audit
 
-**Reviewer:** Brandon
+**Reviewer:** Claude (Principal Engineer review)
 **Date:** 2026-03-02
 **Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `config.ini`, and all modules in `modules/`.
 
@@ -165,9 +165,9 @@ The `_authed` set stores nicks at authentication time. When a user changes their
 
 **Severity:** Medium
 **File:** `store.py`
-**Status:** Documented (known limitation)
+**Status:** Fixed
 
-Every `user_join`, `user_part`, `user_quit`, `loc_get`, `loc_set` call reads the full JSON file from disk, deserializes it, optionally modifies it, and writes it back. Adequate for low-traffic use but will bottleneck on busy networks. Future improvement: in-memory cache with periodic flush, or SQLite migration.
+All data is now loaded once at startup and mutated in memory. A background thread flushes dirty datasets to disk every 30 seconds. Each dataset (locations, channels, users) has its own lock, eliminating cross-dataset contention. `graceful_shutdown` and `.restart` force an immediate flush. Public API unchanged.
 
 ---
 
@@ -443,5 +443,5 @@ Channels are correctly saved to `channels.json` on invite/join, but rejoin after
 | High security | 3 | All fixed |
 | Medium issues | 4 | All fixed |
 | Improvements | 11 | All fixed or documented |
-| Performance | 1 | Documented (known limitation) |
+| Performance | 1 | Fixed |
 | **Total** | **33** | **All resolved** |

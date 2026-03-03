@@ -75,6 +75,14 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
   write-to-temp + `os.replace()`. A crash during write cannot corrupt the data
   file.
 
+- **Store rewritten: in-memory cache with periodic flush** — `store.py` no
+  longer reads and writes JSON on every operation.  All data is loaded once at
+  startup and mutated in memory.  A background thread flushes dirty datasets to
+  disk every 30 seconds.  `graceful_shutdown` and `.restart` force an immediate
+  flush.  Each dataset (locations, channels, users) now has its own lock, so a
+  weather lookup never blocks behind a user-tracking write.  Public API is
+  unchanged — zero module modifications required.
+
 - **`_require_admin` and help header use live nick** — Auth hint messages and
   the help banner now reference `self._nick` instead of the stale `NICKNAME`
   constant, so they remain correct after a nick collision.

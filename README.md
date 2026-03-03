@@ -9,7 +9,7 @@ US weather pulls from weather.gov (NWS API). International weather uses Open-Met
 ```
 internets.py          Core: connection lifecycle, IRC protocol parsing, command dispatch
 sender.py             Outbound message queue with token-bucket rate limiting
-store.py              Persistent JSON-backed storage for locations, channels, and user tracking
+store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
 hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
 
 modules/
@@ -191,7 +191,7 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Keepalive:** A background thread sends `PING` every 90 seconds. If the socket is dead, the reconnect logic takes over.
 
-**User tracking:** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps. Data is persisted to `users.json`. This is populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster).
+**User tracking:** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps in memory, flushed to `users.json` every 30 seconds. Populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster).
 
 **Channel ownership verification:** When a non-admin user runs `.join` or `.part`, the bot verifies they are the channel founder by WHOIS-ing them for their NickServ account (330 numeric) and querying the configured services bot (`services_nick`, default ChanServ) with `INFO #channel` for the founder name. If the account matches the founder (case-insensitive), the action proceeds. Verification times out after 15 seconds. This covers Anope, Atheme, Epona, X2, X3, and compatible forks. The services bot name is the only thing that varies — set `services_nick = X3` (or `Q`, etc.) in `config.ini` for non-ChanServ networks.
 
@@ -211,13 +211,13 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Calculator sandboxing:** The calculator uses a recursive AST walker with a strict whitelist of operators and functions. No `eval()`, no `exec()`, no attribute access, no list comprehensions. Exponent inputs are capped at 10,000. Factorial inputs are capped at 170. Expression nesting depth is limited to 50.
 
-**Atomic file writes:** All JSON persistence (locations, channels, users) uses write-to-temp-then-`os.replace()`. A crash during write cannot corrupt the data file.
+**Atomic file writes:** All disk flushes use write-to-temp-then-`os.replace()`. A crash during write cannot corrupt the data file.
 
 ## Known Limitations
 
 The translation module uses an undocumented Google Translate endpoint (`translate.googleapis.com`). It has no SLA and may break or be rate-limited without notice.
 
-The persistent store (`store.py`) reads and writes the full JSON file on every operation. This is adequate for low-traffic use but will become a bottleneck on busy networks. A future improvement would be in-memory caching with periodic disk flushes, or a migration to SQLite.
+**Persistence:** The store loads all JSON files into memory once at startup. Mutations happen in-memory; a background thread flushes dirty data to disk every 30 seconds. Each dataset (locations, channels, users) has its own lock, so weather lookups never block on user-tracking writes. Worst-case data loss on a hard crash is 30 seconds of user-tracking timestamps — channel list and location changes are also flushed on `.shutdown`, `.restart`, and signal handlers.
 
 The bot does not parse `353` (NAMES reply) for user roster purposes. Users who were already in the channel when the bot joined will not appear in `.users` output until they trigger an observable event (JOIN, PART, QUIT, NICK, or sending a message).
 
