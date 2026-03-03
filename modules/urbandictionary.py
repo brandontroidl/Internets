@@ -1,19 +1,16 @@
-"""
-Urban Dictionary module.
-Commands: .u, .urbandictionary
-"""
-
 import re
-import requests
 import logging
+import requests
 from .base import BotModule
 
 log = logging.getLogger("internets.ud")
 
+_IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 
-def urban_lookup(term: str, index: int, user_agent: str) -> str:
+
+def _lookup(term, index, user_agent):
     try:
-        r = requests.get(
+        r    = requests.get(
             "https://api.urbandictionary.com/v0/define",
             params={"term": term},
             headers={"User-Agent": user_agent},
@@ -21,43 +18,36 @@ def urban_lookup(term: str, index: int, user_agent: str) -> str:
         )
         defs = r.json().get("list", [])
         if not defs:
-            return f"No Urban Dictionary results for '{term}'."
+            return f"No results for '{term}'"
         total = len(defs)
         idx   = max(1, min(index, total)) - 1
-        defn  = defs[idx]["definition"].replace("\r","").replace("\n"," ").strip()
+        defn  = defs[idx]["definition"].replace("\r", "").replace("\n", " ").strip()
         if len(defn) > 400:
             defn = defn[:397] + "..."
         return f"[{idx+1}/{total}] {defn}"
     except Exception as e:
-        log.warning(f"UD error: {e}")
-        return "Urban Dictionary lookup failed."
+        log.warning(f"UD lookup: {e}")
+        return "lookup failed"
 
 
 class UDModule(BotModule):
-    COMMANDS = {
-        "u":               "cmd_ud",
-        "urbandictionary": "cmd_ud",
-    }
+    COMMANDS = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
 
     def on_load(self):
-        self.user_agent = self.bot.cfg["weather"]["user_agent"]
-        log.info("UDModule loaded")
+        self._ua = self.bot.cfg["weather"]["user_agent"]
 
     def cmd_ud(self, nick, reply_to, arg):
-        if self.bot.flood_limited(nick): return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
-            self.bot.privmsg(reply_to, f"{nick}: usage: {p}u <word> [/N]  e.g. {p}u jason /4")
+            self.bot.privmsg(reply_to, f"{nick}: {p}u <word> [/N]  e.g. {p}u yolo /2")
             return
-        m = re.match(r"^(.+?)\s*/(\d+)$", arg.strip())
-        term, idx = (m.group(1).strip(), int(m.group(2))) if m else (arg.strip(), 1)
-        self.bot.privmsg(reply_to, urban_lookup(term, idx, self.user_agent))
+        m    = _IDX_RE.match(arg.strip())
+        term = m.group(1).strip() if m else arg.strip()
+        idx  = int(m.group(2))    if m else 1
+        self.bot.privmsg(reply_to, _lookup(term, idx, self._ua))
 
     def help_lines(self, prefix):
-        return [
-            f"  {prefix}u   <word> [/N]               Urban Dictionary  e.g. {prefix}u jason /2",
-            f"  {prefix}urbandictionary <word> [/N]   Alias for {prefix}u",
-        ]
+        return [f"  {prefix}u/.urbandictionary <word> [/N]   Urban Dictionary  e.g. {prefix}u yolo /2"]
 
 
 def setup(bot):
