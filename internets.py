@@ -490,6 +490,7 @@ class IRCBot:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM.")
             return
         if self.flood_limited(nick):
+            self.notice(nick, f"{nick}: slow down ({FLOOD_CD}s cooldown)")
             log.debug(f"Flood drop: {cmd!r} from {nick}")
             return
 

@@ -33,6 +33,13 @@ def current(lat, lon, grid, headers):
         hi_c     = obs.get("heatIndex",          {}).get("value")
         wc_c     = obs.get("windChill",          {}).get("value")
         humidity = obs.get("relativeHumidity",   {}).get("value")
+        temp_c   = obs.get("temperature",        {}).get("value")
+
+        # If the core fields are all null, the station has no usable data —
+        # return None so the caller can fall back to Open-Meteo.
+        if temp_c is None and humidity is None and wind_ms is None:
+            log.info("NWS observation has no usable data — all core fields null")
+            return None
 
         if wind_ms is not None and wind_ms < 0.5:
             wind_str = "Calm"
@@ -44,7 +51,7 @@ def current(lat, lon, grid, headers):
 
         parts = [
             f"Conditions {obs.get('textDescription', 'N/A') or 'N/A'}",
-            f"Temperature {cf(obs.get('temperature', {}).get('value'))}",
+            f"Temperature {cf(temp_c)}",
         ]
         if hi_c is not None: parts.append(f"Heat index {cf(hi_c)}")
         if wc_c is not None: parts.append(f"Wind chill {cf(wc_c)}")
