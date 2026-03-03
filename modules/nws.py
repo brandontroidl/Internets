@@ -1,7 +1,7 @@
 import re
 import logging
 import requests
-from .units import cf, fmt_dt, fmt_short
+from .units import cf, fmt_short
 
 log = logging.getLogger("internets.nws")
 

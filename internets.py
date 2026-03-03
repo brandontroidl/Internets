@@ -273,6 +273,18 @@ class IRCBot:
         self._chanops  = {}
         self._ns_identified = False
         self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
+        # CHANMODES from 005 ISUPPORT: {mode_char: type} where type is
+        # 'A' (list, always param), 'B' (always param), 'C' (param on set),
+        # 'D' (never param).  Populated from 005; defaults cover RFC 2811.
+        self._chanmode_types = {
+            "b": "A", "e": "A", "I": "A",       # list modes
+            "k": "B",                              # key
+            "l": "C",                              # limit
+            "i": "D", "m": "D", "n": "D", "p": "D", "s": "D", "t": "D",
+        }
+        # PREFIX modes always take a parameter (nick). Populated from 005.
+        # Defaults: q(owner), a(admin), o(op), h(halfop), v(voice).
+        self._prefix_modes = set("qaohv")
 
     def send(self, msg, priority=1):
         self._sender.enqueue(msg, priority)
@@ -506,7 +518,7 @@ class IRCBot:
 
         # Save state and unload modules before replacing process.
         try:
-            self._store.channels_save(self.active_channels)
+            self._store.channels_save(set(self.active_channels))
         except Exception:
             pass
         with self._mod_lock:
@@ -689,7 +701,7 @@ class IRCBot:
         log.info("Graceful shutdown initiated.")
 
         try:
-            self._store.channels_save(self.active_channels)
+            self._store.channels_save(set(self.active_channels))
         except Exception as e:
             log.warning(f"Channel save failed: {e}")
 
@@ -796,17 +808,17 @@ class IRCBot:
         log.info(f"Invited to {channel} by {nick}")
         self.send(f"JOIN {channel}")
         self.active_channels.add(channel.lower())
-        self._store.channels_save(self.active_channels)
+        self._store.channels_save(set(self.active_channels))
 
     def _on_join(self, channel):
         self.active_channels.add(channel.lower())
-        self._store.channels_save(self.active_channels)
+        self._store.channels_save(set(self.active_channels))
         log.info(f"Joined {channel}")
 
     def _on_part(self, channel):
         self.active_channels.discard(channel.lower())
         self._chanops.pop(channel.lower(), None)
-        self._store.channels_save(self.active_channels)
+        self._store.channels_save(set(self.active_channels))
         log.info(f"Left {channel}")
 
     def _rejoin_channels(self):
@@ -986,6 +998,29 @@ class IRCBot:
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
 
+        # 005 = RPL_ISUPPORT — parse CHANMODES and PREFIX for accurate
+        # MODE argument tracking. Without this, non-standard modes (e.g. L, H
+        # on ProvisionIRCd) would cause the arg parser to desync.
+        if re.match(r":\S+ 005 ", line):
+            # CHANMODES=A,B,C,D  — A: list (always param), B: always param,
+            # C: param on set only, D: never param.
+            cm = re.search(r"CHANMODES=(\S+)", line)
+            if cm:
+                groups = cm.group(1).split(",")
+                new_types = {}
+                for idx, label in enumerate(("A", "B", "C", "D")):
+                    if idx < len(groups):
+                        for ch in groups[idx]:
+                            new_types[ch] = label
+                self._chanmode_types = new_types
+                log.debug(f"ISUPPORT CHANMODES: {len(new_types)} modes parsed")
+            # PREFIX=(modes)prefixes
+            pm = re.search(r"PREFIX=\(([^)]*)\)", line)
+            if pm:
+                self._prefix_modes = set(pm.group(1))
+                log.debug(f"ISUPPORT PREFIX modes: {self._prefix_modes}")
+            # Don't return — fall through so other 005 fields are logged.
+
         # 473 = ERR_INVITEONLYCHAN — channel is +i and we have no invite.
         # Ask ChanServ to re-invite us (works if bot's NickServ account has
         # channel access). Format: :server 473 botnick #channel :Cannot join
@@ -1006,7 +1041,7 @@ class IRCBot:
             log.warning(f"Cannot join {chan} ({reasons.get(num, num)}) — "
                         f"removing from saved channels")
             self.active_channels.discard(chan.lower())
-            self._store.channels_save(self.active_channels)
+            self._store.channels_save(set(self.active_channels))
             return
 
         # 381 = RPL_YOUREOPER — OPER succeeded.
@@ -1064,8 +1099,8 @@ class IRCBot:
             return
 
         # MODE — track +o/-o, +a/-a, +q/-q to maintain chanop state.
-        # Format: :nick!user@host MODE #channel +oq nick1 nick2
-        # Mode chars that grant/revoke chanop status: q(owner), a(admin), o(op)
+        # Uses _chanmode_types (from 005 ISUPPORT) to correctly consume
+        # parameters for all mode chars, not just a hardcoded subset.
         m = re.match(r":\S+ MODE (\S+) ([+-]\S+)(.*)", line)
         if m:
             chan = m.group(1)
@@ -1078,28 +1113,36 @@ class IRCBot:
                 ops      = self._chanops.setdefault(chan_l, set())
                 adding   = True
                 arg_idx  = 0
+                # Modes that grant/revoke chanop status (subset of prefix modes).
+                op_modes = {"o", "a", "q"} & self._prefix_modes
                 for ch in mode_str:
                     if ch == "+":
                         adding = True
                     elif ch == "-":
                         adding = False
-                    elif ch in ("o", "a", "q"):
-                        # These modes all take a nick parameter
+                    elif ch in self._prefix_modes:
+                        # All prefix modes (o, a, q, h, v) take a nick param.
                         if arg_idx < len(args):
                             target = args[arg_idx].lower()
                             arg_idx += 1
-                            if adding:
-                                ops.add(target)
-                                log.debug(f"Chanop add: {target} in {chan} (+{ch})")
-                            else:
-                                ops.discard(target)
-                                log.debug(f"Chanop remove: {target} in {chan} (-{ch})")
-                    elif ch in ("h", "v", "b", "e", "I", "k"):
-                        # These modes also take a parameter — consume it
-                        arg_idx += 1
-                    elif ch == "l" and adding:
-                        # +l takes a param, -l does not
-                        arg_idx += 1
+                            if ch in op_modes:
+                                if adding:
+                                    ops.add(target)
+                                    log.debug(f"Chanop add: {target} in {chan} (+{ch})")
+                                else:
+                                    ops.discard(target)
+                                    log.debug(f"Chanop remove: {target} in {chan} (-{ch})")
+                    else:
+                        # Use ISUPPORT CHANMODES types to decide if this mode
+                        # consumes a parameter.
+                        mtype = self._chanmode_types.get(ch)
+                        if mtype in ("A", "B"):
+                            # Always takes a parameter (list modes, key-like).
+                            arg_idx += 1
+                        elif mtype == "C" and adding:
+                            # Parameter only when setting (+l), not unsetting (-l).
+                            arg_idx += 1
+                        # Type D and unknown modes: no parameter.
             return
 
         m = re.match(r":([^!]+)![^@]+@\S+ CHGHOST (\S+) (\S+)", line)
@@ -1303,7 +1346,7 @@ def _run_console(bot):
 
         elif cmd == "status":
             print(f"  nick     = {bot._nick}")
-            print(f"  channels = {', '.join(sorted(bot.active_channels)) or '(none)'}")
+            print(f"  channels = {', '.join(sorted(set(bot.active_channels))) or '(none)'}")
             with bot._mod_lock:
                 mods = list(bot._modules)
             print(f"  modules  = {', '.join(mods) or '(none)'}")

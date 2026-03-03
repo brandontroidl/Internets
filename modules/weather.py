@@ -104,7 +104,7 @@ def _format_current(d):
     elif wind_kph is not None:
         card     = deg_to_card(wind_deg)
         wind_str = f"from {card} at {kph(wind_kph)}" if card else kph(wind_kph)
-        if gusts and gusts > wind_kph * 1.3:
+        if gusts is not None and gusts > 0 and wind_kph > 0 and gusts > wind_kph * 1.3:
             wind_str += f" (gusts {kph(gusts)})"
     else:
         wind_str = "N/A"
