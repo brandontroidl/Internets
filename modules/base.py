@@ -7,6 +7,8 @@ class BotModule:
     and override help_lines() to describe them.
 
     on_load / on_unload are optional hooks called by the module loader.
+    on_raw(line) is called for every incoming IRC line (after tag stripping)
+    and lets modules react to server numerics, NOTICEs, etc.
     """
 
     COMMANDS: dict = {}
@@ -21,4 +23,7 @@ class BotModule:
         pass
 
     def on_unload(self):
+        pass
+
+    def on_raw(self, line: str):
         pass

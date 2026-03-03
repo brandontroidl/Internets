@@ -283,13 +283,13 @@ signal.signal(signal.SIGINT, _shutdown)
 
 ---
 
-### IMPROVE-003: No NAMES Response Handling
+### IMPROVE-003: Limited NAMES Response Handling
 
 **File:** `internets.py`
 
-The bot tracks users via JOIN/PART/QUIT/NICK, but never processes 353 (`RPL_NAMREPLY`) or 366 (`RPL_ENDOFNAMES`). When the bot joins a channel, it has no knowledge of who is already there until each user speaks or triggers a trackable event. The `channel_users` data is incomplete by design.
+The bot now parses 353 (`RPL_NAMREPLY`) to extract channel operator status (~, &, @) from the NAMES list. However, the general user roster (tracked in `users.json`) is still only populated from observed JOIN/PART/QUIT/NICK events. Users who were in the channel before the bot joined won't appear in `channel_users` until they trigger an observable event.
 
-**Recommendation:** Parse 353 responses after JOIN to populate the initial user list.
+**Recommendation:** Optionally parse NAMES to also populate the user roster, not just op status.
 
 ---
 
@@ -339,11 +339,36 @@ def _split_msg(self, msg):
 
 ## Low — Nice to Have
 
-### IMPROVE-007: `join` and `part` Commands Lack Admin Gating
+### IMPROVE-007: Channel Founder Verification via IRC Services
 
-**File:** `modules/channels.py:24, 36`
+**Files:** `modules/channels.py` (full rewrite), `modules/base.py`, `internets.py`, `config.ini`
 
-Any user in any channel can make the bot join or leave arbitrary channels. This should probably require admin auth, or at least channel operator status.
+Previously any user could `.join` or `.part` the bot from any channel (or only chanops, depending on the revision). Now both commands require the user to be either an authed bot admin or the **registered channel founder**, verified against IRC services.
+
+Verification flow:
+
+1. User sends `.join #channel` (or `.part`).
+2. Bot sends `WHOIS nick` to extract the user's NickServ account (330 numeric).
+3. Bot sends `PRIVMSG ChanServ :INFO #channel` to extract the channel founder.
+4. When both responses arrive, the bot compares account == founder (case-insensitive).
+5. On match, the action proceeds. On mismatch, denial with explanation.
+6. 15-second timeout with graceful fallback messaging.
+
+Denial conditions:
+- User not identified with NickServ (no 330 in WHOIS response).
+- Channel not registered with services ("not registered" in response).
+- Account does not match founder.
+- Verification timed out (services offline, network lag, etc.).
+
+Services compatibility:
+- Founder/owner line parsed via regex matching `Founder:` or `Owner:` (case-insensitive), covering Anope, Atheme, Epona, X2, X3, and forks.
+- Multi-line response context is tracked: the channel name from the INFO header line is associated with the founder data that follows, even across interleaved responses.
+- The services bot nick is configurable via `services_nick` in `config.ini` (default: `ChanServ`). Set to `X3`, `Q`, etc. for non-ChanServ networks.
+
+Infrastructure changes:
+- Added `on_raw(line)` hook to `BotModule` base class. Called for every incoming IRC line (after tag stripping). Lets modules intercept raw server traffic without modifying the core.
+- The core's `_process` method takes a snapshot of loaded modules under `_mod_lock` and calls `on_raw` on each.
+- `/INVITE` remains unconditionally accepted — IRC servers enforce their own permission model.
 
 ---
 

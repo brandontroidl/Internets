@@ -117,6 +117,10 @@ class IRCBot:
         self._cap_busy = False
         self._caps     = set()
         self._nick     = NICKNAME
+        # Channel operator tracking: {channel_lower: {nick_lower, ...}}
+        # Populated from 353 (NAMES) and maintained via MODE +o/-o/+a/-a/+q/-q.
+        # Prefixes ~(owner), &(admin), @(op) all count as "chanop" for ACL purposes.
+        self._chanops  = {}
 
     def send(self, msg, priority=1):
         self._sender.enqueue(msg, priority)
@@ -155,6 +159,8 @@ class IRCBot:
             enc = enc[len(chunk):]
 
     def is_admin(self, nick):       return nick in self._authed
+    def is_chanop(self, channel, nick):
+        return nick.lower() in self._chanops.get(channel.lower(), set())
     def flood_limited(self, nick):  return self._rate.flood_check(nick, self.is_admin(nick))
     def rate_limited(self, nick):   return self._rate.api_check(nick)
     def loc_get(self, nick):        return self._store.loc_get(nick)
@@ -399,6 +405,7 @@ class IRCBot:
         self._nick     = NICKNAME
         self._cap_busy = False
         self._caps     = set()
+        self._chanops  = {}  # Wipe stale op data; rebuilt from 353 after rejoin
         self.sock      = self._make_socket()
         self._sender.start(self.sock)
         self._start_keepalive()
@@ -416,6 +423,7 @@ class IRCBot:
 
     def _on_part(self, channel):
         self.active_channels.discard(channel.lower())
+        self._chanops.pop(channel.lower(), None)
         self._store.channels_save(self.active_channels)
         log.info(f"Left {channel}")
 
@@ -505,6 +513,15 @@ class IRCBot:
         if line.startswith("@"):
             _, _, line = line.partition(" ")
 
+        # Let modules see every raw line for numerics, NOTICEs, etc.
+        with self._mod_lock:
+            snapshot = list(self._modules.values())
+        for inst in snapshot:
+            try:
+                inst.on_raw(line)
+            except Exception as e:
+                log.debug(f"on_raw error in {type(inst).__name__}: {e}")
+
         m = re.match(r"(?::\S+ )?CAP \S+ (\S+)(?: :?(.*))?", line)
         if m:
             sub    = m.group(1).upper()
@@ -553,6 +570,64 @@ class IRCBot:
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
 
+        # 353 = RPL_NAMREPLY — parse channel operator prefixes from NAMES list.
+        # Format: :server 353 botnick [=*@] #channel :@nick1 +nick2 nick3
+        # With multi-prefix cap: :server 353 botnick = #channel :~@nick1 @+nick2
+        # Prefixes ~(owner/+q), &(admin/+a), @(op/+o) all grant chanop status.
+        m = re.match(r":\S+ 353 \S+ [=*@] (\S+) :(.*)", line)
+        if m:
+            chan, names_str = m.group(1).lower(), m.group(2).strip()
+            ops = self._chanops.setdefault(chan, set())
+            for entry in names_str.split():
+                # Strip all prefix chars to get the bare nick
+                nick_clean = entry.lstrip("~&@%+")
+                if not nick_clean:
+                    continue
+                # Check if any op-level prefix is present
+                prefix = entry[:len(entry) - len(nick_clean)]
+                if set(prefix) & {"~", "&", "@"}:
+                    ops.add(nick_clean.lower())
+            return
+
+        # MODE — track +o/-o, +a/-a, +q/-q to maintain chanop state.
+        # Format: :nick!user@host MODE #channel +oq nick1 nick2
+        # Mode chars that grant/revoke chanop status: q(owner), a(admin), o(op)
+        m = re.match(r":\S+ MODE (\S+) ([+-]\S+)(.*)", line)
+        if m:
+            chan = m.group(1)
+            if not chan.startswith(("#", "&", "+", "!")):
+                pass  # User mode, not channel mode — ignore
+            else:
+                mode_str = m.group(2)
+                args     = m.group(3).strip().split() if m.group(3).strip() else []
+                chan_l    = chan.lower()
+                ops      = self._chanops.setdefault(chan_l, set())
+                adding   = True
+                arg_idx  = 0
+                for ch in mode_str:
+                    if ch == "+":
+                        adding = True
+                    elif ch == "-":
+                        adding = False
+                    elif ch in ("o", "a", "q"):
+                        # These modes all take a nick parameter
+                        if arg_idx < len(args):
+                            target = args[arg_idx].lower()
+                            arg_idx += 1
+                            if adding:
+                                ops.add(target)
+                                log.debug(f"Chanop add: {target} in {chan} (+{ch})")
+                            else:
+                                ops.discard(target)
+                                log.debug(f"Chanop remove: {target} in {chan} (-{ch})")
+                    elif ch in ("h", "v", "b", "e", "I", "k"):
+                        # These modes also take a parameter — consume it
+                        arg_idx += 1
+                    elif ch == "l" and adding:
+                        # +l takes a param, -l does not
+                        arg_idx += 1
+            return
+
         m = re.match(r":([^!]+)![^@]+@\S+ CHGHOST (\S+) (\S+)", line)
         if m:
             self._store.user_rename(m.group(1), m.group(1), f"{m.group(2)}@{m.group(3)}")
@@ -585,6 +660,9 @@ class IRCBot:
                 self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
+                ops = self._chanops.get(chan.lower())
+                if ops:
+                    ops.discard(nick.lower())
             return
 
         m = re.match(r":\S+ KICK (\S+) (\S+)", line)
@@ -595,11 +673,17 @@ class IRCBot:
                 log.info(f"Kicked from {chan}")
             else:
                 self._store.user_part(chan, nick)
+                ops = self._chanops.get(chan.lower())
+                if ops:
+                    ops.discard(nick.lower())
             return
 
         m = re.match(r":([^!]+)![^@]+@\S+ QUIT", line)
         if m:
+            nick_l = m.group(1).lower()
             self._store.user_quit(m.group(1))
+            for ops in self._chanops.values():
+                ops.discard(nick_l)
             return
 
         m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
@@ -611,6 +695,12 @@ class IRCBot:
                 self._authed.discard(old_nick)
                 self._authed.add(new_nick)
                 log.info(f"Auth migrated: {old_nick} -> {new_nick}")
+            # Migrate chanop status to new nick
+            old_l, new_l = old_nick.lower(), new_nick.lower()
+            for ops in self._chanops.values():
+                if old_l in ops:
+                    ops.discard(old_l)
+                    ops.add(new_l)
             return
 
         m = re.match(r":([^!]+)![^@]+@(\S+) PRIVMSG (\S+) :(.*)", line)

@@ -32,7 +32,7 @@ The outbound path goes through `Sender`, which implements a token-bucket (5 burs
 
 ## Design Decisions
 
-**Invite-only by default.** No channels are configured statically. The bot joins via `/INVITE` or `.join` and persists the channel list to `channels.json`. This is intentional — it prevents the bot from being dropped into channels it wasn't asked to join.
+**Founder-gated channel control.** `.join` and `.part` require the requesting user to be either a bot admin or the registered channel founder. Founder verification is done asynchronously: the bot WHOIS-es the user for their NickServ account and queries IRC services (`INFO #channel`) for the channel founder, then compares. This works across Anope, Atheme, Epona, X2, X3, and forks — anything that responds with a `Founder:` or `Owner:` line. The services bot nick is configurable via `services_nick` in `config.ini` (default: `ChanServ`). Users who aren't the founder can still bring the bot in via IRC's native `/INVITE`, which is always accepted. Joined channels are persisted to `channels.json` and restored on reconnect.
 
 **Two-tier rate limiting.** A global per-nick flood gate drops commands that arrive faster than `flood_cooldown` seconds. A separate API cooldown rate-limits expensive operations (geocoding + weather API calls). Authed admins bypass the flood gate but not the API cooldown. This is a deliberate split: we don't want a fast-typing admin to trigger weather.gov rate limits, but we also don't want them locked out of `.reload` during an incident.
 
@@ -81,9 +81,19 @@ python internets.py
 
 **Add to a channel:**
 
+Anyone can invite the bot via IRC's native INVITE (the server enforces permissions):
+
 ```
 /INVITE Internets #yourchannel
 ```
+
+Or the registered channel founder can use `.join` from any channel or PM:
+
+```
+.join #yourchannel
+```
+
+The bot verifies ownership by checking the user's NickServ account against the channel founder registered with IRC services (ChanServ, X3, etc.). Bot admins bypass this check. The bot remembers channels across restarts.
 
 ## Configuration
 
@@ -121,6 +131,8 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.d [X]dN[+/-M]` | Dice roller |
 | `.t [src] <tgt> <text>` | Translate text |
 | `.u <word> [/N]` | Urban Dictionary lookup |
+| `.join <#channel>` | Invite the bot — requires channel founder or admin |
+| `.part <#channel>` | Remove the bot — requires channel founder or admin |
 | `.users [#channel]` | Show known users in a channel |
 
 All weather commands accept city names, zip codes, raw `lat,lon` pairs, or `-n nick` to look up another user's registered location.
@@ -141,8 +153,6 @@ Authenticate first: `/MSG Internets AUTH <password>`
 | `.reloadall` | Reload all loaded modules |
 | `.restart` | Full process restart via `execv` |
 | `.rehash` | Reload `config.ini` and clear admin sessions |
-| `.join <#channel>` | Join a channel |
-| `.part <#channel>` | Leave a channel |
 
 ## Writing a Module
 
@@ -168,7 +178,7 @@ The bot passes `nick` (who sent the command), `reply_to` (the channel or nick to
 
 Available from `self.bot`: `cfg` (ConfigParser), `loc_get(nick)`, `loc_set(nick, raw)`, `loc_del(nick)`, `rate_limited(nick)`, `flood_limited(nick)`, `is_admin(nick)`, `channel_users(channel)`, `active_channels`, `send(raw_irc, priority)`.
 
-Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` runs before it's removed. Use these for setup and cleanup.
+Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` runs before it's removed. `on_raw(line)` is called for every incoming IRC line (after IRCv3 tag stripping) and lets modules react to server numerics, NOTICEs, or any other traffic the core doesn't dispatch as a command. Use these for setup, cleanup, and advanced protocol integration.
 
 ## Operational Notes
 
@@ -178,7 +188,9 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Keepalive:** A background thread sends `PING` every 90 seconds. If the socket is dead, the reconnect logic takes over.
 
-**User tracking:** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps. Data is persisted to `users.json`. This is populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (the bot does not parse NAMES replies).
+**User tracking:** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps. Data is persisted to `users.json`. This is populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster).
+
+**Channel ownership verification:** When a non-admin user runs `.join` or `.part`, the bot verifies they are the channel founder by WHOIS-ing them for their NickServ account (330 numeric) and querying the configured services bot (`services_nick`, default ChanServ) with `INFO #channel` for the founder name. If the account matches the founder (case-insensitive), the action proceeds. Verification times out after 15 seconds. This covers Anope, Atheme, Epona, X2, X3, and compatible forks. The services bot name is the only thing that varies — set `services_nick = X3` (or `Q`, etc.) in `config.ini` for non-ChanServ networks.
 
 **Module conflicts:** If two modules try to register the same command, the second load is rejected with a conflict error.
 
@@ -188,7 +200,7 @@ The translation module uses an undocumented Google Translate endpoint (`translat
 
 The persistent store (`store.py`) reads and writes the full JSON file on every operation. This is adequate for low-traffic use but will become a bottleneck on busy networks. A future improvement would be in-memory caching with periodic disk flushes, or a migration to SQLite.
 
-The bot does not parse `353` (NAMES reply), so the user roster for a channel is only populated as users trigger observable events (JOIN, PART, QUIT, NICK, or sending a message). Users who were already in the channel when the bot joined will not appear until they do something.
+The bot does not parse `353` (NAMES reply) for user roster purposes. Users who were already in the channel when the bot joined will not appear in `.users` output until they trigger an observable event (JOIN, PART, QUIT, NICK, or sending a message).
 
 ## License
 
