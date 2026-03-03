@@ -34,7 +34,10 @@ class UDModule(BotModule):
     COMMANDS = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
 
     def on_load(self):
-        self._ua = self.bot.cfg["weather"]["user_agent"]
+        try:
+            self._ua = self.bot.cfg["weather"]["user_agent"]
+        except KeyError:
+            self._ua = "Internets/1.0"
 
     def cmd_ud(self, nick, reply_to, arg):
         if not arg:

@@ -22,7 +22,12 @@ def _roll(expr: str) -> str:
     maximum = sides * count + mod
     minimum = count + mod
     pct     = round((total - minimum) / max(maximum - minimum, 1) * 100)
-    return f":: Total {total}/{maximum} [{pct}%] :: Rolls {rolls} ::"
+    if count <= 20:
+        rolls_str = str(rolls)
+    else:
+        shown = ", ".join(str(r) for r in rolls[:10])
+        rolls_str = f"[{shown}, ... ({count} dice)]"
+    return f":: Total {total}/{maximum} [{pct}%] :: Rolls {rolls_str} ::"
 
 
 class DiceModule(BotModule):

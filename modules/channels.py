@@ -22,6 +22,9 @@ class ChannelsModule(BotModule):
     }
 
     def cmd_join(self, nick, reply_to, arg):
+        if not self.bot.is_admin(nick):
+            self.bot.privmsg(reply_to, f"{nick}: admin auth required — or /INVITE the bot")
+            return
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}join <#channel>")
@@ -34,6 +37,9 @@ class ChannelsModule(BotModule):
             log.info(f"{nick} requested JOIN {arg}")
 
     def cmd_part(self, nick, reply_to, arg):
+        if not self.bot.is_admin(nick):
+            self.bot.privmsg(reply_to, f"{nick}: admin auth required")
+            return
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}part <#channel>")

@@ -52,7 +52,8 @@ class Store:
             return True
 
     def channels_load(self):
-        return self._load(self._cf, [])
+        with self._lock:
+            return self._load(self._cf, [])
 
     def channels_save(self, channels):
         with self._lock:
@@ -107,12 +108,23 @@ class Store:
 
 
 class RateLimiter:
+    _CLEANUP_INTERVAL = 300  # Purge stale entries every 5 minutes
+
     def __init__(self, flood_cd, api_cd):
         self._flood_cd = flood_cd
         self._api_cd   = api_cd
         self._lock     = threading.Lock()
         self._flood:   dict = {}
         self._api:     dict = {}
+        self._last_cleanup = time.time()
+
+    def _cleanup(self, now):
+        """Remove entries older than their cooldown. Called under lock."""
+        if now - self._last_cleanup < self._CLEANUP_INTERVAL:
+            return
+        self._flood = {k: v for k, v in self._flood.items() if now - v < self._flood_cd}
+        self._api   = {k: v for k, v in self._api.items()   if now - v < self._api_cd}
+        self._last_cleanup = now
 
     def flood_check(self, nick, is_admin=False):
         if is_admin:
@@ -120,6 +132,7 @@ class RateLimiter:
         now = time.time()
         k   = nick.lower()
         with self._lock:
+            self._cleanup(now)
             if now - self._flood.get(k, 0) < self._flood_cd:
                 return True
             self._flood[k] = now
@@ -129,6 +142,7 @@ class RateLimiter:
         now = time.time()
         k   = nick.lower()
         with self._lock:
+            self._cleanup(now)
             if now - self._api.get(k, 0) < self._api_cd:
                 return True
             self._api[k] = now

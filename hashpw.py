@@ -136,12 +136,8 @@ def _verify_argon2(password: str, stored: str) -> bool:
 
 def _ct_eq(a: bytes, b: bytes) -> bool:
     """Constant-time bytes comparison — prevents timing side-channels."""
-    if len(a) != len(b):
-        return False
-    result = 0
-    for x, y in zip(a, b):
-        result |= x ^ y
-    return result == 0
+    import hmac
+    return hmac.compare_digest(a, b)
 
 
 _ALGOS = {"scrypt": hash_scrypt, "bcrypt": hash_bcrypt, "argon2": hash_argon2}

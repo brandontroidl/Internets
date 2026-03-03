@@ -104,6 +104,7 @@ class IRCBot:
         self.active_channels = set()
         self._modules        = {}
         self._commands       = {}
+        self._mod_lock       = threading.Lock()
         self._authed         = set()
         self._ka_stop        = threading.Event()
         self._sender         = Sender()
@@ -142,8 +143,16 @@ class IRCBot:
     def _split_msg(self, msg):
         enc = msg.encode("utf-8", errors="replace")
         while enc:
-            yield enc[:self._MAX_BODY].decode("utf-8", errors="replace")
-            enc = enc[self._MAX_BODY:]
+            chunk = enc[:self._MAX_BODY]
+            # Back up to the last valid UTF-8 character boundary.
+            # Continuation bytes have the pattern 10xxxxxx (0x80..0xBF).
+            if len(enc) > self._MAX_BODY:
+                while chunk and (chunk[-1] & 0xC0) == 0x80:
+                    chunk = chunk[:-1]
+                if not chunk:
+                    chunk = enc[:self._MAX_BODY]  # fallback: force split
+            yield chunk.decode("utf-8", errors="replace")
+            enc = enc[len(chunk):]
 
     def is_admin(self, nick):       return nick in self._authed
     def flood_limited(self, nick):  return self._rate.flood_check(nick, self.is_admin(nick))
@@ -154,44 +163,46 @@ class IRCBot:
     def channel_users(self, ch):    return self._store.channel_users(ch)
 
     def load_module(self, name):
-        if name in self._modules:
-            return False, f"'{name}' already loaded."
-        path = MODULES_DIR / f"{name}.py"
-        if not path.exists():
-            return False, f"'{path}' not found."
-        try:
-            spec = importlib.util.spec_from_file_location(f"modules.{name}", path)
-            mod  = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            if not hasattr(mod, "setup"):
-                return False, f"'{name}' has no setup()."
-            inst  = mod.setup(self)
-            dupes = [c for c in inst.COMMANDS if c in self._commands and self._commands[c][0] != name]
-            if dupes:
-                return False, f"'{name}' conflicts on: {', '.join(dupes)}"
-            inst.on_load()
-            self._modules[name] = inst
-            for cmd, method in inst.COMMANDS.items():
-                self._commands[cmd] = (name, method)
-            log.info(f"Loaded {name} ({list(inst.COMMANDS)})")
-            return True, f"'{name}' loaded ({len(inst.COMMANDS)} commands)."
-        except Exception as e:
-            log.error(f"Load '{name}': {e}")
-            return False, f"Error loading '{name}': {e}"
+        with self._mod_lock:
+            if name in self._modules:
+                return False, f"'{name}' already loaded."
+            path = MODULES_DIR / f"{name}.py"
+            if not path.exists():
+                return False, f"'{path}' not found."
+            try:
+                spec = importlib.util.spec_from_file_location(f"modules.{name}", path)
+                mod  = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if not hasattr(mod, "setup"):
+                    return False, f"'{name}' has no setup()."
+                inst  = mod.setup(self)
+                dupes = [c for c in inst.COMMANDS if c in self._commands and self._commands[c][0] != name]
+                if dupes:
+                    return False, f"'{name}' conflicts on: {', '.join(dupes)}"
+                inst.on_load()
+                self._modules[name] = inst
+                for cmd, method in inst.COMMANDS.items():
+                    self._commands[cmd] = (name, method)
+                log.info(f"Loaded {name} ({list(inst.COMMANDS)})")
+                return True, f"'{name}' loaded ({len(inst.COMMANDS)} commands)."
+            except Exception as e:
+                log.error(f"Load '{name}': {e}")
+                return False, f"Error loading '{name}': {e}"
 
     def unload_module(self, name):
-        if name not in self._modules:
-            return False, f"'{name}' not loaded."
-        try:
-            self._modules[name].on_unload()
-            for cmd in [c for c, v in self._commands.items() if v[0] == name]:
-                del self._commands[cmd]
-            del self._modules[name]
-            log.info(f"Unloaded {name}")
-            return True, f"'{name}' unloaded."
-        except Exception as e:
-            log.error(f"Unload '{name}': {e}")
-            return False, f"Error unloading '{name}': {e}"
+        with self._mod_lock:
+            if name not in self._modules:
+                return False, f"'{name}' not loaded."
+            try:
+                self._modules[name].on_unload()
+                for cmd in [c for c, v in self._commands.items() if v[0] == name]:
+                    del self._commands[cmd]
+                del self._modules[name]
+                log.info(f"Unloaded {name}")
+                return True, f"'{name}' unloaded."
+            except Exception as e:
+                log.error(f"Unload '{name}': {e}")
+                return False, f"Error unloading '{name}': {e}"
 
     def reload_module(self, name):
         ok, msg = self.unload_module(name)
@@ -307,11 +318,11 @@ class IRCBot:
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
-        time.sleep(1)
         try:
             self.send("QUIT :Restarting ...", priority=0)
         except Exception:
             pass
+        time.sleep(2)  # Let sender thread flush QUIT before execv replaces process
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def cmd_rehash(self, nick, reply_to, arg):
@@ -348,11 +359,12 @@ class IRCBot:
 
         if cmd in self._CORE:
             run(getattr(self, self._CORE[cmd]), nick, reply_to, arg)
-        elif cmd in self._commands:
-            mod, method = self._commands[cmd]
-            inst = self._modules.get(mod)
-            if inst:
-                run(getattr(inst, method), nick, reply_to, arg)
+        else:
+            with self._mod_lock:
+                entry = self._commands.get(cmd)
+                inst  = self._modules.get(entry[0]) if entry else None
+            if inst and entry:
+                run(getattr(inst, entry[1]), nick, reply_to, arg)
 
     def _make_socket(self):
         use_ssl = cfg["irc"].getboolean("ssl",        fallback=True)
@@ -429,17 +441,18 @@ class IRCBot:
                 log.error(f"Connect failed: {e} — retry in 30s")
                 time.sleep(30)
 
-        buf, identified = "", False
+        buf, identified, registered = "", False, False
 
         while True:
             try:
-                if not identified and self.sock:
+                if not registered and self.sock:
                     if SERVER_PW:
                         self.send(f"PASS {SERVER_PW}", priority=0)
                     self.send("CAP LS 302", priority=0)
                     self._cap_busy = True
                     self.send(f"NICK {self._nick}", priority=0)
                     self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
+                    registered = True
 
                 data = self.sock.recv(4096).decode("utf-8", errors="replace")
                 if not data:
@@ -451,7 +464,7 @@ class IRCBot:
                     log.debug(f"<< {line}")
                     self._process(line)
 
-                    if not identified and ("376" in line or "422" in line):
+                    if not identified and re.match(r":\S+ (376|422) ", line):
                         if self._cap_busy:
                             self.send("CAP END", priority=0)
                             self._cap_busy = False
@@ -467,7 +480,7 @@ class IRCBot:
                     BrokenPipeError, ssl.SSLError, OSError) as e:
                 log.warning(f"Lost connection: {e} — reconnect in 15s")
                 self._sender.stop()
-                identified, buf = False, ""
+                identified, registered, buf = False, False, ""
                 time.sleep(15)
                 while True:
                     try:
@@ -483,7 +496,8 @@ class IRCBot:
 
     def _process(self, line):
         if line.startswith("PING"):
-            self.send("PONG " + line.split(":", 1)[1], priority=0)
+            payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
+            self.send(f"PONG :{payload}", priority=0)
             return
 
         # Strip IRCv3 message tags before parsing. Tags carry metadata like
@@ -496,7 +510,8 @@ class IRCBot:
             sub    = m.group(1).upper()
             params = (m.group(2) or "").strip()
             if sub == "LS":
-                wanted = DESIRED_CAPS & set(re.split(r"[\s=][^\s]*", params))
+                offered = {cap.split("=", 1)[0] for cap in params.split()}
+                wanted = DESIRED_CAPS & offered
                 if wanted:
                     self.send(f"CAP REQ :{' '.join(sorted(wanted))}", priority=0)
                 else:
@@ -511,7 +526,8 @@ class IRCBot:
                 self.send("CAP END", priority=0)
                 self._cap_busy = False
             elif sub == "NEW":
-                new = DESIRED_CAPS & set(re.split(r"[\s=][^\s]*", params))
+                offered = {cap.split("=", 1)[0] for cap in params.split()}
+                new = DESIRED_CAPS & offered
                 if new:
                     self.send(f"CAP REQ :{' '.join(sorted(new))}", priority=0)
             return
@@ -532,7 +548,7 @@ class IRCBot:
 
         # 433 = "Nickname in use"
         if re.match(r":\S+ 433 ", line):
-            self._nick = self._nick.rstrip("_") + "_"
+            self._nick = self._nick + "_"
             self.send(f"NICK {self._nick}", priority=0)
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
@@ -556,7 +572,7 @@ class IRCBot:
         m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)(?:\s+\S+)?", line)
         if m:
             nick, host, chan = m.group(1), m.group(2), m.group(3)
-            if nick.lower() == NICKNAME.lower():
+            if nick.lower() == self._nick.lower():
                 self._on_join(chan)
             else:
                 self._store.user_join(chan, nick, host)
@@ -565,7 +581,7 @@ class IRCBot:
         m = re.match(r":([^!]+)![^@]+@\S+ PART :?(\S+)", line)
         if m:
             nick, chan = m.group(1), m.group(2)
-            if nick.lower() == NICKNAME.lower():
+            if nick.lower() == self._nick.lower():
                 self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
@@ -574,7 +590,7 @@ class IRCBot:
         m = re.match(r":\S+ KICK (\S+) (\S+)", line)
         if m:
             chan, nick = m.group(1), m.group(2)
-            if nick.lower() == NICKNAME.lower():
+            if nick.lower() == self._nick.lower():
                 self._on_part(chan)
                 log.info(f"Kicked from {chan}")
             else:
@@ -588,7 +604,13 @@ class IRCBot:
 
         m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
         if m:
-            self._store.user_rename(m.group(1), m.group(3), m.group(2))
+            old_nick, host, new_nick = m.group(1), m.group(2), m.group(3)
+            self._store.user_rename(old_nick, new_nick, host)
+            # Migrate admin session to new nick so the old nick can't be hijacked
+            if old_nick in self._authed:
+                self._authed.discard(old_nick)
+                self._authed.add(new_nick)
+                log.info(f"Auth migrated: {old_nick} -> {new_nick}")
             return
 
         m = re.match(r":([^!]+)![^@]+@(\S+) PRIVMSG (\S+) :(.*)", line)
@@ -597,13 +619,14 @@ class IRCBot:
 
         nick, host, target, text = m.groups()
         text     = text.strip()
-        is_pm    = target.lower() == NICKNAME.lower()
+        is_pm    = target.lower() == self._nick.lower()
         reply_to = nick if is_pm else target
 
         if not is_pm and target.lower() in self.active_channels:
             self._store.user_join(target, nick, host)
 
-        all_cmds = set(self._CORE) | set(self._commands)
+        with self._mod_lock:
+            all_cmds = set(self._CORE) | set(self._commands)
         cmd = arg = None
 
         if text.startswith(CMD_PREFIX):
@@ -623,13 +646,26 @@ class IRCBot:
 
 
 if __name__ == "__main__":
+    import signal
     bot = IRCBot()
+
+    def _shutdown(signum, frame):
+        log.info(f"Received signal {signum}, shutting down.")
+        try:
+            bot.send("QUIT :Shutting down", priority=0)
+            time.sleep(2)
+        except Exception:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
     while True:
         try:
             bot.run()
         except KeyboardInterrupt:
-            log.info("Shutting down.")
-            sys.exit(0)
+            _shutdown(2, None)
         except Exception as e:
             log.error(f"Crash: {e} — restart in 30s")
             time.sleep(30)
