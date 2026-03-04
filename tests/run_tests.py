@@ -551,6 +551,75 @@ def _():
     from weather_providers._http import get_json
     assert inspect.iscoroutinefunction(get_json)
 
+@test("SEC-WP-001: _http has response size limit")
+def _():
+    from weather_providers._http import _MAX_RESPONSE_BYTES, _ResponseTooLarge
+    assert _MAX_RESPONSE_BYTES > 0
+    assert _MAX_RESPONSE_BYTES <= 10_000_000  # sane upper bound
+    assert issubclass(_ResponseTooLarge, Exception)
+
+@test("SEC-WP-002: provider exception logging does not leak API keys")
+def _():
+    # Verify that log.warning calls in __init__.py use type(e).__name__
+    # rather than the full exception message (which could contain URL+key).
+    source = Path("weather_providers/__init__.py").read_text()
+    # Should use safe pattern
+    assert "type(e).__name__" in source
+    # Should NOT use raw f-string with exception
+    assert "failed: {e}" not in source
+
+@test("SEC-WP-003: configure() builds new list atomically")
+def _():
+    source = Path("weather_providers/__init__.py").read_text()
+    # Build into local, then assign
+    assert "new_providers" in source
+    assert "_providers = new_providers" in source
+
+@test("SEC-WP-004: weather module sanitizes API strings")
+def _():
+    from modules.weather import _sanitize
+    # Strips IRC formatting characters
+    assert _sanitize("Hello\x02Bold\x02") == "HelloBold"
+    assert _sanitize("Color\x03Text") == "ColorText"
+    # Strips CRLF
+    assert _sanitize("Line\r\nInjection") == "LineInjection"
+    # Strips NUL
+    assert _sanitize("Null\x00Byte") == "NullByte"
+    # Truncates to max_len
+    assert len(_sanitize("A" * 500)) == 200
+    assert len(_sanitize("X" * 100, max_len=50)) == 50
+    # Preserves clean strings
+    assert _sanitize("Partly Cloudy") == "Partly Cloudy"
+
+@test("SEC-WP-005: _format_current raises TypeError, not AssertionError")
+def _():
+    from modules.weather import _format_current, _format_forecast
+    try:
+        _format_current("not a WeatherResult")
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass  # correct
+    except AssertionError:
+        assert False, "should be TypeError, not AssertionError"
+    try:
+        _format_forecast(42)
+        assert False, "should have raised TypeError"
+    except TypeError:
+        pass
+
+@test("SEC-WP-006: forecast days capped at _MAX_FORECAST_DAYS")
+def _():
+    from weather_providers import _MAX_FORECAST_DAYS
+    assert _MAX_FORECAST_DAYS > 0
+    assert _MAX_FORECAST_DAYS <= 30  # sane upper bound
+
+@test("SEC-WP-010: providers use defensive .get() for response parsing")
+def _():
+    for fname in ("openmeteo.py", "weatherapi.py"):
+        source = Path(f"weather_providers/{fname}").read_text()
+        assert 'data.get("current")' in source or "data.get('current')" in source, \
+            f"{fname} should use defensive .get() for 'current'"
+
 
 # ══════════════════════════════════════════════════════════════════════
 # modules/units.py

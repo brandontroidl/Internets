@@ -17,21 +17,36 @@ from .units   import cf, kph, km_mi, mb
 
 log = logging.getLogger("internets.weather")
 
+# SEC-WP-004: Strip IRC formatting and control characters from API-sourced
+# strings before they reach privmsg.  Prevents a malicious/misconfigured
+# API from injecting bold, colour, reverse, CTCP, or raw CR/LF into IRC.
+_IRC_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+def _sanitize(s: str, max_len: int = 200) -> str:
+    """Strip IRC control chars and truncate untrusted API strings."""
+    return _IRC_CTRL_RE.sub("", s)[:max_len]
+
 
 def _format_current(r: object) -> str:
     """Format a WeatherResult for current conditions as an IRC line."""
     from weather_providers import WeatherResult
-    assert isinstance(r, WeatherResult)
+    # SEC-WP-005: Explicit type guard — survives python -O.
+    if not isinstance(r, WeatherResult):
+        raise TypeError(f"expected WeatherResult, got {type(r).__name__}")
 
     if r.wind_kph is not None and r.wind_kph < 1:
         wind_str = "Calm"
     elif r.wind_kph is not None:
-        wind_str = f"from {r.wind_dir} at {kph(r.wind_kph)}" if r.wind_dir else kph(r.wind_kph)
+        wd = _sanitize(r.wind_dir, 4)
+        wind_str = f"from {wd} at {kph(r.wind_kph)}" if wd else kph(r.wind_kph)
     else:
         wind_str = "N/A"
 
+    desc = _sanitize(r.description)
+    source = _sanitize(r.source, 30)
+
     parts: list[str] = [
-        f"Conditions {r.description}",
+        f"Conditions {desc}",
         f"Temperature {cf(r.temperature)}",
     ]
 
@@ -46,24 +61,29 @@ def _format_current(r: object) -> str:
         f"Visibility {km_mi(r.visibility_m)}",
         f"Wind {wind_str}",
     ]
-    parts.append(f"[{r.source}]")
+    parts.append(f"[{source}]")
     return " :: ".join(parts)
 
 
 def _format_forecast(r: object) -> str:
     """Format a WeatherResult's forecast days as an IRC line."""
     from weather_providers import WeatherResult
-    assert isinstance(r, WeatherResult)
+    # SEC-WP-005: Explicit type guard.
+    if not isinstance(r, WeatherResult):
+        raise TypeError(f"expected WeatherResult, got {type(r).__name__}")
 
     if not r.forecast:
         return ""
 
+    source = _sanitize(r.source, 30)
     chunks: list[str] = []
     for day in r.forecast:
         hi = cf(day.high_c)
         lo = cf(day.low_c) if day.low_c is not None else "N/A"
-        chunks.append(f"{day.day_name} {day.description} {hi} / {lo}")
-    chunks.append(f"[{r.source}]")
+        name = _sanitize(day.day_name, 20)
+        desc = _sanitize(day.description)
+        chunks.append(f"{name} {desc} {hi} / {lo}")
+    chunks.append(f"[{source}]")
     return " :: ".join(chunks)
 
 
@@ -124,7 +144,7 @@ class WeatherModule(BotModule):
         if geo is None:
             return
         lat, lon, display, cc = geo
-        log.info(f"weather {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
+        log.info("weather %r (%s) [%.4f,%.4f]", display, cc or "?", lat, lon)
 
         result = await get_weather(lat, lon, display)
         if result:
@@ -141,7 +161,7 @@ class WeatherModule(BotModule):
         if geo is None:
             return
         lat, lon, display, cc = geo
-        log.info(f"forecast {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
+        log.info("forecast %r (%s) [%.4f,%.4f]", display, cc or "?", lat, lon)
 
         result = await get_forecast(lat, lon, display, days=4)
         if result and result.forecast:

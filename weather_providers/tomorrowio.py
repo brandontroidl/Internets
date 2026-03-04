@@ -7,6 +7,7 @@ Free tier: 500 calls/day, current + 5-day forecast.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from .base  import WeatherResult, ForecastDay
 from ._http import get_json
@@ -96,7 +97,6 @@ class TomorrowIOProvider:
             vals = entry.get("values", {})
             time_str = entry.get("time", "")
             try:
-                from datetime import datetime
                 day_name = datetime.fromisoformat(
                     time_str.replace("Z", "+00:00")
                 ).strftime("%A")

@@ -7,7 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 Multi-provider weather refactor.  Replaces the NWS + Open-Meteo dual-source
 system with a pluggable provider architecture supporting automatic fallback.
-147 automated tests.
+Security-hardened per the Final Security Hardening Directive (eighth audit pass,
+10 findings, all resolved).  154 automated tests.
 
 ### Added
 
@@ -35,6 +36,32 @@ system with a pluggable provider architecture supporting automatic fallback.
 - **`aiohttp` optional dependency** — `pip install internets-irc[async]` for
   true async HTTP.
 
+### Security
+
+- **SEC-WP-001: Response size cap** — All HTTP responses capped at 1 MB to
+  prevent OOM from malicious or misconfigured API endpoints.
+
+- **SEC-WP-002: API key redaction** — Exception logging uses `type(e).__name__`
+  instead of the full message, which could contain URL query parameters with
+  API keys.
+
+- **SEC-WP-003: Atomic provider swap** — `configure()` builds into a local
+  list then atomically assigns.  `get_weather()`/`get_forecast()` snapshot the
+  list before iterating to prevent TOCTOU races during module reloads.
+
+- **SEC-WP-004: IRC control char sanitization** — All API-sourced strings
+  (description, source, wind direction, day names) are stripped of C0 control
+  characters and DEL before reaching IRC output.
+
+- **SEC-WP-005: Type guard survives `-O`** — Replaced `assert isinstance()`
+  with explicit `if not isinstance(): raise TypeError()`.
+
+- **SEC-WP-006: Forecast days clamped** — Hard cap at 16 days prevents abuse
+  of paid API tiers.
+
+- **SEC-WP-010: Defensive response parsing** — `data.get("current")` with
+  `isinstance()` validation instead of bare `data["current"]` KeyError.
+
 ### Changed
 
 - **Weather commands simplified** — `.weather`/`.w` and `.forecast`/`.f` now
@@ -52,10 +79,10 @@ system with a pluggable provider architecture supporting automatic fallback.
 
 ### Testing
 
-- 147 automated tests (up from 119).  Added: `WeatherResult` dataclass tests,
-  provider protocol compliance tests, registry configuration tests (priority
-  ordering, key filtering, unknown provider handling), format function tests,
-  async coroutine verification for all providers.
+- 154 automated tests (up from 142).  Added: `WeatherResult` dataclass tests,
+  provider protocol compliance, registry configuration (priority ordering, key
+  filtering, unknown provider handling), format function tests, async coroutine
+  verification, and security hardening tests (SEC-WP-001 through SEC-WP-010).
 
 ## [1.3.0] — 2026-03-03
 

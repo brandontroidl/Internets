@@ -64,7 +64,10 @@ class OpenMeteoProvider:
             "wind_speed_unit": "kmh",
             "timezone": "auto",
         })
-        cur = data["current"]
+        # SEC-WP-010: Defensive access — malformed response won't KeyError.
+        cur = data.get("current")
+        if not isinstance(cur, dict):
+            raise ValueError("Open-Meteo response missing 'current' object")
 
         wcode = cur.get("weather_code")
         desc  = WMO_CODES.get(wcode, f"Code {wcode}") if wcode is not None else "Unknown"

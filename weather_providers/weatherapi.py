@@ -7,6 +7,7 @@ Free tier: 1M calls/month, current + 3-day forecast.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from .base  import WeatherResult, ForecastDay
 from ._http import get_json
@@ -45,7 +46,10 @@ class WeatherAPIProvider:
             "q": f"{lat},{lon}",
             "aqi": "no",
         })
-        cur = data["current"]
+        # SEC-WP-010: Defensive access — malformed response won't KeyError.
+        cur = data.get("current")
+        if not isinstance(cur, dict):
+            raise ValueError("WeatherAPI response missing 'current' object")
 
         return WeatherResult(
             source=self.name,
@@ -83,7 +87,6 @@ class WeatherAPIProvider:
             # Parse date to day name.
             date_str = fd.get("date", "")
             try:
-                from datetime import datetime
                 day_name = datetime.fromisoformat(date_str).strftime("%A")
             except Exception:
                 day_name = date_str

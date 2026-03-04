@@ -397,7 +397,7 @@ The bot has been through seven audit passes with 84 findings, all resolved. See 
 
 ## Testing
 
-147 automated tests in `tests/run_tests.py`. No external test framework required:
+154 automated tests in `tests/run_tests.py`. No external test framework required:
 
 ```
 python tests/run_tests.py

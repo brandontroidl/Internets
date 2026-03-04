@@ -34,6 +34,9 @@ __all__ = [
 
 log = logging.getLogger("internets.weather.providers")
 
+# SEC-WP-006: Hard cap on forecast days to prevent abuse of paid API tiers.
+_MAX_FORECAST_DAYS = 16
+
 # ── Provider factories ────────────────────────────────────────────────
 # Each factory returns a provider instance or None if not configured.
 # The key name in config is ``<provider_id>_key``.
@@ -70,6 +73,10 @@ _register("tomorrowio", _make_tomorrowio)
 
 
 # ── Active provider list ──────────────────────────────────────────────
+# SEC-WP-003: Atomic swap — build a new list, then replace the reference
+# in a single assignment.  get_weather/get_forecast take a local snapshot
+# before iterating to avoid TOCTOU races if configure() runs concurrently
+# from a module reload.
 
 _providers: list[WeatherProvider] = []
 
@@ -92,7 +99,6 @@ def configure(cfg: ConfigParser) -> None:
     since it requires no key).
     """
     global _providers
-    _providers = []
 
     priority_str = cfg.get("weather_providers", "priority", fallback="").strip()
     if priority_str:
@@ -100,28 +106,38 @@ def configure(cfg: ConfigParser) -> None:
     else:
         order = list(_PROVIDER_FACTORIES.keys())
 
+    # SEC-WP-003: Build into a local list, then atomically swap.
+    new_providers: list[WeatherProvider] = []
+
     for pid in order:
         factory = _PROVIDER_FACTORIES.get(pid)
         if factory is None:
-            log.warning(f"Unknown weather provider '{pid}' in priority list — skipping")
+            log.warning("Unknown weather provider %r in priority list — skipping", pid)
             continue
         try:
             provider = factory(cfg)
             if provider is not None:
-                _providers.append(provider)
-                log.info(f"Weather provider registered: {provider.name}"
-                         f"{' (key configured)' if provider.requires_key else ''}")
+                new_providers.append(provider)
+                log.info("Weather provider registered: %s%s",
+                         provider.name,
+                         " (key configured)" if provider.requires_key else "")
             else:
-                log.debug(f"Weather provider '{pid}' skipped (no API key)")
+                log.debug("Weather provider %r skipped (no API key)", pid)
         except Exception as e:
-            log.warning(f"Failed to initialize weather provider '{pid}': {e}")
+            # SEC-WP-002: Log only the provider ID and exception *type*,
+            # never the full message which may contain the API key in a URL.
+            log.warning("Failed to initialize weather provider %r: %s",
+                        pid, type(e).__name__)
 
-    if not _providers:
+    if not new_providers:
         # Always ensure at least Open-Meteo is available.
-        _providers.append(OpenMeteoProvider())
+        new_providers.append(OpenMeteoProvider())
         log.warning("No weather providers configured — falling back to Open-Meteo")
 
-    log.info(f"Weather provider chain: {' → '.join(p.name for p in _providers)}")
+    # Atomic swap.
+    _providers = new_providers
+    log.info("Weather provider chain: %s",
+             " → ".join(p.name for p in _providers))
 
 
 def get_providers() -> list[WeatherProvider]:
@@ -136,19 +152,22 @@ async def get_weather(
 
     Returns the first successful result, or None if all providers fail.
     """
-    if not _providers:
-        _providers.append(OpenMeteoProvider())
+    # SEC-WP-003: Snapshot the provider list to avoid TOCTOU with configure().
+    providers = _providers or [OpenMeteoProvider()]
 
-    for provider in _providers:
+    for provider in providers:
         try:
             result = await provider.get_weather(lat, lon, location, **kwargs)
-            log.debug(f"Weather from {provider.name} for {location}")
+            log.debug("Weather from %s for %s", provider.name, location)
             return result
         except Exception as e:
-            log.warning(f"{provider.name} weather failed: {e}")
+            # SEC-WP-002: Log provider name + exception type only, never
+            # the full message (which may include API key in query string).
+            log.warning("%s weather failed (%s)",
+                        provider.name, type(e).__name__)
             continue
 
-    log.error(f"All weather providers failed for {location} ({lat:.4f},{lon:.4f})")
+    log.error("All weather providers failed for %s (%.4f,%.4f)", location, lat, lon)
     return None
 
 
@@ -160,17 +179,22 @@ async def get_forecast(
 
     Returns the first successful result, or None if all providers fail.
     """
-    if not _providers:
-        _providers.append(OpenMeteoProvider())
+    # SEC-WP-006: Clamp days to safe range.
+    days = max(1, min(days, _MAX_FORECAST_DAYS))
 
-    for provider in _providers:
+    # SEC-WP-003: Snapshot the provider list.
+    providers = _providers or [OpenMeteoProvider()]
+
+    for provider in providers:
         try:
             result = await provider.get_forecast(lat, lon, location, days=days, **kwargs)
-            log.debug(f"Forecast from {provider.name} for {location}")
+            log.debug("Forecast from %s for %s", provider.name, location)
             return result
         except Exception as e:
-            log.warning(f"{provider.name} forecast failed: {e}")
+            # SEC-WP-002: Safe logging — no exception message.
+            log.warning("%s forecast failed (%s)",
+                        provider.name, type(e).__name__)
             continue
 
-    log.error(f"All forecast providers failed for {location} ({lat:.4f},{lon:.4f})")
+    log.error("All forecast providers failed for %s (%.4f,%.4f)", location, lat, lon)
     return None

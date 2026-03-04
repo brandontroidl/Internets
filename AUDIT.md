@@ -1,8 +1,8 @@
 # Security & Stability Audit
 
 **Auditor:** Brandon Troidl
-**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review, correctness pass)
-**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `config.ini`, and all modules in `modules/`.
+**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review, correctness pass, weather provider audit)
+**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `config.ini`, all modules in `modules/`, and `weather_providers/`.
 
 All findings have been resolved. See `CHANGELOG.md` for the release-oriented summary of changes.
 
@@ -1046,6 +1046,128 @@ No transitive dependency risks identified. The bot has a single required runtime
 
 ---
 
+## Eighth Pass — Weather Provider Security Audit (2026-03-04)
+
+v1.4.0 replaced the NWS + Open-Meteo weather system with a multi-provider architecture (`weather_providers/` package). This pass audits the new code surface: `_http.py`, `base.py`, `openmeteo.py`, `weatherapi.py`, `tomorrowio.py`, `__init__.py`, and the rewritten `modules/weather.py`.
+
+### SEC-WP-001: OOM via Unbounded API Response
+
+**Severity:** High
+**File:** `weather_providers/_http.py`
+**Status:** Fixed
+
+Neither the aiohttp nor requests code path had a response size limit. A malicious or misconfigured API endpoint could return gigabytes of data and exhaust process memory. Weather API responses are typically 5-50 KB.
+
+**Resolution:** Added `_MAX_RESPONSE_BYTES = 1_048_576` (1 MB) cap. The aiohttp path reads raw bytes and checks length before parsing. The requests path uses `stream=True` with `iter_content()` and aborts if the running total exceeds the limit. Both raise `_ResponseTooLarge`.
+
+---
+
+### SEC-WP-002: API Keys Leaked in Log Messages
+
+**Severity:** High
+**File:** `weather_providers/__init__.py`
+**Status:** Fixed
+
+Exception messages from failed HTTP requests often include the full URL, which contains API keys as query parameters (e.g. `?key=abc123`). The original code logged `{e}` directly, writing keys to disk in plaintext log files.
+
+**Resolution:** Changed all exception logging to `type(e).__name__` — logs the exception class (e.g. `ConnectionError`, `HTTPError`) without the message body. This provides enough diagnostic information for debugging without leaking credentials.
+
+---
+
+### SEC-WP-003: Race Condition on Global Provider List
+
+**Severity:** Medium
+**File:** `weather_providers/__init__.py`
+**Status:** Fixed
+
+`configure()` cleared the global `_providers` list then appended to it incrementally. If `get_weather()` ran concurrently (e.g. during a module reload), it could iterate an empty or partially-built list. The `if not _providers: _providers.append(...)` fallback in `get_weather()` was a TOCTOU race.
+
+**Resolution:** `configure()` now builds into a local `new_providers` list and does a single atomic assignment `_providers = new_providers`. The `get_weather()` and `get_forecast()` functions take a local snapshot `providers = _providers or [OpenMeteoProvider()]` before iterating, avoiding mutation during iteration.
+
+---
+
+### SEC-WP-004: IRC Control Character Injection via API Responses
+
+**Severity:** Medium
+**File:** `modules/weather.py`
+**Status:** Fixed
+
+API-sourced strings (`description`, `source`, `wind_dir`, `day_name`) flowed directly into `bot.privmsg()` without sanitization. A malicious API response could inject IRC formatting codes (bold `\x02`, color `\x03`, reverse `\x16`), CTCP markers (`\x01`), or raw CR/LF to forge protocol lines.
+
+**Resolution:** Added `_sanitize(s, max_len=200)` which strips all C0 control characters (`\x00-\x1f`) and DEL (`\x7f`) and truncates to a safe length. Applied to all API-sourced strings before IRC output: `description`, `source`, `wind_dir`, `day_name`.
+
+---
+
+### SEC-WP-005: `assert` Disabled Under `-O`
+
+**Severity:** Medium
+**File:** `modules/weather.py`
+**Status:** Fixed
+
+`_format_current()` and `_format_forecast()` used `assert isinstance(r, WeatherResult)` for type checking. Python's `-O` flag strips all `assert` statements, removing the type guard entirely.
+
+**Resolution:** Replaced with explicit `if not isinstance(r, WeatherResult): raise TypeError(...)`. This check survives optimized bytecode.
+
+---
+
+### SEC-WP-006: Unbounded Forecast Days Parameter
+
+**Severity:** Low
+**File:** `weather_providers/__init__.py`
+**Status:** Fixed
+
+The `get_forecast(days=...)` parameter was passed through unclamped to provider APIs. While individual providers have their own caps, a very large value could still abuse paid API tiers or trigger unexpected behavior.
+
+**Resolution:** Added `_MAX_FORECAST_DAYS = 16` and `days = max(1, min(days, _MAX_FORECAST_DAYS))` clamping in the registry's `get_forecast()` before dispatching to providers.
+
+---
+
+### SEC-WP-007: `datetime` Import Inside Loop
+
+**Severity:** Low
+**File:** `weather_providers/weatherapi.py`, `weather_providers/tomorrowio.py`
+**Status:** Fixed
+
+Both files had `from datetime import datetime` inside the forecast loop body. While Python caches imports, this adds unnecessary overhead per iteration and is poor practice.
+
+**Resolution:** Moved the import to module level in both files.
+
+---
+
+### SEC-WP-008: aiohttp Content-Type Bypass
+
+**Severity:** Low
+**File:** `weather_providers/_http.py`
+**Status:** Fixed
+
+The original aiohttp path used `resp.json(content_type=None)`, which bypasses aiohttp's content-type validation. This could mask issues where a non-JSON response (e.g. HTML error page) is silently parsed.
+
+**Resolution:** Replaced with `resp.read()` + `json.loads()`. This still accepts any content-type (weather APIs sometimes return `text/json` instead of `application/json`) but the explicit parsing makes the data flow clearer and works consistently with the size-cap check.
+
+---
+
+### SEC-WP-009: New aiohttp Session Per Request
+
+**Severity:** Info
+**File:** `weather_providers/_http.py`
+**Status:** Documented (acceptable)
+
+Each call creates a new `aiohttp.ClientSession`. This means no connection pooling. At weather-command frequency (~1 request per 10+ seconds due to rate limiting), the overhead is negligible and avoids leaked-session bugs. Documented in the docstring.
+
+---
+
+### SEC-WP-010: KeyError on Malformed API Response
+
+**Severity:** Medium
+**File:** `weather_providers/openmeteo.py`, `weather_providers/weatherapi.py`
+**Status:** Fixed
+
+Both providers used `data["current"]` which raises `KeyError` if the API returns a response without the `current` key (e.g. API error, rate limit response, schema change). The exception would propagate and trigger the fallback, but the error message would be misleading.
+
+**Resolution:** Changed to `data.get("current")` with explicit `isinstance(cur, dict)` validation. If the response is malformed, raises `ValueError` with a clear message that correctly identifies the issue for logging.
+
+---
+
 ## Summary
 
 | Category | Count | Status |
@@ -1053,9 +1175,9 @@ No transitive dependency risks identified. The bot has a single required runtime
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
 | High bugs (all passes) | 10 | All fixed |
-| High security (all passes) | 5 | All fixed |
-| Medium issues (all passes) | 24 | All fixed |
-| Low issues | 10 | All fixed |
+| High security (all passes) | 7 | All fixed |
+| Medium issues (all passes) | 28 | All fixed |
+| Low issues | 13 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
 | Architecture & features | 8 | All implemented |
@@ -1063,4 +1185,5 @@ No transitive dependency risks identified. The bot has a single required runtime
 | Cleanup | 1 | Fixed |
 | Versioning | 1 | Implemented |
 | Dependency audit | 1 | Completed |
-| **Total** | **84** | **All resolved** |
+| Info/documented | 1 | Documented |
+| **Total** | **94** | **All resolved** |
