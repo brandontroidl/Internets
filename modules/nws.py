@@ -34,6 +34,7 @@ def _get(url: str, *, params: dict | None = None,
 
 
 async def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | None:
+    """Resolve lat/lon to NWS grid metadata.  Returns None on failure."""
     try:
         r = await asyncio.to_thread(
             _get, f"{_NWS_BASE}/points/{lat:.4f},{lon:.4f}", headers=headers)
@@ -46,6 +47,7 @@ async def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | No
 
 async def current(lat: float, lon: float, grid: dict,
                   headers: dict[str, str]) -> WeatherDict | None:
+    """Fetch latest observation from the nearest NWS station."""
     try:
         stations_url = _validate_nws_url(grid.get("observationStations"))
         if not stations_url:
@@ -103,6 +105,7 @@ async def current(lat: float, lon: float, grid: dict,
 
 
 async def forecast(grid: dict, headers: dict[str, str]) -> str | None:
+    """Fetch the NWS daily forecast (4 days)."""
     try:
         url = _validate_nws_url(grid.get("forecast"))
         if not url:
@@ -137,6 +140,7 @@ async def forecast(grid: dict, headers: dict[str, str]) -> str | None:
 
 
 async def hourly(grid: dict, headers: dict[str, str]) -> str | None:
+    """Fetch the NWS hourly forecast (next 8 hours)."""
     try:
         url = _validate_nws_url(grid.get("forecastHourly"))
         if not url:
@@ -158,6 +162,7 @@ async def hourly(grid: dict, headers: dict[str, str]) -> str | None:
 
 
 async def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] | None:
+    """Fetch active NWS alerts for a lat/lon point."""
     try:
         r = await asyncio.to_thread(
             _get, f"{_NWS_BASE}/alerts/active",
@@ -194,6 +199,7 @@ async def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] |
 
 
 async def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
+    """Fetch the NWS area forecast discussion for a grid office."""
     try:
         office = grid.get("cwa", "")
         if not office or not _NWS_OFFICE_RE.match(office):

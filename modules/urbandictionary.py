@@ -35,15 +35,18 @@ def _lookup_sync(term: str, index: int, user_agent: str) -> str:
 
 
 class UDModule(BotModule):
+    """Urban Dictionary lookup module with result pagination."""
     COMMANDS: dict[str, str] = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
 
     def on_load(self) -> None:
+        """Load user agent from config."""
         try:
             self._ua: str = self.bot.cfg["weather"]["user_agent"]
         except KeyError:
             self._ua = "Internets/1.0"
 
     async def cmd_ud(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Look up a term on Urban Dictionary."""
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}u <word> [/N]  e.g. {p}u yolo /2")
@@ -55,8 +58,10 @@ class UDModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return Urban Dictionary help text."""
         return [f"  {prefix}u/.urbandictionary <word> [/N]   Urban Dictionary  e.g. {prefix}u yolo /2"]
 
 
 def setup(bot: object) -> UDModule:
+    """Module entry point — returns a UDModule instance."""
     return UDModule(bot)  # type: ignore[arg-type]

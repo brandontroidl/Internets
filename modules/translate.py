@@ -30,9 +30,11 @@ def _translate_sync(src: str | None, tgt: str, text: str) -> str:
 
 
 class TranslateModule(BotModule):
+    """Translation module using Google Translate."""
     COMMANDS: dict[str, str] = {"t": "cmd_translate", "translate": "cmd_translate"}
 
     async def cmd_translate(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Translate text between languages."""
         p = self.bot.cfg["bot"]["command_prefix"]
         if not arg:
             self.bot.privmsg(reply_to, f"{nick}: {p}t [src] <tgt> <text>  e.g. {p}t en es Hello")
@@ -49,8 +51,10 @@ class TranslateModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return translation help text."""
         return [f"  {prefix}t/.translate [src] <tgt> <text>   Translate  e.g. {prefix}t en es Hello"]
 
 
 def setup(bot: object) -> TranslateModule:
+    """Module entry point — returns a TranslateModule instance."""
     return TranslateModule(bot)  # type: ignore[arg-type]

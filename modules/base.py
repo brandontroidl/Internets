@@ -34,13 +34,17 @@ class BotModule:
         self.bot = bot
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return help text lines for .help output.  Override in subclasses."""
         return []
 
     def on_load(self) -> None:
+        """Called after the module is registered.  Override for setup."""
         pass
 
     def on_unload(self) -> None:
+        """Called before the module is removed.  Override for cleanup."""
         pass
 
     def on_raw(self, line: str) -> None:
+        """Called for every incoming IRC line.  Must be fast and sync."""
         pass

@@ -33,9 +33,11 @@ def _roll(expr: str) -> str:
 
 
 class DiceModule(BotModule):
+    """Dice roller module supporting XdN+M notation."""
     COMMANDS: dict[str, str] = {"d": "cmd_dice"}
 
     async def cmd_dice(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Roll dice in XdN+M format and display results."""
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}d [X]dN[+/-M]  e.g. {p}d 3d6+2")
@@ -43,8 +45,10 @@ class DiceModule(BotModule):
         self.bot.privmsg(reply_to, _roll(arg))
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return dice help text."""
         return [f"  {prefix}d [X]dN[+/-M]   Dice roller  e.g. {prefix}d 6  {prefix}d 3d6  {prefix}d 3d6+2"]
 
 
 def setup(bot: object) -> DiceModule:
+    """Module entry point — returns a DiceModule instance."""
     return DiceModule(bot)  # type: ignore[arg-type]

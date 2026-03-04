@@ -1111,6 +1111,196 @@ def _():
     assert result == {}  # should return default, not the list
     os.unlink(f.name)
 
+# ══════════════════════════════════════════════════════════════════════
+# Module edge-case tests
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== module edge cases ===")
+
+@test("translate: _LANG_RE accepts valid and rejects invalid lang codes")
+def _():
+    from modules.translate import _LANG_RE
+    assert _LANG_RE.match("en")
+    assert _LANG_RE.match("es")
+    assert not _LANG_RE.match("ENG")
+    assert not _LANG_RE.match("e")
+    assert not _LANG_RE.match("123")
+    assert not _LANG_RE.match("")
+
+@test("urbandictionary: _IDX_RE parses term/index correctly")
+def _():
+    from modules.urbandictionary import _IDX_RE
+    m = _IDX_RE.match("yolo /2")
+    assert m and m.group(1).strip() == "yolo" and m.group(2) == "2"
+    m = _IDX_RE.match("hello world /10")
+    assert m and m.group(1).strip() == "hello world" and m.group(2) == "10"
+    assert not _IDX_RE.match("noindex")
+
+@test("geocode: _COORD_RE accepts valid coordinates")
+def _():
+    from modules.geocode import _COORD_RE
+    m = _COORD_RE.match("40.7128, -74.0060")
+    assert m and float(m.group(1)) == 40.7128
+    m = _COORD_RE.match("-33.8688,151.2093")
+    assert m
+    assert not _COORD_RE.match("not coords")
+    assert not _COORD_RE.match("40.7128")
+
+@test("geocode: _format_name handles US locations with state abbreviation")
+def _():
+    from modules.geocode import _format_name
+    name, cc = _format_name(
+        {"city": "New York", "state": "New York", "country_code": "us"},
+        "fallback"
+    )
+    assert "New York" in name
+    assert cc == "us"
+
+@test("geocode: _format_name handles non-US locations")
+def _():
+    from modules.geocode import _format_name
+    name, cc = _format_name(
+        {"city": "London", "country": "United Kingdom", "country_code": "gb"},
+        "fallback"
+    )
+    assert "London" in name
+    assert cc == "gb"
+
+@test("geocode: _format_name returns fallback for empty address")
+def _():
+    from modules.geocode import _format_name
+    name, cc = _format_name({}, "my fallback")
+    assert name == "my fallback"
+
+@test("channels: _CHAN_RE validates IRC channel names")
+def _():
+    from modules.channels import _CHAN_RE
+    assert _CHAN_RE.match("#valid")
+    assert _CHAN_RE.match("&local")
+    assert _CHAN_RE.match("+modeless")
+    assert _CHAN_RE.match("!12345")
+    assert not _CHAN_RE.match("nochanprefix")
+    assert not _CHAN_RE.match("#has space")
+    assert not _CHAN_RE.match("#has,comma")
+    assert not _CHAN_RE.match("")
+    assert not _CHAN_RE.match("#")
+
+@test("channels: _PendingJoin stores initial state correctly")
+def _():
+    from modules.channels import _PendingJoin
+    p = _PendingJoin("Alice", "#test", "#lobby", action="join")
+    assert p.nick == "Alice"
+    assert p.channel == "#test"
+    assert p.reply_to == "#lobby"
+    assert p.action == "join"
+    assert p.account is None
+    assert p.founder is None
+    assert p.whois_done is False
+    assert p.info_failed is False
+
+@test("dice: _roll edge cases")
+def _():
+    from modules.dice import _roll
+    assert "invalid" in _roll("")
+    assert "invalid" in _roll("abc")
+    assert "dice count" in _roll("0d6")
+    assert "dice count" in _roll("101d6")
+    assert "sides" in _roll("1d1")
+    result = _roll("1d6+0")
+    assert "Total" in result
+
+@test("calc: CTCP markers stripped from expressions")
+def _():
+    from modules.calc import _calc
+    assert _calc("\x012+2\x01") == "4"
+
+@test("calc: keyword arguments rejected")
+def _():
+    from modules.calc import _calc
+    result = _calc("pow(x=2, y=3)")
+    assert "error" in result.lower() or "unknown" in result.lower()
+
+@test("calc: negative factorial rejected")
+def _():
+    from modules.calc import _calc
+    result = _calc("factorial(-1)")
+    assert "error" in result.lower()
+
+@test("calc: float factorial rejected")
+def _():
+    from modules.calc import _calc
+    result = _calc("factorial(2.5)")
+    assert "error" in result.lower()
+
+@test("units: cf handles None")
+def _():
+    from modules.units import cf
+    assert cf(None) == "N/A"
+
+@test("units: kph handles None")
+def _():
+    from modules.units import kph
+    assert kph(None) == "N/A"
+
+@test("units: fmt_dt handles bad input gracefully")
+def _():
+    from modules.units import fmt_dt
+    assert fmt_dt("") == "N/A"
+    assert fmt_dt("not-a-date") == "not-a-date"
+
+@test("units: fmt_short handles bad input gracefully")
+def _():
+    from modules.units import fmt_short
+    assert fmt_short("") == "N/A"
+    assert fmt_short("garbage") == "garbage"
+
+@test("sender: Sender has bounded MAX_QUEUE and safe overflow")
+def _():
+    from sender import Sender
+    source = Path("sender.py").read_text()
+    assert "maxsize=self.MAX_QUEUE" in source or "maxsize=self.MAX_QUEUE)" in source
+    assert "_safe_put" in source
+
+@test("hashpw: verify_password rejects wrong password")
+def _():
+    from hashpw import hash_scrypt, verify_password
+    h = hash_scrypt("correcthorse")
+    assert verify_password("correcthorse", h)
+    assert not verify_password("wronghorse", h)
+    assert not verify_password("", h)
+
+@test("hashpw: verify_password rejects garbage hash")
+def _():
+    from hashpw import verify_password
+    try:
+        verify_password("pw", "garbage_no_prefix")
+        assert False, "should have raised ValueError"
+    except ValueError:
+        pass
+
+@test("protocol: parse_names_entry handles empty string edge case")
+def _():
+    from protocol import parse_names_entry
+    nick, is_op = parse_names_entry("")
+    assert nick == ""
+    assert is_op is False
+
+@test("protocol: parse_isupport_prefix handles malformed input")
+def _():
+    from protocol import parse_isupport_prefix
+    modes, sym_map = parse_isupport_prefix("garbled")
+    assert modes == set()
+    assert sym_map == {}
+
+@test("VERSION: __version__ matches pyproject.toml")
+def _():
+    from internets import __version__
+    toml_text = Path("pyproject.toml").read_text()
+    # Extract version from pyproject.toml
+    import re
+    m = re.search(r'version\s*=\s*"([^"]+)"', toml_text)
+    assert m, "version not found in pyproject.toml"
+    assert __version__ == m.group(1), f"{__version__} != {m.group(1)}"
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Summary

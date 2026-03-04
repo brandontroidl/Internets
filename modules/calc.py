@@ -119,9 +119,11 @@ def _calc(expr: str) -> str:
 
 
 class CalcModule(BotModule):
+    """Expression evaluator module.  Supports math functions and implicit multiplication."""
     COMMANDS: dict[str, str] = {"cc": "cmd_calc"}
 
     async def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Evaluate a mathematical expression and display the result."""
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}cc <expression>  e.g. {p}cc 2pi")
@@ -129,8 +131,10 @@ class CalcModule(BotModule):
         self.bot.privmsg(reply_to, f"[calc] {arg} = {_calc(arg)}")
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return calculator help text."""
         return [f"  {prefix}cc <expression>   Calculator  e.g. {prefix}cc 2pi  {prefix}cc sqrt(144)"]
 
 
 def setup(bot: object) -> CalcModule:
+    """Module entry point — returns a CalcModule instance."""
     return CalcModule(bot)  # type: ignore[arg-type]

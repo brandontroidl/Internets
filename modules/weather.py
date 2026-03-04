@@ -167,6 +167,7 @@ async def _om_forecast(lat: float, lon: float) -> str | None:
 
 
 class WeatherModule(BotModule):
+    """Weather command handler — routes US queries to NWS, international to Open-Meteo."""
     COMMANDS: dict[str, str] = {
         "weather": "cmd_weather", "w":    "cmd_weather",
         "forecast":"cmd_forecast", "f":   "cmd_forecast",
@@ -176,6 +177,7 @@ class WeatherModule(BotModule):
     }
 
     def on_load(self) -> None:
+        """Load weather configuration (user agent, cooldown)."""
         ua = self.bot.cfg["weather"]["user_agent"]
         self._headers: dict[str, str] = {"User-Agent": ua, "Accept": "application/geo+json"}
         self._ua       = ua
@@ -211,6 +213,7 @@ class WeatherModule(BotModule):
         self.bot.privmsg(reply_to, f"{nick}: {feature} requires a US location (NWS).")
 
     async def cmd_weather(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display current weather conditions for a location."""
         geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -234,6 +237,7 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: weather data unavailable right now.")
 
     async def cmd_forecast(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display a 4-day forecast for a location."""
         geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -253,6 +257,7 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: forecast unavailable right now.")
 
     async def cmd_hourly(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display next 8-hour forecast (US/NWS only)."""
         geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -268,6 +273,7 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: hourly forecast unavailable right now.")
 
     async def cmd_alerts(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display active NWS alerts (US only)."""
         geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -283,6 +289,7 @@ class WeatherModule(BotModule):
                 self.bot.privmsg(reply_to, line)
 
     async def cmd_discuss(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display NWS area forecast discussion (US only)."""
         geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -301,6 +308,7 @@ class WeatherModule(BotModule):
                 self.bot.privmsg(reply_to, para)
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return weather help text."""
         return [
             f"  {prefix}weather/.w  [zip|city|-n nick]   Current conditions (worldwide)",
             f"  {prefix}forecast/.f [zip|city|-n nick]   4-day forecast (worldwide)",
@@ -311,4 +319,5 @@ class WeatherModule(BotModule):
 
 
 def setup(bot: object) -> WeatherModule:
+    """Module entry point — returns a WeatherModule instance."""
     return WeatherModule(bot)  # type: ignore[arg-type]

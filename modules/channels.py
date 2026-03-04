@@ -48,6 +48,7 @@ class ChannelsModule(BotModule):
     }
 
     def on_load(self) -> None:
+        """Initialize verification state and start cleanup task."""
         self._services: str = self.bot.cfg["bot"].get("services_nick", "ChanServ").strip()
         self._pending: dict[str, _PendingJoin] = {}
         self._svc_ctx: dict[str, float] = {}
@@ -61,6 +62,7 @@ class ChannelsModule(BotModule):
         log.info(f"Services nick for ownership checks: {self._services}")
 
     def on_unload(self) -> None:
+        """Cancel the cleanup task."""
         if hasattr(self, "_cleanup_task") and self._cleanup_task:
             self._cleanup_task.cancel()
 
@@ -93,6 +95,7 @@ class ChannelsModule(BotModule):
     # ── Commands ─────────────────────────────────────────────────────────
 
     async def cmd_join(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Request the bot to join a channel.  Requires founder or admin."""
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}join <#channel>")
@@ -112,6 +115,7 @@ class ChannelsModule(BotModule):
         self._start_verify(nick, chan, reply_to, action="join")
 
     async def cmd_part(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Request the bot to leave a channel.  Requires founder or admin."""
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}part <#channel>")
@@ -132,6 +136,7 @@ class ChannelsModule(BotModule):
         self._start_verify(nick, chan, reply_to, action="part")
 
     async def cmd_users(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Show tracked users in a channel."""
         if arg and arg.startswith(("#", "&", "+", "!")):
             channel = arg.strip()
         elif reply_to.startswith(("#", "&", "+", "!")):
@@ -173,6 +178,7 @@ class ChannelsModule(BotModule):
         log.info(f"Verify started ({action}): {nick} -> {channel}")
 
     def on_raw(self, line: str) -> None:
+        """Process WHOIS and services responses for ownership verification."""
         with self._lock:
             if not self._pending:
                 return
@@ -293,6 +299,7 @@ class ChannelsModule(BotModule):
             log.info(f"{p.action.title()} denied: {p.nick} -> {p.channel}")
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return channel management help text."""
         return [
             f"  {prefix}join  <#channel>   Invite the bot     [channel founder / admin]",
             f"  {prefix}part  <#channel>   Remove the bot     [channel founder / admin]",
@@ -301,4 +308,5 @@ class ChannelsModule(BotModule):
 
 
 def setup(bot: object) -> ChannelsModule:
+    """Module entry point — returns a ChannelsModule instance."""
     return ChannelsModule(bot)  # type: ignore[arg-type]

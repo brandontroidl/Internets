@@ -41,6 +41,7 @@ def _best_scrypt_params():
 
 
 def hash_scrypt(password: str) -> str:
+    """Hash *password* with scrypt (stdlib, no extra packages)."""
     import hashlib
     N, r, p  = _best_scrypt_params()
     salt     = os.urandom(32)
@@ -49,6 +50,7 @@ def hash_scrypt(password: str) -> str:
 
 
 def hash_bcrypt(password: str) -> str:
+    """Hash *password* with bcrypt (requires ``pip install bcrypt``)."""
     try:
         import bcrypt
     except ImportError:
@@ -57,6 +59,7 @@ def hash_bcrypt(password: str) -> str:
 
 
 def hash_argon2(password: str) -> str:
+    """Hash *password* with argon2 (requires ``pip install argon2-cffi``)."""
     try:
         from argon2 import PasswordHasher
     except ImportError:
@@ -66,6 +69,7 @@ def hash_argon2(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    """Verify *password* against a stored hash.  Supports scrypt, bcrypt, argon2."""
     if not stored:
         raise ValueError("No password hash configured.")
     if stored.startswith("scrypt$"):
@@ -133,6 +137,7 @@ _NOTES = {
 
 
 def main():
+    """CLI entry point — prompt for password, hash it, and print config.ini snippet."""
     parser = argparse.ArgumentParser(description="Generate an admin password hash for Internets.")
     parser.add_argument("--algo", choices=_ALGOS, default="scrypt",
                         help="Hashing algorithm (default: scrypt)")

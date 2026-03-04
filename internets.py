@@ -90,14 +90,17 @@ class ChannelSet:
         self._lock = threading.Lock()
 
     def add(self, ch: str) -> None:
+        """Add a channel (case-folded) to the set."""
         with self._lock:
             self._channels.add(ch.lower())
 
     def discard(self, ch: str) -> None:
+        """Remove a channel from the set.  No-op if absent."""
         with self._lock:
             self._channels.discard(ch.lower())
 
     def snapshot(self) -> set[str]:
+        """Return a copy of the channel set (safe for iteration)."""
         with self._lock:
             return set(self._channels)
 
@@ -201,6 +204,7 @@ class _DebugFilter(logging.Filter):
         self._lock = threading.Lock()
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Allow record if it meets the base level, global debug, or subsystem debug."""
         if record.levelno >= self.base_level:
             return True
         if self.global_debug:
@@ -213,21 +217,26 @@ class _DebugFilter(logging.Filter):
         return False
 
     def set_base_level(self, level: int) -> None:
+        """Set the minimum log level for non-debug output."""
         self.base_level = level
 
     def add_subsystem(self, name: str) -> None:
+        """Enable debug logging for a specific subsystem (e.g. ``weather``)."""
         with self._lock:
             self._subsystems.add(name)
 
     def remove_subsystem(self, name: str) -> None:
+        """Disable debug logging for a specific subsystem."""
         with self._lock:
             self._subsystems.discard(name)
 
     def clear_subsystems(self) -> None:
+        """Disable all per-subsystem debug logging."""
         with self._lock:
             self._subsystems.clear()
 
     def active_subsystems(self) -> set[str]:
+        """Return the set of subsystems with debug enabled."""
         with self._lock:
             return set(self._subsystems)
 
@@ -326,6 +335,17 @@ for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
 # ═════════════════════════════════════════════════════════════════════
 
 class IRCBot:
+    """Async IRC bot core — event loop, state machine, command dispatch.
+
+    Owns the asyncio event loop, IRC connection, module registry, and
+    admin authentication.  Module command handlers run as async tasks.
+    Blocking I/O is offloaded via ``asyncio.to_thread()``.
+
+    Public API for modules: ``privmsg``, ``notice``, ``reply``, ``preply``,
+    ``send``, ``is_admin``, ``is_chanop``, ``flood_limited``, ``rate_limited``,
+    ``loc_get``, ``loc_set``, ``loc_del``, ``channel_users``, ``active_channels``,
+    ``cfg``.
+    """
     _MAX_BODY = 400
     _MAX_TASKS = 50       # BUG-030: cap concurrent command tasks
     _MAX_ARG_LEN = 400    # BUG-031: cap command argument length
@@ -398,10 +418,12 @@ class IRCBot:
     # ── Outbound messaging (sync, thread-safe via Sender) ────────────
 
     def send(self, msg: str, priority: int = 1) -> None:
+        """Enqueue a raw IRC line for sending.  Priority 0 bypasses rate limit."""
         if self._sender:
             self._sender.enqueue(msg, priority)
 
     def privmsg(self, target: str, msg: str) -> None:
+        """Send a PRIVMSG to *target* (channel or nick).  Long messages are split."""
         if " " in target or not target:
             log.warning(f"privmsg: invalid target {target!r}")
             return
@@ -409,6 +431,7 @@ class IRCBot:
             self.send(f"PRIVMSG {target} :{chunk}")
 
     def notice(self, target: str, msg: str) -> None:
+        """Send a NOTICE to *target* (channel or nick).  Long messages are split."""
         if " " in target or not target:
             log.warning(f"notice: invalid target {target!r}")
             return
@@ -417,6 +440,7 @@ class IRCBot:
 
     def reply(self, nick: str, reply_to: str, msg: str,
               privileged: bool = False) -> None:
+        """Route a response: PRIVMSG to channel, NOTICE to nick if privileged."""
         if not reply_to.startswith(("#", "&", "+", "!")):
             self.privmsg(nick, msg)
         elif privileged:
@@ -425,6 +449,7 @@ class IRCBot:
             self.privmsg(reply_to, msg)
 
     def preply(self, nick: str, reply_to: str, msg: str) -> None:
+        """Privileged reply — always NOTICE to nick, never to channel."""
         self.reply(nick, reply_to, msg, privileged=True)
 
     def _split_msg(self, msg: str) -> list[str]:
@@ -443,19 +468,47 @@ class IRCBot:
 
     # ── Accessors (sync, called from module threads) ─────────────────
 
-    def is_admin(self, nick: str) -> bool:       return nick.lower() in self._authed
+    def is_admin(self, nick: str) -> bool:
+        """Return True if *nick* has an active admin session."""
+        return nick.lower() in self._authed
+
     def is_chanop(self, channel: str, nick: str) -> bool:
+        """Return True if *nick* holds +o/+a/+q in *channel*."""
         return nick.lower() in self._chanops.get(channel.lower(), set())
-    def flood_limited(self, nick: str) -> bool:  return self._rate.flood_check(nick, self.is_admin(nick))
-    def rate_limited(self, nick: str) -> bool:   return self._rate.api_check(nick)
-    def loc_get(self, nick: str) -> str | None:  return self._store.loc_get(nick)
-    def loc_set(self, nick: str, raw: str) -> None:  self._store.loc_set(nick, raw)
-    def loc_del(self, nick: str) -> bool:        return self._store.loc_del(nick)
-    def channel_users(self, ch: str) -> dict[str, Any]:  return self._store.channel_users(ch)
+
+    def flood_limited(self, nick: str) -> bool:
+        """Return True if *nick* is sending commands too fast.  Admins bypass."""
+        return self._rate.flood_check(nick, self.is_admin(nick))
+
+    def rate_limited(self, nick: str) -> bool:
+        """Return True if *nick* has hit the API cooldown."""
+        return self._rate.api_check(nick)
+
+    def loc_get(self, nick: str) -> str | None:
+        """Return saved location string for *nick*, or None."""
+        return self._store.loc_get(nick)
+
+    def loc_set(self, nick: str, raw: str) -> None:
+        """Save a location string for *nick*."""
+        self._store.loc_set(nick, raw)
+
+    def loc_del(self, nick: str) -> bool:
+        """Delete saved location for *nick*.  Returns False if none existed."""
+        return self._store.loc_del(nick)
+
+    def channel_users(self, ch: str) -> dict[str, Any]:
+        """Return tracked user data for *ch* as ``{nick_lower: {nick, hostmask, ...}}``."""
+        return self._store.channel_users(ch)
 
     # ── Module management ────────────────────────────────────────────
 
     def load_module(self, name: str) -> tuple[bool, str]:
+        """Load a module by name from the modules directory.
+
+        Returns ``(success, message)`` suitable for display to the user.
+        Validates the module name, checks for path traversal, prevents
+        command conflicts, and runs ``on_load()``.
+        """
         with self._mod_lock:
             if not re.match(r"^[a-z][a-z0-9_]*$", name):
                 return False, f"Invalid module name '{name}' — lowercase alphanumeric and _ only."
@@ -492,6 +545,7 @@ class IRCBot:
                 return False, f"Error loading '{name}' — see log for details."
 
     def unload_module(self, name: str) -> tuple[bool, str]:
+        """Unload a module by name.  Calls ``on_unload()`` and removes commands."""
         with self._mod_lock:
             if name not in self._modules:
                 return False, f"'{name}' not loaded."
@@ -507,10 +561,12 @@ class IRCBot:
                 return False, f"Error unloading '{name}' — see log for details."
 
     def reload_module(self, name: str) -> tuple[bool, str]:
+        """Unload then reload a module.  Returns ``(success, message)``."""
         ok, msg = self.unload_module(name)
         return (False, msg) if not ok else self.load_module(name)
 
     def autoload_modules(self) -> None:
+        """Load all modules listed in the ``autoload`` config setting."""
         for name in AUTO_LOAD:
             ok, msg = self.load_module(name)
             (log.info if ok else log.warning)(msg)
@@ -524,6 +580,7 @@ class IRCBot:
         return True
 
     async def cmd_auth(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Authenticate as bot admin.  PM only.  Brute-force lockout after 5 failures."""
         h = _get_hash()
         if not h:
             self.preply(nick, reply_to, f"{nick}: no password_hash configured — run hashpw.py")
@@ -569,6 +626,7 @@ class IRCBot:
             log.warning(f"Failed auth: {nick} ({fails + 1}/{self._AUTH_MAX_FAILS})")
 
     async def cmd_deauth(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """End the current admin session."""
         if nick.lower() in self._authed:
             self._authed.discard(nick.lower())
             self.preply(nick, reply_to, f"{nick}: session ended.")
@@ -576,6 +634,7 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: not authenticated.")
 
     async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display available commands.  Admin commands visible only when authed."""
         p     = CMD_PREFIX
         lines = [
             f"── {self._nick} v{__version__} ──────────────────────────────────────────",
@@ -602,11 +661,13 @@ class IRCBot:
             self.preply(nick, reply_to, line)
 
     async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display bot version and repository URL."""
         self.preply(nick, reply_to,
             f"Internets {__version__} — async modular IRC bot  "
             f"https://github.com/brandontroidl/Internets")
 
     async def cmd_modules(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """List loaded and available modules."""
         with self._mod_lock:
             loaded = list(self._modules)
         self.preply(nick, reply_to,
@@ -620,6 +681,7 @@ class IRCBot:
             self.preply(nick, reply_to, f"Available: {', '.join(avail)}")
 
     async def cmd_load(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Load a module by name.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}load <module>"); return
@@ -627,6 +689,7 @@ class IRCBot:
         self.preply(nick, reply_to, msg)
 
     async def cmd_unload(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Unload a module by name.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}unload <module>"); return
@@ -634,6 +697,7 @@ class IRCBot:
         self.preply(nick, reply_to, msg)
 
     async def cmd_reload(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Reload a module (unload + load).  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}reload <module>"); return
@@ -641,6 +705,7 @@ class IRCBot:
         self.preply(nick, reply_to, msg)
 
     async def cmd_reloadall(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Reload all currently loaded modules.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         with self._mod_lock:
             names = list(self._modules)
@@ -655,6 +720,7 @@ class IRCBot:
         self.preply(nick, reply_to, " | ".join(parts))
 
     async def cmd_restart(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Restart the bot process.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
@@ -662,6 +728,7 @@ class IRCBot:
         self.request_shutdown("Restarting ...")
 
     async def cmd_rehash(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Reload config.ini and clear admin sessions.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         try:
             cfg.read(_CONFIG_PATH)
@@ -694,6 +761,7 @@ class IRCBot:
         log.info(f"Rehash by {nick}")
 
     async def cmd_mode(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Set bot user modes (e.g. +ix).  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}mode <+/-modes>"); return
@@ -705,6 +773,7 @@ class IRCBot:
         log.info(f"Mode set by {nick}: {mode_str}")
 
     async def cmd_snomask(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Set server notice mask (e.g. +cCkK).  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}snomask <+/-flags>"); return
@@ -718,6 +787,7 @@ class IRCBot:
     _VALID_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
 
     async def cmd_loglevel(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Show or change log output level.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         p = CMD_PREFIX
 
@@ -776,6 +846,7 @@ class IRCBot:
             self.preply(nick, reply_to, f"usage: {p}loglevel [LEVEL | <logger> <LEVEL>]")
 
     async def cmd_debug(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Toggle debug output globally or per-subsystem.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg or arg.strip().lower() == "on":
             _log_filter.global_debug = True
@@ -802,6 +873,7 @@ class IRCBot:
             log.info(f"Debug {subsys} ON by {nick}")
 
     async def cmd_shutdown(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Graceful shutdown: save state, unload modules, quit.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         reason = arg.strip() if arg else "Shutting down"
         self.preply(nick, reply_to, f"Shutting down: {reason}")
@@ -1614,8 +1686,13 @@ async def _main() -> None:
             os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
-if __name__ == "__main__":
+def _entry() -> None:
+    """Entry point for ``pip install`` console script."""
     try:
         asyncio.run(_main())
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__":
+    _entry()

@@ -107,6 +107,86 @@ Or the registered channel founder can use `.join` from any channel or PM:
 
 The bot verifies ownership by checking the user's NickServ account against the channel founder registered with IRC services (ChanServ, X3, etc.). Bot admins bypass this check. The bot remembers channels across restarts.
 
+## Example Session
+
+```
+<alice> .w 10001
+<Internets> :: New York, NY :: Conditions Partly Cloudy :: Temperature 18.3C / 64.9F ::
+             Dew point 12.1C / 53.8F :: Pressure 1018mb / 30.06in :: Humidity 67% ::
+             Visibility 16.1km / 10.0mi :: Wind from SW at 11.2km/h / 6.9mph ::
+             Updated March 03, 02:51 PM UTC ::
+
+<alice> .f 10001
+<Internets> :: New York, NY :: Monday Partly Cloudy 19.2C / 66.6F / 11.8C / 53.2F ::
+             Tuesday Rain 14.5C / 58.1F / 9.3C / 48.7F :: Wednesday Mainly Clear
+             16.7C / 62.1F / 8.1C / 46.6F :: Thursday Overcast 13.4C / 56.1F /
+             7.2C / 45.0F ::
+
+<bob> .cc sqrt(144) + 2pi
+<Internets> [calc] sqrt(144) + 2pi = 18.283185
+
+<carol> .d 3d6+2
+<Internets> :: Total 14/20 [71%] :: Rolls [4, 5, 3] ::
+
+<dave> .t es Hello, how are you?
+<Internets> [t] [en→es] Hola, ¿cómo estás?
+
+<alice> .regloc 90210
+<Internets> alice: location set to Beverly Hills, CA
+
+<alice> .w
+<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ...
+
+<alice> .w -n bob
+<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ...
+
+<alice> .wx
+<Internets> :: Beverly Hills, CA :: No active NWS alerts.
+
+<alice> .u yolo /2
+<Internets> [2/7] An acronym for "you only live once", used to justify doing ...
+```
+
+Admin session (via PM):
+
+```
+-> *Internets* AUTH mypassword
+<Internets> Authentication successful.
+
+<alice> .modules
+<Internets> Loaded: calc, channels, dice, location, translate, urbandictionary, weather
+             Available: (none unloaded)
+
+<alice> .reload weather
+<Internets> 'weather' unloaded. 'weather' loaded (6 commands).
+
+<alice> .version
+<Internets> Internets 1.3.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
+```
+
+CLI startup:
+
+```
+$ python internets.py --version
+Internets 1.3.0
+
+$ python internets.py
+2026-03-03 14:00:01 [INFO] internets: Internets v1.3.0 starting
+2026-03-03 14:00:01 [INFO] internets: Loaded calc (1 commands)
+2026-03-03 14:00:01 [INFO] internets: Loaded weather (10 commands)
+...
+2026-03-03 14:00:02 [INFO] internets: Connected to irc.libera.chat:6697 (TLS)
+2026-03-03 14:00:03 [INFO] internets: SASL authentication successful
+2026-03-03 14:00:03 [INFO] internets: Joined #mychannel
+> status
+  version  = 1.3.0
+  nick     = Internets
+  channels = #mychannel
+  modules  = calc, channels, dice, location, translate, urbandictionary, weather
+  admins   = (none)
+>
+```
+
 ## Configuration
 
 The bot reads `config.ini` at startup. Relevant sections:
@@ -287,4 +367,4 @@ The bot does not parse `353` (NAMES reply) for user roster purposes. Users who w
 
 ## License
 
-None specified. Add one.
+MIT — see [LICENSE](LICENSE).

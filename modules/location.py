@@ -8,6 +8,7 @@ log = logging.getLogger("internets.location")
 
 
 class LocationModule(BotModule):
+    """User location registration and lookup."""
     COMMANDS: dict[str, str] = {
         "regloc":            "cmd_regloc",
         "register_location": "cmd_regloc",
@@ -16,9 +17,11 @@ class LocationModule(BotModule):
     }
 
     def on_load(self) -> None:
+        """Load geocoding user agent from config."""
         self._ua: str = self.bot.cfg["weather"]["user_agent"]
 
     async def cmd_regloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Save a default location for the requesting user."""
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}regloc <zip or city name>")
@@ -33,6 +36,7 @@ class LocationModule(BotModule):
         log.info(f"regloc {nick} -> {arg!r} ({display})")
 
     async def cmd_myloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Display the user's saved location."""
         raw = self.bot.loc_get(nick)
         if raw:
             geo     = await geocode(raw, self._ua)
@@ -43,12 +47,14 @@ class LocationModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: no location saved — use {p}regloc <zip or city>")
 
     async def cmd_delloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Delete the user's saved location."""
         if self.bot.loc_del(nick):
             self.bot.privmsg(reply_to, f"{nick}: saved location removed.")
         else:
             self.bot.privmsg(reply_to, f"{nick}: no saved location.")
 
     def help_lines(self, prefix: str) -> list[str]:
+        """Return location help text."""
         return [
             f"  {prefix}regloc/.register_location <zip|city>   Save your default location",
             f"  {prefix}myloc                                   Show your saved location",
@@ -57,4 +63,5 @@ class LocationModule(BotModule):
 
 
 def setup(bot: object) -> LocationModule:
+    """Module entry point — returns a LocationModule instance."""
     return LocationModule(bot)  # type: ignore[arg-type]

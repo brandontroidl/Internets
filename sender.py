@@ -19,6 +19,12 @@ log = logging.getLogger("internets.sender")
 
 
 class Sender:
+    """Async priority send queue with token-bucket rate limiting.
+
+    Priority 0 bypasses the bucket (protocol traffic).  Priority 1 is
+    subject to rate limiting (~40 msg/min sustained, 5 burst).
+    ``enqueue()`` is thread-safe — modules call it from worker threads.
+    """
     CAPACITY: int = 5
     REFILL: float = 1.5
     MAX_QUEUE: int = 200  # BUG-056: Bound queue to prevent OOM during disconnects

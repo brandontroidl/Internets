@@ -154,15 +154,18 @@ class Store:
     # ── Locations ────────────────────────────────────────────────────
 
     def loc_get(self, nick: str) -> str | None:
+        """Return the saved location string for *nick*, or None."""
         with self._loc_lock:
             return self._locs.get(nick.lower())
 
     def loc_set(self, nick: str, raw: str) -> None:
+        """Save a location string for *nick*."""
         with self._loc_lock:
             self._locs[nick.lower()] = raw
             self._dirty_locs = True
 
     def loc_del(self, nick: str) -> bool:
+        """Delete saved location for *nick*.  Returns False if none existed."""
         with self._loc_lock:
             if nick.lower() not in self._locs:
                 return False
@@ -173,10 +176,12 @@ class Store:
     # ── Channels ─────────────────────────────────────────────────────
 
     def channels_load(self) -> list[str]:
+        """Return the saved channel list."""
         with self._chan_lock:
             return list(self._channels)
 
     def channels_save(self, channels: set[str] | list[str]) -> None:
+        """Replace the saved channel list and mark dirty."""
         with self._chan_lock:
             self._channels = sorted(channels)
             self._dirty_chans = True
@@ -184,6 +189,7 @@ class Store:
     # ── User tracking ────────────────────────────────────────────────
 
     def user_join(self, channel: str, nick: str, hostmask: str) -> None:
+        """Record a user joining or speaking in *channel*."""
         now = _utcnow()
         with self._user_lock:
             ch    = self._users.setdefault(channel.lower(), {})
@@ -195,6 +201,7 @@ class Store:
             self._dirty_users = True
 
     def user_part(self, channel: str, nick: str) -> None:
+        """Update last-seen timestamp when a user parts *channel*."""
         with self._user_lock:
             entry = self._users.get(channel.lower(), {}).get(nick.lower())
             if entry:
@@ -202,6 +209,7 @@ class Store:
                 self._dirty_users = True
 
     def user_quit(self, nick: str) -> None:
+        """Update last-seen for *nick* across all channels."""
         now = _utcnow()
         with self._user_lock:
             for ch in self._users.values():
@@ -210,6 +218,7 @@ class Store:
                     self._dirty_users = True
 
     def user_rename(self, old: str, new: str, hostmask: str) -> None:
+        """Re-key a user entry when they change nicks."""
         now = _utcnow()
         with self._user_lock:
             for ch in self._users.values():
@@ -220,12 +229,14 @@ class Store:
                     self._dirty_users = True
 
     def channel_users(self, channel: str) -> dict[str, dict[str, str]]:
+        """Return a snapshot of tracked user data for *channel*."""
         with self._user_lock:
             ch = self._users.get(channel.lower(), {})
             return {k: dict(v) for k, v in ch.items()}
 
 
 class RateLimiter:
+    """Per-nick flood and API rate limiting with periodic stale-entry cleanup."""
     _CLEANUP_INTERVAL = 300
 
     def __init__(self, flood_cd: int, api_cd: int) -> None:
@@ -244,6 +255,7 @@ class RateLimiter:
         self._last_cleanup = now
 
     def flood_check(self, nick: str, is_admin: bool = False) -> bool:
+        """Return True if *nick* is flooding.  Admins bypass."""
         if is_admin:
             return False
         now = time.time()
@@ -256,6 +268,7 @@ class RateLimiter:
         return False
 
     def api_check(self, nick: str) -> bool:
+        """Return True if *nick* has hit the API cooldown."""
         now = time.time()
         k   = nick.lower()
         with self._lock:
