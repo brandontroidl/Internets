@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from internets import IRCBot
+
+
 class BotModule:
     """
     Base class for all bot modules.
@@ -11,19 +19,19 @@ class BotModule:
     and lets modules react to server numerics, NOTICEs, etc.
     """
 
-    COMMANDS: dict = {}
+    COMMANDS: dict[str, str] = {}
 
-    def __init__(self, bot):
+    def __init__(self, bot: IRCBot) -> None:
         self.bot = bot
 
-    def help_lines(self, prefix: str) -> list:
+    def help_lines(self, prefix: str) -> list[str]:
         return []
 
-    def on_load(self):
+    def on_load(self) -> None:
         pass
 
-    def on_unload(self):
+    def on_unload(self) -> None:
         pass
 
-    def on_raw(self, line: str):
+    def on_raw(self, line: str) -> None:
         pass

@@ -7,7 +7,8 @@ US weather pulls from weather.gov (NWS API). International weather uses Open-Met
 ## Architecture
 
 ```
-internets.py          Core: connection lifecycle, IRC protocol parsing, command dispatch
+internets.py          Core: connection lifecycle, IRC state machine, command dispatch
+protocol.py           Pure protocol helpers (ISUPPORT parsing, MODE parsing, SASL, NAMES)
 sender.py             Outbound message queue with token-bucket rate limiting
 store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
 hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
@@ -24,6 +25,9 @@ modules/
   translate.py        Translation via Google Translate
   urbandictionary.py  Urban Dictionary lookups with result pagination
   channels.py         Join/part management and per-channel user roster queries
+
+tests/
+  run_tests.py        Standalone test suite (no external dependencies)
 ```
 
 The core (`internets.py`) owns the socket, IRC state machine, and command dispatch. Everything else is a module. Modules register commands via a `COMMANDS` dict mapping command names to method names, receive `(nick, reply_to, arg)` on invocation, and talk back through `bot.privmsg()` / `bot.notice()` / `bot.reply()`. Every command invocation runs on its own daemon thread.
@@ -40,7 +44,7 @@ The outbound path goes through `Sender`, which implements a token-bucket (5 burs
 
 **Response routing.** Regular output goes to the channel. Help text and admin command responses go as `NOTICE` to the requesting user (keeps help spam out of channels). Everything in PM stays as `PRIVMSG`. This is the `reply()` / `preply()` split.
 
-**IRCv3 capability negotiation.** The bot requests `multi-prefix`, `away-notify`, `account-notify`, `chghost`, `extended-join`, `server-time`, and `message-tags`. It degrades gracefully if the server supports none of them. CAP negotiation happens before registration completes, following the IRCv3 spec.
+**IRCv3 capability negotiation.** The bot requests `multi-prefix`, `away-notify`, `account-notify`, `chghost`, `extended-join`, `server-time`, `message-tags`, and `sasl`. If the server supports SASL and a NickServ password is configured, the bot authenticates via SASL PLAIN during capability negotiation — before registration completes. This eliminates the timing race between NickServ IDENTIFY and channel joins. If SASL fails, the bot falls back to traditional NickServ IDENTIFY. All capabilities degrade gracefully if the server supports none of them.
 
 ## Requirements
 
@@ -187,18 +191,19 @@ stdin is not a TTY).
 Create a Python file in `modules/`. Implement `setup(bot)` returning a `BotModule` subclass. Define commands in the `COMMANDS` dict.
 
 ```python
+from __future__ import annotations
 from .base import BotModule
 
 class PingModule(BotModule):
-    COMMANDS = {"ping": "cmd_ping"}
+    COMMANDS: dict[str, str] = {"ping": "cmd_ping"}
 
-    def cmd_ping(self, nick, reply_to, arg):
+    def cmd_ping(self, nick: str, reply_to: str, arg: str | None) -> None:
         self.bot.privmsg(reply_to, f"{nick}: pong")
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}ping   Pong"]
 
-def setup(bot):
+def setup(bot: object) -> PingModule:
     return PingModule(bot)
 ```
 
@@ -212,11 +217,11 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Nick collision recovery:** If the configured nick is taken, the bot appends `_` and retries.
 
-**Auto-reconnect:** On disconnect, the bot waits 15 seconds and reconnects. Channel list is restored from `channels.json`. If NickServ password is configured, the bot waits for identification confirmation (up to 10 seconds) before sending JOINs so that `+R` channels and ChanServ access lists work. If a saved channel is invite-only (`+i`), the bot asks ChanServ to re-invite it. Channels that reject with 471 (full), 474 (banned), or 475 (bad key) are logged and removed from the saved list.
+**Auto-reconnect with exponential backoff.** On disconnect, the bot reconnects with exponential backoff: 15s, 30s, 60s, 120s, 240s, capped at 5 minutes. The attempt counter resets on successful connection. Channel list is restored from `channels.json`. If SASL is available, identification happens during registration. Otherwise, if a NickServ password is configured, the bot waits for identification confirmation (up to 10 seconds) before sending JOINs so that `+R` channels and ChanServ access lists work. If a saved channel is invite-only (`+i`), the bot asks ChanServ to re-invite it. Channels that reject with 471 (full), 474 (banned), or 475 (bad key) are logged and removed from the saved list.
 
 **Keepalive:** A background thread sends `PING` every 90 seconds. If the socket is dead, the reconnect logic takes over.
 
-**User tracking:** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps in memory, flushed to `users.json` every 30 seconds. Populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster).
+**User tracking.** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps in memory, flushed to `users.json` every 30 seconds. Populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster). Entries older than 90 days (configurable via `user_max_age_days` in `config.ini`) are automatically pruned during flushes.
 
 **Channel ownership verification:** When a non-admin user runs `.join` or `.part`, the bot verifies they are the channel founder by WHOIS-ing them for their NickServ account (330 numeric) and querying the configured services bot (`services_nick`, default ChanServ) with `INFO #channel` for the founder name. If the account matches the founder (case-insensitive), the action proceeds. Verification times out after 15 seconds. This covers Anope, Atheme, Epona, X2, X3, and compatible forks. The services bot name is the only thing that varies — set `services_nick = X3` (or `Q`, etc.) in `config.ini` for non-ChanServ networks.
 
@@ -228,7 +233,7 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Admin sessions cleared on reconnect:** When the bot loses connection, all `_authed` sessions are wiped. Nicks may belong to different people on a new connection, so sessions cannot safely persist.
 
-**Credential redaction in logs:** Outgoing `PASS`, `IDENTIFY`, and `OPER` commands are redacted in the sender's debug log. Incoming `AUTH` messages are redacted in the main loop debug log. The command dispatch log also redacts auth arguments.
+**Credential redaction in logs:** Outgoing `PASS`, `IDENTIFY`, `OPER`, and `AUTHENTICATE` commands are redacted in the sender's debug log. Incoming `AUTH` messages are redacted in the main loop debug log. The command dispatch log also redacts auth arguments.
 
 **IRC injection prevention:** All outgoing messages have `\r` and `\n` stripped before writing to the socket. This prevents CRLF injection of arbitrary IRC protocol commands.
 
@@ -237,6 +242,16 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 **Calculator sandboxing:** The calculator uses a recursive AST walker with a strict whitelist of operators and functions. No `eval()`, no `exec()`, no attribute access, no list comprehensions. Exponent inputs are capped at 10,000. Factorial inputs are capped at 170. Expression nesting depth is limited to 50.
 
 **Atomic file writes:** All disk flushes use write-to-temp-then-`os.replace()`. A crash during write cannot corrupt the data file.
+
+## Testing
+
+The project ships with a standalone test suite in `tests/run_tests.py`. No external test framework is required — it runs with just Python and the project's own dependencies:
+
+```
+python tests/run_tests.py
+```
+
+The suite covers protocol parsing (ISUPPORT, MODE, NAMES, SASL), the store (CRUD, flush, atomic writes, user pruning), the calculator (arithmetic, sandboxing, DoS guards), dice, weather data merging and formatting, unit conversions, sender injection prevention, password hashing round-trips, the ChannelSet thread-safe container, and exponential backoff. Tests are also compatible with pytest if you have it installed.
 
 ## Known Limitations
 

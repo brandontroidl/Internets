@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import logging
 import requests
@@ -7,6 +9,7 @@ from .base    import BotModule
 from .geocode import geocode
 from .units   import cf, kph, km_mi, mb, deg_to_card, fmt_dt
 from .        import nws
+from .nws     import WeatherDict
 
 log = logging.getLogger("internets.weather")
 
@@ -17,7 +20,7 @@ _OM_CURRENT_FIELDS = ",".join([
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "visibility",
 ])
 
-WMO_CODES = {
+WMO_CODES: dict[int, str] = {
     0: "Clear",
     1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
     45: "Fog", 48: "Icy Fog",
@@ -32,7 +35,7 @@ WMO_CODES = {
 }
 
 
-def _om_current(lat, lon):
+def _om_current(lat: float, lon: float) -> WeatherDict | None:
     """Return a dict of current conditions from Open-Meteo, or None on failure.
 
     Keys match nws.current(): conditions, temp_c, feels_c, feels_label,
@@ -73,7 +76,7 @@ def _om_current(lat, lon):
     return None
 
 
-def _merge_current(primary, fallback):
+def _merge_current(primary: WeatherDict | None, fallback: WeatherDict | None) -> WeatherDict | None:
     """Merge two weather dicts.  Primary values win; fallback fills None gaps."""
     if primary is None:
         return fallback
@@ -86,7 +89,7 @@ def _merge_current(primary, fallback):
     return merged
 
 
-def _format_current(d):
+def _format_current(d: WeatherDict | None) -> str | None:
     """Format a weather dict into a single IRC output line."""
     if d is None:
         return None
@@ -94,40 +97,40 @@ def _format_current(d):
     temp_c   = d.get("temp_c")
     feels_c  = d.get("feels_c")
     label    = d.get("feels_label", "Feels like")
-    wind_kph = d.get("wind_kph")
+    wind_kph_val = d.get("wind_kph")
     wind_deg = d.get("wind_deg")
     gusts    = d.get("wind_gusts_kph")
     humidity = d.get("humidity")
 
-    if wind_kph is not None and wind_kph < 1:
+    if wind_kph_val is not None and wind_kph_val < 1:
         wind_str = "Calm"
-    elif wind_kph is not None:
-        card     = deg_to_card(wind_deg)
-        wind_str = f"from {card} at {kph(wind_kph)}" if card else kph(wind_kph)
-        if gusts is not None and gusts > 0 and wind_kph > 0 and gusts > wind_kph * 1.3:
-            wind_str += f" (gusts {kph(gusts)})"
+    elif wind_kph_val is not None:
+        card     = deg_to_card(wind_deg)  # type: ignore[arg-type]
+        wind_str = f"from {card} at {kph(wind_kph_val)}" if card else kph(wind_kph_val)  # type: ignore[arg-type]
+        if gusts is not None and gusts > 0 and wind_kph_val > 0 and gusts > wind_kph_val * 1.3:
+            wind_str += f" (gusts {kph(gusts)})"  # type: ignore[arg-type]
     else:
         wind_str = "N/A"
 
     cond = d.get("conditions") or "N/A"
-    parts = [f"Conditions {cond}", f"Temperature {cf(temp_c)}"]
+    parts: list[str] = [f"Conditions {cond}", f"Temperature {cf(temp_c)}"]  # type: ignore[arg-type]
 
     # Show feels-like / heat index / wind chill when meaningfully different.
-    if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:
-        parts.append(f"{label} {cf(feels_c)}")
+    if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:  # type: ignore[operator]
+        parts.append(f"{label} {cf(feels_c)}")  # type: ignore[arg-type]
 
     parts += [
-        f"Dew point {cf(d.get('dewpoint_c'))}",
-        f"Pressure {mb(d.get('pressure_mb'))}",
+        f"Dew point {cf(d.get('dewpoint_c'))}",  # type: ignore[arg-type]
+        f"Pressure {mb(d.get('pressure_mb'))}",  # type: ignore[arg-type]
         f"Humidity {f'{humidity:.0f}%' if humidity is not None else 'N/A'}",
-        f"Visibility {km_mi(d.get('visibility_m'))}",
+        f"Visibility {km_mi(d.get('visibility_m'))}",  # type: ignore[arg-type]
         f"Wind {wind_str}",
-        f"Updated {fmt_dt(d.get('updated', ''))}",
+        f"Updated {fmt_dt(d.get('updated', ''))}",  # type: ignore[arg-type]
     ]
     return " :: ".join(parts)
 
 
-def _om_forecast(lat, lon):
+def _om_forecast(lat: float, lon: float) -> str | None:
     try:
         r = requests.get(_OM_BASE, params={
             "latitude": lat, "longitude": lon,
@@ -143,7 +146,7 @@ def _om_forecast(lat, lon):
         codes = daily.get("weather_code", [])
         highs = daily.get("temperature_2m_max", [])
         lows  = daily.get("temperature_2m_min", [])
-        chunks = []
+        chunks: list[str] = []
         for i in range(min(4, len(dates))):
             try:
                 name = datetime.fromisoformat(dates[i]).strftime("%A")
@@ -160,7 +163,7 @@ def _om_forecast(lat, lon):
 
 
 class WeatherModule(BotModule):
-    COMMANDS = {
+    COMMANDS: dict[str, str] = {
         "weather": "cmd_weather", "w":    "cmd_weather",
         "forecast":"cmd_forecast", "f":   "cmd_forecast",
         "hourly":  "cmd_hourly",   "fh":  "cmd_hourly",
@@ -168,13 +171,13 @@ class WeatherModule(BotModule):
         "discuss": "cmd_discuss",  "disc":"cmd_discuss",
     }
 
-    def on_load(self):
+    def on_load(self) -> None:
         ua = self.bot.cfg["weather"]["user_agent"]
-        self._headers  = {"User-Agent": ua, "Accept": "application/geo+json"}
+        self._headers: dict[str, str] = {"User-Agent": ua, "Accept": "application/geo+json"}
         self._ua       = ua
         self._cooldown = int(self.bot.cfg["bot"]["api_cooldown"])
 
-    def _resolve(self, nick, arg):
+    def _resolve(self, nick: str, arg: str | None) -> tuple[str | None, str | None]:
         if arg:
             m = re.match(r"^-n\s+(\S+)$", arg.strip(), re.IGNORECASE)
             if m:
@@ -187,11 +190,11 @@ class WeatherModule(BotModule):
         p = self.bot.cfg["bot"]["command_prefix"]
         return None, f"{nick}: no location saved — use {p}regloc <city or zip> first."
 
-    def _geo(self, nick, reply_to, arg):
+    def _geo(self, nick: str, reply_to: str, arg: str | None) -> tuple[float, float, str, str] | None:
         """Resolve location to coordinates. Checks rate limit before any API call."""
         raw, err = self._resolve(nick, arg)
         if raw is None:
-            self.bot.privmsg(reply_to, err)
+            self.bot.privmsg(reply_to, err)  # type: ignore[arg-type]
             return None
         # Rate-check here: after the local lookup succeeds but before any API call.
         if self.bot.rate_limited(nick):
@@ -202,22 +205,22 @@ class WeatherModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{raw}'")
         return geo
 
-    def _nws_grid(self, nick, reply_to, lat, lon, display):
+    def _nws_grid(self, nick: str, reply_to: str, lat: float, lon: float, display: str) -> dict | None:
         grid = nws.get_grid(lat, lon, self._headers)
         if grid is None:
             self.bot.privmsg(reply_to, f"{nick}: weather.gov has no grid data for {display}.")
         return grid
 
-    def _us_only(self, nick, reply_to, feature):
+    def _us_only(self, nick: str, reply_to: str, feature: str) -> None:
         self.bot.privmsg(reply_to, f"{nick}: {feature} requires a US location (NWS).")
 
-    def cmd_weather(self, nick, reply_to, arg):
+    def cmd_weather(self, nick: str, reply_to: str, arg: str | None) -> None:
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         log.info(f"weather {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
 
-        nws_data = None
+        nws_data: WeatherDict | None = None
         if cc == "us":
             grid = nws.get_grid(lat, lon, self._headers)
             if grid:
@@ -234,12 +237,12 @@ class WeatherModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: weather data unavailable right now.")
 
-    def cmd_forecast(self, nick, reply_to, arg):
+    def cmd_forecast(self, nick: str, reply_to: str, arg: str | None) -> None:
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         log.info(f"forecast {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
-        body = None
+        body: str | None = None
         if cc == "us":
             grid = nws.get_grid(lat, lon, self._headers)
             if grid:
@@ -253,7 +256,7 @@ class WeatherModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: forecast unavailable right now.")
 
-    def cmd_hourly(self, nick, reply_to, arg):
+    def cmd_hourly(self, nick: str, reply_to: str, arg: str | None) -> None:
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -266,7 +269,7 @@ class WeatherModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: hourly forecast unavailable right now.")
 
-    def cmd_alerts(self, nick, reply_to, arg):
+    def cmd_alerts(self, nick: str, reply_to: str, arg: str | None) -> None:
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -281,7 +284,7 @@ class WeatherModule(BotModule):
             for line in lines:
                 self.bot.privmsg(reply_to, line)
 
-    def cmd_discuss(self, nick, reply_to, arg):
+    def cmd_discuss(self, nick: str, reply_to: str, arg: str | None) -> None:
         geo = self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
@@ -297,7 +300,7 @@ class WeatherModule(BotModule):
             for para in paras:
                 self.bot.privmsg(reply_to, para)
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [
             f"  {prefix}weather/.w  [zip|city|-n nick]   Current conditions (worldwide)",
             f"  {prefix}forecast/.f [zip|city|-n nick]   4-day forecast (worldwide)",
@@ -307,5 +310,5 @@ class WeatherModule(BotModule):
         ]
 
 
-def setup(bot):
-    return WeatherModule(bot)
+def setup(bot: object) -> WeatherModule:
+    return WeatherModule(bot)  # type: ignore[arg-type]

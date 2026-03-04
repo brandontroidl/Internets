@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import time
 import threading
@@ -8,21 +10,8 @@ log = logging.getLogger("internets.channels")
 
 _CHAN_RE = re.compile(r"^[#&+!][^\s,\x07]{1,49}$")
 
-# ── Services response patterns ──────────────────────────────────────────
-# These cover Anope, Atheme, Epona, X2, X3, and most forks.
-#
-# Founder/owner line examples:
-#   Anope:   "        Founder: someuser"
-#   Atheme:  "Founder    : someuser"
-#   Epona:   "     Founder: someuser"
-#   X2/X3:   "Owner:       someuser"
-#   Some:    "Founder: someuser (someaccount)"
 _FOUNDER_RE = re.compile(r"^\s*(?:Founder|Owner)\s*:\s*(\S+)", re.IGNORECASE)
-
-# "Channel #foo is not registered" / "#foo is not registered" / etc.
 _NOT_REG_RE = re.compile(r"not\s+registered", re.IGNORECASE)
-
-# Timeout for the entire WHOIS + services verification round-trip.
 _VERIFY_TIMEOUT = 15
 
 
@@ -31,16 +20,16 @@ class _PendingJoin:
     __slots__ = ("nick", "channel", "reply_to", "created",
                  "account", "founder", "whois_done", "info_failed", "action")
 
-    def __init__(self, nick, channel, reply_to, action="join"):
+    def __init__(self, nick: str, channel: str, reply_to: str, action: str = "join") -> None:
         self.nick        = nick
         self.channel     = channel
         self.reply_to    = reply_to
         self.action      = action
         self.created     = time.time()
-        self.account     = None   # NickServ account from WHOIS 330
-        self.founder     = None   # Channel founder from services INFO
-        self.whois_done  = False  # True once we receive WHOIS 318 (end)
-        self.info_failed = False  # True if channel is not registered
+        self.account: str | None  = None
+        self.founder: str | None  = None
+        self.whois_done  = False
+        self.info_failed = False
 
 
 class ChannelsModule(BotModule):
@@ -55,32 +44,30 @@ class ChannelsModule(BotModule):
     /INVITE bypasses all of this — handled by the core, always accepted.
     """
 
-    COMMANDS = {
+    COMMANDS: dict[str, str] = {
         "join":  "cmd_join",
         "part":  "cmd_part",
         "users": "cmd_users",
     }
 
-    def on_load(self):
-        self._services = self.bot.cfg["bot"].get("services_nick", "ChanServ").strip()
-        self._pending  = {}   # channel_lower -> _PendingJoin
-        self._svc_ctx  = {}   # channel_lower -> timestamp  (tracks which channel
-                              # a multi-line services response is about)
-        self._lock     = threading.Lock()
+    def on_load(self) -> None:
+        self._services: str = self.bot.cfg["bot"].get("services_nick", "ChanServ").strip()
+        self._pending: dict[str, _PendingJoin] = {}
+        self._svc_ctx: dict[str, float] = {}
+        self._lock = threading.Lock()
 
-        # Background thread reaps timed-out verifications.
         self._cleanup_stop = threading.Event()
         self._cleanup_thread = threading.Thread(
             target=self._cleanup_loop, daemon=True, name="chan-verify-gc")
         self._cleanup_thread.start()
         log.info(f"Services nick for ownership checks: {self._services}")
 
-    def on_unload(self):
+    def on_unload(self) -> None:
         self._cleanup_stop.set()
 
     # ── Cleanup ──────────────────────────────────────────────────────────
 
-    def _cleanup_loop(self):
+    def _cleanup_loop(self) -> None:
         while not self._cleanup_stop.wait(timeout=5):
             now = time.time()
             with self._lock:
@@ -93,13 +80,12 @@ class ChannelsModule(BotModule):
                         f"{p.nick}: ownership verification timed out for {p.channel} "
                         f"— try /INVITE or ask a bot admin.")
                     log.info(f"Verify timeout: {p.nick} -> {p.channel}")
-                # Clear stale context entries.
                 self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
                                  if now - v < _VERIFY_TIMEOUT}
 
     # ── Commands ─────────────────────────────────────────────────────────
 
-    def cmd_join(self, nick, reply_to, arg):
+    def cmd_join(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}join <#channel>")
@@ -110,7 +96,6 @@ class ChannelsModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: already in {chan}")
             return
 
-        # Bot admins bypass verification.
         if self.bot.is_admin(nick):
             self.bot.send(f"JOIN {chan}")
             self.bot.privmsg(reply_to, f"{nick}: joining {chan} ...")
@@ -119,7 +104,7 @@ class ChannelsModule(BotModule):
 
         self._start_verify(nick, chan, reply_to, action="join")
 
-    def cmd_part(self, nick, reply_to, arg):
+    def cmd_part(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}part <#channel>")
@@ -130,7 +115,6 @@ class ChannelsModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: not in {chan}")
             return
 
-        # Bot admins bypass verification.
         if self.bot.is_admin(nick):
             self.bot.send(f"PART {chan} :Parting on request from {nick}")
             if chan.lower() != reply_to.lower():
@@ -140,7 +124,7 @@ class ChannelsModule(BotModule):
 
         self._start_verify(nick, chan, reply_to, action="part")
 
-    def cmd_users(self, nick, reply_to, arg):
+    def cmd_users(self, nick: str, reply_to: str, arg: str | None) -> None:
         if arg and arg.startswith(("#", "&", "+", "!")):
             channel = arg.strip()
         elif reply_to.startswith(("#", "&", "+", "!")):
@@ -164,7 +148,8 @@ class ChannelsModule(BotModule):
 
     # ── Verification machinery ───────────────────────────────────────────
 
-    def _start_verify(self, nick, channel, reply_to, action="join"):
+    def _start_verify(self, nick: str, channel: str, reply_to: str,
+                      action: str = "join") -> None:
         key = channel.lower()
 
         with self._lock:
@@ -180,14 +165,12 @@ class ChannelsModule(BotModule):
             f"{nick}: verifying channel ownership for {channel} ...")
         log.info(f"Verify started ({action}): {nick} -> {channel}")
 
-    def on_raw(self, line):
-        # Fast bail if nothing is pending.
+    def on_raw(self, line: str) -> None:
         with self._lock:
             if not self._pending:
                 return
 
-        # ── WHOIS 330: user has a NickServ account ───────────────────
-        # :server 330 botnick target account :is logged in as
+        # WHOIS 330: user has a NickServ account
         m = re.match(r":\S+ 330 \S+ (\S+) (\S+)", line)
         if m:
             target_lower = m.group(1).lower()
@@ -199,8 +182,7 @@ class ChannelsModule(BotModule):
                         log.debug(f"WHOIS account: {p.nick} = {account}")
             return
 
-        # ── WHOIS 318: end of WHOIS ──────────────────────────────────
-        # :server 318 botnick target :End of /WHOIS list.
+        # WHOIS 318: end of WHOIS
         m = re.match(r":\S+ 318 \S+ (\S+)", line)
         if m:
             target_lower = m.group(1).lower()
@@ -211,7 +193,7 @@ class ChannelsModule(BotModule):
                         self._try_complete(p)
             return
 
-        # ── NOTICE from the configured services bot ──────────────────
+        # NOTICE from the configured services bot
         m = re.match(r":([^!]+)!\S+ NOTICE \S+ :(.*)", line)
         if not m:
             return
@@ -220,28 +202,15 @@ class ChannelsModule(BotModule):
         text = m.group(2)
 
         with self._lock:
-            # Track which channel this multi-line response is about.
-            # Services INFO responses always include the channel name in the
-            # header line before any founder data. Match it against pending
-            # requests to establish context.
-            #
-            # Header examples:
-            #   "Information for channel #test:"          (Anope)
-            #   "Information on #test:"                   (Atheme)
-            #   "#test Information"                       (X2/X3)
-            #   "Channel: #test"                          (X3 variant)
             for ch_match in re.finditer(r"(#[^\s,\x07]+)", text):
-                ch = ch_match.group(1).rstrip(":.")  # strip trailing punctuation
+                ch = ch_match.group(1).rstrip(":.")
                 if ch.lower() in self._pending:
                     self._svc_ctx[ch.lower()] = time.time()
                     break
 
-            # Check for founder/owner line.
             fm = _FOUNDER_RE.search(text)
             if fm:
                 founder = fm.group(1)
-                # Associate with the correct pending request via context.
-                # Use most-recently-seen context first (handles serial queries).
                 for ch in self._ctx_by_recency():
                     if ch in self._pending:
                         self._pending[ch].founder = founder
@@ -251,16 +220,13 @@ class ChannelsModule(BotModule):
                         break
                 return
 
-            # Check for "not registered" error.
             if _NOT_REG_RE.search(text):
-                target_ch = None
-                # Try to find the channel directly in the error text.
+                target_ch: str | None = None
                 for ch_match in re.finditer(r"(#[^\s,\x07]+)", text):
                     ch = ch_match.group(1).rstrip(":.")
                     if ch.lower() in self._pending:
                         target_ch = ch.lower()
                         break
-                # Fall back to the most recent context.
                 if target_ch is None:
                     for ch in self._ctx_by_recency():
                         if ch in self._pending:
@@ -272,12 +238,12 @@ class ChannelsModule(BotModule):
                     self._svc_ctx.pop(target_ch, None)
                 return
 
-    def _ctx_by_recency(self):
+    def _ctx_by_recency(self) -> list[str]:
         """Return context channel keys ordered by most recently seen.  Under lock."""
         return [k for k, _ in sorted(self._svc_ctx.items(),
                                      key=lambda x: x[1], reverse=True)]
 
-    def _try_complete(self, p):
+    def _try_complete(self, p: _PendingJoin) -> None:
         """Resolve a pending verification if enough data has arrived.  Under lock."""
         if p.info_failed:
             self._resolve(p, False,
@@ -300,9 +266,8 @@ class ChannelsModule(BotModule):
                     f"founder of {p.channel} ({p.founder}). "
                     f"Try /INVITE or ask a bot admin.")
             return
-        # Otherwise still collecting data; cleanup thread handles timeouts.
 
-    def _resolve(self, p, approved, reason):
+    def _resolve(self, p: _PendingJoin, approved: bool, reason: str | None) -> None:
         """Complete a pending verification.  Called under self._lock."""
         self._pending.pop(p.channel.lower(), None)
 
@@ -323,9 +288,7 @@ class ChannelsModule(BotModule):
             self.bot.privmsg(p.reply_to, f"{p.nick}: {reason}")
             log.info(f"{p.action.title()} denied: {p.nick} -> {p.channel}")
 
-    # ── Help ─────────────────────────────────────────────────────────────
-
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [
             f"  {prefix}join  <#channel>   Invite the bot     [channel founder / admin]",
             f"  {prefix}part  <#channel>   Remove the bot     [channel founder / admin]",
@@ -333,5 +296,5 @@ class ChannelsModule(BotModule):
         ]
 
 
-def setup(bot):
-    return ChannelsModule(bot)
+def setup(bot: object) -> ChannelsModule:
+    return ChannelsModule(bot)  # type: ignore[arg-type]

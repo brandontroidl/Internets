@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import queue
+import socket
 import time
 import threading
 import logging
@@ -7,38 +10,45 @@ log = logging.getLogger("internets.sender")
 
 
 class Sender:
-    # priority=0  protocol traffic (PONG, CAP, NICK, QUIT) — bypass bucket, sent immediately
-    # priority=1  normal output (PRIVMSG, NOTICE, JOIN) — subject to token bucket
-    # Burst: 5 tokens. Refill: 1 per 1.5s (~40 msg/min sustained). Keeps us under flood kills.
-    CAPACITY = 5
-    REFILL   = 1.5
+    """
+    Priority send queue with token-bucket rate limiting.
 
-    def __init__(self):
-        self.sock  = None
-        self._q    = queue.PriorityQueue()
-        self._seq  = 0
-        self._stop = threading.Event()
-        self._lock = threading.Lock()
+    priority=0  protocol traffic (PONG, CAP, NICK, QUIT) — bypass bucket
+    priority=1  normal output (PRIVMSG, NOTICE, JOIN) — subject to bucket
 
-    def start(self, sock):
+    Burst: 5 tokens.  Refill: 1 per 1.5s (~40 msg/min sustained).
+    """
+
+    CAPACITY: int = 5
+    REFILL: float = 1.5
+
+    def __init__(self) -> None:
+        self.sock: socket.socket | None = None
+        self._q:    queue.PriorityQueue[tuple[int, int, str]] = queue.PriorityQueue()
+        self._seq:  int = 0
+        self._stop: threading.Event = threading.Event()
+        self._lock: threading.Lock = threading.Lock()
+
+    def start(self, sock: socket.socket) -> None:
         self.sock = sock
         self._stop.clear()
         self._q   = queue.PriorityQueue()
         self._seq = 0
         threading.Thread(target=self._loop, daemon=True, name="sender").start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop.set()
 
-    def enqueue(self, msg, priority=1):
+    def enqueue(self, msg: str, priority: int = 1) -> None:
         with self._lock:
             self._seq += 1
             self._q.put((priority, self._seq, msg))
 
     # Prefixes of outgoing IRC commands whose arguments contain secrets.
-    _REDACT_OUT = ("PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ")
+    _REDACT_OUT = ("PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ",
+                   "AUTHENTICATE ")
 
-    def _write(self, msg):
+    def _write(self, msg: str) -> None:
         # Strip embedded CR/LF/NUL to prevent protocol injection.
         msg = msg.replace("\r", "").replace("\n", "").replace("\x00", "")
         # Redact credentials from logs.
@@ -49,11 +59,12 @@ class Sender:
                 break
         log.debug(f">> {log_msg}")
         try:
-            self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
+            if self.sock:
+                self.sock.sendall((msg + "\r\n").encode("utf-8", errors="replace"))
         except Exception as e:
             log.warning(f"Send error: {e}")
 
-    def _loop(self):
+    def _loop(self) -> None:
         tokens = float(self.CAPACITY)
         last   = time.monotonic()
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import logging
 import requests
@@ -8,7 +10,7 @@ log = logging.getLogger("internets.ud")
 _IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 
 
-def _lookup(term, index, user_agent):
+def _lookup(term: str, index: int, user_agent: str) -> str:
     try:
         r    = requests.get(
             "https://api.urbandictionary.com/v0/define",
@@ -31,15 +33,15 @@ def _lookup(term, index, user_agent):
 
 
 class UDModule(BotModule):
-    COMMANDS = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
+    COMMANDS: dict[str, str] = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
 
-    def on_load(self):
+    def on_load(self) -> None:
         try:
-            self._ua = self.bot.cfg["weather"]["user_agent"]
+            self._ua: str = self.bot.cfg["weather"]["user_agent"]
         except KeyError:
             self._ua = "Internets/1.0"
 
-    def cmd_ud(self, nick, reply_to, arg):
+    def cmd_ud(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}u <word> [/N]  e.g. {p}u yolo /2")
@@ -49,9 +51,9 @@ class UDModule(BotModule):
         idx  = int(m.group(2))    if m else 1
         self.bot.privmsg(reply_to, _lookup(term, idx, self._ua))
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}u/.urbandictionary <word> [/N]   Urban Dictionary  e.g. {prefix}u yolo /2"]
 
 
-def setup(bot):
-    return UDModule(bot)
+def setup(bot: object) -> UDModule:
+    return UDModule(bot)  # type: ignore[arg-type]

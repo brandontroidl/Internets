@@ -9,12 +9,15 @@ Modules live in modules/. Each exposes setup(bot) -> BotModule.
 See modules/base.py for the interface.
 """
 
+from __future__ import annotations
+
 import ssl
 import socket
 import re
 import sys
 import os
 import time
+import base64
 import threading
 import logging
 import logging.handlers
@@ -22,10 +25,19 @@ import configparser
 import importlib
 import importlib.util
 from pathlib import Path
+from typing import Any, Optional
 
-from store  import Store, RateLimiter
-from sender import Sender
-from hashpw import verify_password
+from store    import Store, RateLimiter
+from sender   import Sender
+from hashpw   import verify_password
+from protocol import (
+    strip_tags,
+    parse_isupport_chanmodes,
+    parse_isupport_prefix,
+    parse_mode_changes,
+    parse_names_entry,
+    sasl_plain_payload,
+)
 
 cfg = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
 cfg.read("config.ini")
@@ -51,8 +63,48 @@ AUTO_LOAD   = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m
 # All optional — the bot works fine if the server supports none of these.
 DESIRED_CAPS = {
     "multi-prefix", "away-notify", "account-notify", "chghost",
-    "extended-join", "server-time", "message-tags",
+    "extended-join", "server-time", "message-tags", "sasl",
 }
+
+
+class ChannelSet:
+    """Thread-safe set of active channel names (lowercased)."""
+
+    def __init__(self) -> None:
+        self._channels: set[str] = set()
+        self._lock = threading.Lock()
+
+    def add(self, ch: str) -> None:
+        with self._lock:
+            self._channels.add(ch.lower())
+
+    def discard(self, ch: str) -> None:
+        with self._lock:
+            self._channels.discard(ch.lower())
+
+    def snapshot(self) -> set[str]:
+        with self._lock:
+            return set(self._channels)
+
+    def __contains__(self, ch: str) -> bool:
+        with self._lock:
+            return ch.lower() in self._channels
+
+    def __iter__(self):
+        return iter(self.snapshot())
+
+    def __bool__(self) -> bool:
+        with self._lock:
+            return bool(self._channels)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._channels)
+
+
+def _backoff(attempt: int, base: float = 15.0, cap: float = 300.0) -> float:
+    """Exponential backoff: 15, 30, 60, 120, 240, 300 (capped at 5 min)."""
+    return min(base * (2 ** attempt), cap)
 
 import argparse
 
@@ -97,14 +149,14 @@ class _DebugFilter(logging.Filter):
       - record's logger name is in the subsystem debug set (`.debug weather`)
     """
 
-    def __init__(self, base_level=logging.INFO):
+    def __init__(self, base_level: int = logging.INFO) -> None:
         super().__init__()
-        self.base_level   = base_level
-        self.global_debug = False
-        self._subsystems  = set()  # e.g. {"internets.weather", "internets.store"}
-        self._lock        = threading.Lock()
+        self.base_level: int  = base_level
+        self.global_debug: bool = False
+        self._subsystems: set[str] = set()
+        self._lock = threading.Lock()
 
-    def filter(self, record):
+    def filter(self, record: logging.LogRecord) -> bool:
         if record.levelno >= self.base_level:
             return True
         if self.global_debug:
@@ -117,27 +169,27 @@ class _DebugFilter(logging.Filter):
                     return True
         return False
 
-    def set_base_level(self, level):
+    def set_base_level(self, level: int) -> None:
         self.base_level = level
 
-    def add_subsystem(self, name):
+    def add_subsystem(self, name: str) -> None:
         with self._lock:
             self._subsystems.add(name)
 
-    def remove_subsystem(self, name):
+    def remove_subsystem(self, name: str) -> None:
         with self._lock:
             self._subsystems.discard(name)
 
-    def clear_subsystems(self):
+    def clear_subsystems(self) -> None:
         with self._lock:
             self._subsystems.clear()
 
-    def active_subsystems(self):
+    def active_subsystems(self) -> set[str]:
         with self._lock:
             return set(self._subsystems)
 
 
-def _setup_logging():
+def _setup_logging() -> _DebugFilter:
     """Configure the internets logger with rotating file + console + optional debug file."""
     root = logging.getLogger("internets")
     root.setLevel(logging.DEBUG)  # let handlers decide what to emit
@@ -192,12 +244,12 @@ if _args.debug is not None:
             log.info(f"CLI: debug enabled for {full}")
 
 
-def _get_hash():
+def _get_hash() -> str:
     cfg.read("config.ini")
     return cfg["admin"].get("password_hash", "").strip()
 
 
-def _validate_hash():
+def _validate_hash() -> None:
     h = _get_hash()
     if not h:
         log.warning("No password_hash in config.ini — auth disabled. Run hashpw.py.")
@@ -245,59 +297,69 @@ class IRCBot:
         "debug":     "cmd_debug",
     }
 
-    def __init__(self):
-        self.sock            = None
+    def __init__(self) -> None:
+        self.sock: Optional[socket.socket] = None
         self.cfg             = cfg
-        self.active_channels = set()
-        self._modules        = {}
-        self._commands       = {}
+        self.active_channels: ChannelSet = ChannelSet()
+        self._modules: dict[str, Any]  = {}
+        self._commands: dict[str, tuple[str, str]] = {}
         self._mod_lock       = threading.Lock()
-        self._authed         = set()
-        self._auth_fails     = {}  # nick_lower -> (fail_count, last_fail_time)
-        self._AUTH_MAX_FAILS = 5
-        self._AUTH_LOCKOUT   = 300  # 5-minute lockout after max failures
+        self._authed: set[str] = set()
+        self._auth_fails: dict[str, tuple[int, float]] = {}
+        self._AUTH_MAX_FAILS: int = 5
+        self._AUTH_LOCKOUT: int   = 300  # 5-minute lockout after max failures
         self._ka_stop        = threading.Event()
         self._sender         = Sender()
         self._store          = Store(
             cfg["bot"].get("locations_file", "locations.json"),
             cfg["bot"].get("channels_file",  "channels.json"),
             cfg["bot"].get("users_file",     "users.json"),
+            user_max_age_days=int(cfg["bot"].get("user_max_age_days", "90")),
         )
         self._rate     = RateLimiter(FLOOD_CD, API_CD)
         self._cap_busy = False
-        self._caps     = set()
-        self._nick     = NICKNAME
+        self._caps: set[str] = set()
+        self._nick: str    = NICKNAME
         # Channel operator tracking: {channel_lower: {nick_lower, ...}}
-        # Populated from 353 (NAMES) and maintained via MODE +o/-o/+a/-a/+q/-q.
-        # Prefixes ~(owner), &(admin), @(op) all count as "chanop" for ACL purposes.
-        self._chanops  = {}
+        self._chanops: dict[str, set[str]] = {}
         self._ns_identified = False
         self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
-        # CHANMODES from 005 ISUPPORT: {mode_char: type} where type is
-        # 'A' (list, always param), 'B' (always param), 'C' (param on set),
-        # 'D' (never param).  Populated from 005; defaults cover RFC 2811.
-        self._chanmode_types = {
-            "b": "A", "e": "A", "I": "A",       # list modes
-            "k": "B",                              # key
-            "l": "C",                              # limit
+        # SASL state
+        self._sasl_in_progress = False
+        # CHANMODES from 005 ISUPPORT
+        self._chanmode_types: dict[str, str] = {
+            "b": "A", "e": "A", "I": "A",
+            "k": "B",
+            "l": "C",
             "i": "D", "m": "D", "n": "D", "p": "D", "s": "D", "t": "D",
         }
-        # PREFIX modes always take a parameter (nick). Populated from 005.
-        # Defaults: q(owner), a(admin), o(op), h(halfop), v(voice).
-        self._prefix_modes = set("qaohv")
+        self._prefix_modes: set[str] = set("qaohv")
+        # Periodic user pruning (daily)
+        self._prune_stop = threading.Event()
+        self._prune_thread = threading.Thread(
+            target=self._prune_loop, daemon=True, name="user-prune")
+        self._prune_thread.start()
 
-    def send(self, msg, priority=1):
+    def _prune_loop(self) -> None:
+        """Run user pruning once per day."""
+        while not self._prune_stop.wait(timeout=86400):
+            try:
+                self._store.prune_users()
+            except Exception as e:
+                log.warning(f"User prune failed: {e}")
+
+    def send(self, msg: str, priority: int = 1) -> None:
         self._sender.enqueue(msg, priority)
 
-    def privmsg(self, target, msg):
+    def privmsg(self, target: str, msg: str) -> None:
         for chunk in self._split_msg(msg):
             self.send(f"PRIVMSG {target} :{chunk}")
 
-    def notice(self, target, msg):
+    def notice(self, target: str, msg: str) -> None:
         for chunk in self._split_msg(msg):
             self.send(f"NOTICE {target} :{chunk}")
 
-    def reply(self, nick, reply_to, msg, privileged=False):
+    def reply(self, nick: str, reply_to: str, msg: str, privileged: bool = False) -> None:
         if not reply_to.startswith(("#", "&", "+", "!")):
             self.privmsg(nick, msg)
         elif privileged:
@@ -305,10 +367,10 @@ class IRCBot:
         else:
             self.privmsg(reply_to, msg)
 
-    def preply(self, nick, reply_to, msg):
+    def preply(self, nick: str, reply_to: str, msg: str) -> None:
         self.reply(nick, reply_to, msg, privileged=True)
 
-    def _split_msg(self, msg):
+    def _split_msg(self, msg: str):
         enc = msg.encode("utf-8", errors="replace")
         while enc:
             chunk = enc[:self._MAX_BODY]
@@ -322,17 +384,17 @@ class IRCBot:
             yield chunk.decode("utf-8", errors="replace")
             enc = enc[len(chunk):]
 
-    def is_admin(self, nick):       return nick in self._authed
-    def is_chanop(self, channel, nick):
+    def is_admin(self, nick: str) -> bool:       return nick in self._authed
+    def is_chanop(self, channel: str, nick: str) -> bool:
         return nick.lower() in self._chanops.get(channel.lower(), set())
-    def flood_limited(self, nick):  return self._rate.flood_check(nick, self.is_admin(nick))
-    def rate_limited(self, nick):   return self._rate.api_check(nick)
-    def loc_get(self, nick):        return self._store.loc_get(nick)
-    def loc_set(self, nick, raw):   self._store.loc_set(nick, raw)
-    def loc_del(self, nick):        return self._store.loc_del(nick)
-    def channel_users(self, ch):    return self._store.channel_users(ch)
+    def flood_limited(self, nick: str) -> bool:  return self._rate.flood_check(nick, self.is_admin(nick))
+    def rate_limited(self, nick: str) -> bool:   return self._rate.api_check(nick)
+    def loc_get(self, nick: str) -> Optional[str]:        return self._store.loc_get(nick)
+    def loc_set(self, nick: str, raw: str) -> None:   self._store.loc_set(nick, raw)
+    def loc_del(self, nick: str) -> bool:        return self._store.loc_del(nick)
+    def channel_users(self, ch: str) -> dict[str, Any]:    return self._store.channel_users(ch)
 
-    def load_module(self, name):
+    def load_module(self, name: str) -> tuple[bool, str]:
         with self._mod_lock:
             # Reject path separators / parent refs.
             if not re.match(r"^[a-z][a-z0-9_]*$", name):
@@ -362,7 +424,7 @@ class IRCBot:
                 log.error(f"Load '{name}': {e}")
                 return False, f"Error loading '{name}': {e}"
 
-    def unload_module(self, name):
+    def unload_module(self, name: str) -> tuple[bool, str]:
         with self._mod_lock:
             if name not in self._modules:
                 return False, f"'{name}' not loaded."
@@ -377,22 +439,22 @@ class IRCBot:
                 log.error(f"Unload '{name}': {e}")
                 return False, f"Error unloading '{name}': {e}"
 
-    def reload_module(self, name):
+    def reload_module(self, name: str) -> tuple[bool, str]:
         ok, msg = self.unload_module(name)
         return (False, msg) if not ok else self.load_module(name)
 
-    def autoload_modules(self):
+    def autoload_modules(self) -> None:
         for name in AUTO_LOAD:
             ok, msg = self.load_module(name)
             (log.info if ok else log.warning)(msg)
 
-    def _require_admin(self, nick, reply_to):
+    def _require_admin(self, nick: str, reply_to: str) -> bool:
         if not self.is_admin(nick):
             self.preply(nick, reply_to, f"{nick}: auth first — /MSG {self._nick} AUTH <pw>")
             return False
         return True
 
-    def cmd_auth(self, nick, reply_to, arg):
+    def cmd_auth(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         h = _get_hash()
         if not h:
             self.preply(nick, reply_to, f"{nick}: no password_hash configured — run hashpw.py")
@@ -434,14 +496,14 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: wrong password.")
             log.warning(f"Failed auth: {nick} ({fails + 1}/{self._AUTH_MAX_FAILS})")
 
-    def cmd_deauth(self, nick, reply_to, arg):
+    def cmd_deauth(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if nick in self._authed:
             self._authed.discard(nick)
             self.preply(nick, reply_to, f"{nick}: session ended.")
         else:
             self.preply(nick, reply_to, f"{nick}: not authenticated.")
 
-    def cmd_help(self, nick, reply_to, arg):
+    def cmd_help(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         p     = CMD_PREFIX
         lines = [
             f"── {self._nick} ──────────────────────────────────────────────────",
@@ -465,7 +527,7 @@ class IRCBot:
         for line in lines:
             self.preply(nick, reply_to, line)
 
-    def cmd_modules(self, nick, reply_to, arg):
+    def cmd_modules(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         loaded = list(self._modules)
         self.preply(nick, reply_to,
             f"Loaded: {', '.join(loaded)}" if loaded else "No modules loaded.")
@@ -477,28 +539,28 @@ class IRCBot:
         if avail:
             self.preply(nick, reply_to, f"Available: {', '.join(avail)}")
 
-    def cmd_load(self, nick, reply_to, arg):
+    def cmd_load(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}load <module>"); return
         _, msg = self.load_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_unload(self, nick, reply_to, arg):
+    def cmd_unload(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}unload <module>"); return
         _, msg = self.unload_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_reload(self, nick, reply_to, arg):
+    def cmd_reload(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}reload <module>"); return
         _, msg = self.reload_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_reloadall(self, nick, reply_to, arg):
+    def cmd_reloadall(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         names = list(self._modules)
         if not names:
@@ -511,14 +573,14 @@ class IRCBot:
                 ([f"FAILED: {', '.join(fail)}"] if fail else [])
         self.preply(nick, reply_to, " | ".join(parts))
 
-    def cmd_restart(self, nick, reply_to, arg):
+    def cmd_restart(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
 
         # Save state and unload modules before replacing process.
         try:
-            self._store.channels_save(set(self.active_channels))
+            self._store.channels_save(self.active_channels.snapshot())
         except Exception:
             pass
         with self._mod_lock:
@@ -540,7 +602,7 @@ class IRCBot:
         time.sleep(2)  # Let sender thread flush QUIT before execv replaces process
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-    def cmd_rehash(self, nick, reply_to, arg):
+    def cmd_rehash(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         try:
             cfg.read("config.ini")
@@ -571,7 +633,7 @@ class IRCBot:
             self.preply(nick, reply_to, f"Cleared {n} admin session(s) — re-authenticate.")
         log.info(f"Rehash by {nick}")
 
-    def cmd_mode(self, nick, reply_to, arg):
+    def cmd_mode(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         p = CMD_PREFIX
         if not arg:
@@ -585,7 +647,7 @@ class IRCBot:
         self.preply(nick, reply_to, f"MODE {self._nick} {mode_str}")
         log.info(f"Mode set by {nick}: {mode_str}")
 
-    def cmd_snomask(self, nick, reply_to, arg):
+    def cmd_snomask(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         p = CMD_PREFIX
         if not arg:
@@ -601,7 +663,7 @@ class IRCBot:
 
     _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
-    def cmd_loglevel(self, nick, reply_to, arg):
+    def cmd_loglevel(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         p = CMD_PREFIX
 
@@ -659,7 +721,7 @@ class IRCBot:
         else:
             self.preply(nick, reply_to, f"usage: {p}loglevel [LEVEL | <logger> <LEVEL>]")
 
-    def cmd_debug(self, nick, reply_to, arg):
+    def cmd_debug(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         """Quick toggle: .debug [on|off|<subsystem> [off]]"""
         if not self._require_admin(nick, reply_to): return
 
@@ -690,18 +752,18 @@ class IRCBot:
             self.preply(nick, reply_to, f"{subsys} debug ON")
             log.info(f"Debug {subsys} ON by {nick}")
 
-    def cmd_shutdown(self, nick, reply_to, arg):
+    def cmd_shutdown(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
         if not self._require_admin(nick, reply_to): return
         reason = arg.strip() if arg else "Shutting down"
         self.preply(nick, reply_to, f"Shutting down: {reason}")
         log.info(f"Shutdown by {nick}: {reason}")
         self.graceful_shutdown(f"QUIT :{reason}")
 
-    def graceful_shutdown(self, quit_msg="QUIT :Shutting down"):
+    def graceful_shutdown(self, quit_msg: str = "QUIT :Shutting down") -> None:
         log.info("Graceful shutdown initiated.")
 
         try:
-            self._store.channels_save(set(self.active_channels))
+            self._store.channels_save(self.active_channels.snapshot())
         except Exception as e:
             log.warning(f"Channel save failed: {e}")
 
@@ -729,6 +791,7 @@ class IRCBot:
         time.sleep(2)
 
         self._ka_stop.set()
+        self._prune_stop.set()
         self._sender.stop()
         try:
             if self.sock:
@@ -739,7 +802,7 @@ class IRCBot:
         log.info("Shutdown complete.")
         sys.exit(0)
 
-    def dispatch(self, nick, reply_to, cmd, arg, is_pm):
+    def dispatch(self, nick: str, reply_to: str, cmd: str, arg: Optional[str], is_pm: bool) -> None:
         if cmd in ("auth", "deauth") and not is_pm:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM.")
             return
@@ -765,7 +828,7 @@ class IRCBot:
             if inst and entry:
                 run(getattr(inst, entry[1]), nick, reply_to, arg)
 
-    def _make_socket(self):
+    def _make_socket(self) -> socket.socket:
         use_ssl = cfg["irc"].getboolean("ssl",        fallback=True)
         verify  = cfg["irc"].getboolean("ssl_verify", fallback=True)
         log.info(f"Connecting {SERVER}:{PORT} "
@@ -781,7 +844,7 @@ class IRCBot:
         raw.settimeout(300)
         return raw
 
-    def _start_keepalive(self):
+    def _start_keepalive(self) -> None:
         stop = self._ka_stop
         def _loop():
             while not stop.wait(timeout=90):
@@ -791,7 +854,7 @@ class IRCBot:
                     break
         threading.Thread(target=_loop, daemon=True, name="keepalive").start()
 
-    def _connect(self):
+    def _connect(self) -> None:
         self._ka_stop.set()
         self._sender.stop()
         self._ka_stop  = threading.Event()
@@ -800,28 +863,29 @@ class IRCBot:
         self._caps     = set()
         self._chanops  = {}  # Wipe stale op data; rebuilt from 353 after rejoin
         self._ns_identified = False
+        self._sasl_in_progress = False
         self.sock      = self._make_socket()
         self._sender.start(self.sock)
         self._start_keepalive()
 
-    def _on_invite(self, nick, channel):
+    def _on_invite(self, nick: str, channel: str) -> None:
         log.info(f"Invited to {channel} by {nick}")
         self.send(f"JOIN {channel}")
         self.active_channels.add(channel.lower())
-        self._store.channels_save(set(self.active_channels))
+        self._store.channels_save(self.active_channels.snapshot())
 
-    def _on_join(self, channel):
+    def _on_join(self, channel: str) -> None:
         self.active_channels.add(channel.lower())
-        self._store.channels_save(set(self.active_channels))
+        self._store.channels_save(self.active_channels.snapshot())
         log.info(f"Joined {channel}")
 
-    def _on_part(self, channel):
+    def _on_part(self, channel: str) -> None:
         self.active_channels.discard(channel.lower())
         self._chanops.pop(channel.lower(), None)
-        self._store.channels_save(set(self.active_channels))
+        self._store.channels_save(self.active_channels.snapshot())
         log.info(f"Left {channel}")
 
-    def _rejoin_channels(self):
+    def _rejoin_channels(self) -> None:
         saved = self._store.channels_load()
         if not saved:
             log.info("No saved channels — waiting for INVITE.")
@@ -831,7 +895,7 @@ class IRCBot:
             self.active_channels.add(ch.lower())
             log.info(f"Rejoined {ch}")
 
-    def _deferred_rejoin(self):
+    def _deferred_rejoin(self) -> None:
         """Wait for NickServ confirmation (up to 10s) then rejoin saved channels."""
         if NS_PW:
             deadline = time.time() + 10
@@ -844,17 +908,21 @@ class IRCBot:
                             "rejoining anyway (some +R channels may reject).")
         self._rejoin_channels()
 
-    def run(self):
+    def run(self) -> None:
         self.autoload_modules()
         log.info(f"Desired caps: {', '.join(sorted(DESIRED_CAPS))}")
 
+        attempt = 0
         while True:
             try:
                 self._connect()
+                attempt = 0
                 break
             except Exception as e:
-                log.error(f"Connect failed: {e} — retry in 30s")
-                time.sleep(30)
+                delay = _backoff(attempt)
+                log.error(f"Connect failed: {e} — retry in {delay:.0f}s")
+                time.sleep(delay)
+                attempt += 1
 
         buf, identified, registered = "", False, False
 
@@ -892,7 +960,8 @@ class IRCBot:
                         if USER_MODES:
                             self.send(f"MODE {self._nick} {USER_MODES}")
                             log.info(f"User modes: MODE {self._nick} {USER_MODES}")
-                        if NS_PW:
+                        # If SASL succeeded, NickServ IDENTIFY is redundant.
+                        if NS_PW and not self._ns_identified:
                             self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
                         if OPER_N and OPER_PW:
                             self.send(f"OPER {OPER_N} {OPER_PW}")
@@ -905,36 +974,35 @@ class IRCBot:
 
             except (ConnectionResetError, ConnectionAbortedError,
                     BrokenPipeError, ssl.SSLError, OSError) as e:
-                log.warning(f"Lost connection: {e} — reconnect in 15s")
                 self._sender.stop()
-                # Nicks may belong to different people after reconnect.
                 if self._authed:
                     log.info(f"Cleared {len(self._authed)} admin session(s) on disconnect.")
                     self._authed.clear()
                 identified, registered, buf = False, False, ""
-                time.sleep(15)
+                attempt = 0
                 while True:
+                    delay = _backoff(attempt)
+                    log.warning(f"Lost connection: {e} — reconnect in {delay:.0f}s")
+                    time.sleep(delay)
                     try:
                         self._connect()
                         break
                     except Exception as ce:
-                        log.error(f"Reconnect failed: {ce} — retry in 30s")
-                        time.sleep(30)
+                        log.error(f"Reconnect failed: {ce}")
+                        attempt += 1
 
             except Exception as e:
                 log.error(f"Unexpected error in main loop: {e}")
                 time.sleep(5)
 
-    def _process(self, line):
+    def _process(self, line: str) -> None:
         if line.startswith("PING"):
             payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
             self.send(f"PONG :{payload}", priority=0)
             return
 
-        # Strip IRCv3 message tags before parsing. Tags carry metadata like
-        # server-time but don't change how we handle the underlying message.
-        if line.startswith("@"):
-            _, _, line = line.partition(" ")
+        # Strip IRCv3 message tags before parsing.
+        line = strip_tags(line)
 
         # Let modules see every raw line for numerics, NOTICEs, etc.
         with self._mod_lock:
@@ -963,13 +1031,43 @@ class IRCBot:
                     log.info(f"Caps ACK: {self._caps}")
                 else:
                     log.info(f"Caps NAK: {params}")
-                self.send("CAP END", priority=0)
-                self._cap_busy = False
+                # If SASL was ACKed and we have a NickServ password, authenticate
+                # via SASL PLAIN before sending CAP END.
+                if "sasl" in self._caps and NS_PW and not self._sasl_in_progress:
+                    self._sasl_in_progress = True
+                    self.send("AUTHENTICATE PLAIN", priority=0)
+                    log.info("Starting SASL PLAIN authentication")
+                else:
+                    self.send("CAP END", priority=0)
+                    self._cap_busy = False
             elif sub == "NEW":
                 offered = {cap.split("=", 1)[0] for cap in params.split()}
                 new = DESIRED_CAPS & offered
                 if new:
                     self.send(f"CAP REQ :{' '.join(sorted(new))}", priority=0)
+            return
+
+        # SASL: server sends "AUTHENTICATE +" to indicate readiness.
+        if line == "AUTHENTICATE +" and self._sasl_in_progress:
+            payload = sasl_plain_payload(NICKNAME, NS_PW)
+            self.send(f"AUTHENTICATE {payload}", priority=0)
+            return
+
+        # 903 = RPL_SASLSUCCESS
+        if re.match(r":\S+ 903 ", line):
+            self._sasl_in_progress = False
+            self._ns_identified = True
+            log.info("SASL authentication successful")
+            self.send("CAP END", priority=0)
+            self._cap_busy = False
+            return
+
+        # 902/904/905 = SASL failure numerics
+        if re.match(r":\S+ (902|904|905) ", line):
+            self._sasl_in_progress = False
+            log.warning("SASL authentication failed — will fall back to NickServ IDENTIFY")
+            self.send("CAP END", priority=0)
+            self._cap_busy = False
             return
 
         # 421 = "Unknown command" — server has no CAP support at all
@@ -999,25 +1097,15 @@ class IRCBot:
             return
 
         # 005 = RPL_ISUPPORT — parse CHANMODES and PREFIX for accurate
-        # MODE argument tracking. Without this, non-standard modes (e.g. L, H
-        # on ProvisionIRCd) would cause the arg parser to desync.
+        # MODE argument tracking.
         if re.match(r":\S+ 005 ", line):
-            # CHANMODES=A,B,C,D  — A: list (always param), B: always param,
-            # C: param on set only, D: never param.
             cm = re.search(r"CHANMODES=(\S+)", line)
             if cm:
-                groups = cm.group(1).split(",")
-                new_types = {}
-                for idx, label in enumerate(("A", "B", "C", "D")):
-                    if idx < len(groups):
-                        for ch in groups[idx]:
-                            new_types[ch] = label
-                self._chanmode_types = new_types
-                log.debug(f"ISUPPORT CHANMODES: {len(new_types)} modes parsed")
-            # PREFIX=(modes)prefixes
-            pm = re.search(r"PREFIX=\(([^)]*)\)", line)
+                self._chanmode_types = parse_isupport_chanmodes(cm.group(1))
+                log.debug(f"ISUPPORT CHANMODES: {len(self._chanmode_types)} modes parsed")
+            pm = re.search(r"PREFIX=(\S+)", line)
             if pm:
-                self._prefix_modes = set(pm.group(1))
+                self._prefix_modes, _ = parse_isupport_prefix(pm.group(1))
                 log.debug(f"ISUPPORT PREFIX modes: {self._prefix_modes}")
             # Don't return — fall through so other 005 fields are logged.
 
@@ -1041,7 +1129,7 @@ class IRCBot:
             log.warning(f"Cannot join {chan} ({reasons.get(num, num)}) — "
                         f"removing from saved channels")
             self.active_channels.discard(chan.lower())
-            self._store.channels_save(set(self.active_channels))
+            self._store.channels_save(self.active_channels.snapshot())
             return
 
         # 381 = RPL_YOUREOPER — OPER succeeded.
@@ -1080,27 +1168,17 @@ class IRCBot:
                     # Don't return — let other NOTICE handlers see it too
 
         # 353 = RPL_NAMREPLY — parse channel operator prefixes from NAMES list.
-        # Format: :server 353 botnick [=*@] #channel :@nick1 +nick2 nick3
-        # With multi-prefix cap: :server 353 botnick = #channel :~@nick1 @+nick2
-        # Prefixes ~(owner/+q), &(admin/+a), @(op/+o) all grant chanop status.
         m = re.match(r":\S+ 353 \S+ [=*@] (\S+) :(.*)", line)
         if m:
             chan, names_str = m.group(1).lower(), m.group(2).strip()
             ops = self._chanops.setdefault(chan, set())
             for entry in names_str.split():
-                # Strip all prefix chars to get the bare nick
-                nick_clean = entry.lstrip("~&@%+")
-                if not nick_clean:
-                    continue
-                # Check if any op-level prefix is present
-                prefix = entry[:len(entry) - len(nick_clean)]
-                if set(prefix) & {"~", "&", "@"}:
+                nick_clean, is_op = parse_names_entry(entry)
+                if nick_clean and is_op:
                     ops.add(nick_clean.lower())
             return
 
-        # MODE — track +o/-o, +a/-a, +q/-q to maintain chanop state.
-        # Uses _chanmode_types (from 005 ISUPPORT) to correctly consume
-        # parameters for all mode chars, not just a hardcoded subset.
+        # MODE — track chanop changes using ISUPPORT-aware parser.
         m = re.match(r":\S+ MODE (\S+) ([+-]\S+)(.*)", line)
         if m:
             chan = m.group(1)
@@ -1111,38 +1189,18 @@ class IRCBot:
                 args     = m.group(3).strip().split() if m.group(3).strip() else []
                 chan_l    = chan.lower()
                 ops      = self._chanops.setdefault(chan_l, set())
-                adding   = True
-                arg_idx  = 0
-                # Modes that grant/revoke chanop status (subset of prefix modes).
                 op_modes = {"o", "a", "q"} & self._prefix_modes
-                for ch in mode_str:
-                    if ch == "+":
-                        adding = True
-                    elif ch == "-":
-                        adding = False
-                    elif ch in self._prefix_modes:
-                        # All prefix modes (o, a, q, h, v) take a nick param.
-                        if arg_idx < len(args):
-                            target = args[arg_idx].lower()
-                            arg_idx += 1
-                            if ch in op_modes:
-                                if adding:
-                                    ops.add(target)
-                                    log.debug(f"Chanop add: {target} in {chan} (+{ch})")
-                                else:
-                                    ops.discard(target)
-                                    log.debug(f"Chanop remove: {target} in {chan} (-{ch})")
-                    else:
-                        # Use ISUPPORT CHANMODES types to decide if this mode
-                        # consumes a parameter.
-                        mtype = self._chanmode_types.get(ch)
-                        if mtype in ("A", "B"):
-                            # Always takes a parameter (list modes, key-like).
-                            arg_idx += 1
-                        elif mtype == "C" and adding:
-                            # Parameter only when setting (+l), not unsetting (-l).
-                            arg_idx += 1
-                        # Type D and unknown modes: no parameter.
+                for adding, ch, param in parse_mode_changes(
+                    mode_str, args, self._prefix_modes, self._chanmode_types
+                ):
+                    if ch in op_modes and param:
+                        target = param.lower()
+                        if adding:
+                            ops.add(target)
+                            log.debug(f"Chanop add: {target} in {chan} (+{ch})")
+                        else:
+                            ops.discard(target)
+                            log.debug(f"Chanop remove: {target} in {chan} (-{ch})")
             return
 
         m = re.match(r":([^!]+)![^@]+@\S+ CHGHOST (\S+) (\S+)", line)
@@ -1270,7 +1328,7 @@ _CONSOLE_HELP = """\
   quit                      alias for shutdown"""
 
 
-def _run_console(bot):
+def _run_console(bot: IRCBot) -> None:
     """Stdin command loop.  Runs in a daemon thread; exits when stdin closes."""
     while True:
         try:
@@ -1346,7 +1404,7 @@ def _run_console(bot):
 
         elif cmd == "status":
             print(f"  nick     = {bot._nick}")
-            print(f"  channels = {', '.join(sorted(set(bot.active_channels))) or '(none)'}")
+            print(f"  channels = {', '.join(sorted(bot.active_channels.snapshot())) or '(none)'}")
             with bot._mod_lock:
                 mods = list(bot._modules)
             print(f"  modules  = {', '.join(mods) or '(none)'}")
@@ -1371,7 +1429,7 @@ if __name__ == "__main__":
     import signal
     bot = IRCBot()
 
-    def _shutdown(signum, frame):
+    def _shutdown(signum: int, frame: Any) -> None:
         log.info(f"Received signal {signum}, shutting down.")
         bot.graceful_shutdown("QUIT :Caught signal, shutting down")
 

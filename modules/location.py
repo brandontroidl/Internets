@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from .base    import BotModule
 from .geocode import geocode
@@ -6,17 +8,17 @@ log = logging.getLogger("internets.location")
 
 
 class LocationModule(BotModule):
-    COMMANDS = {
+    COMMANDS: dict[str, str] = {
         "regloc":            "cmd_regloc",
         "register_location": "cmd_regloc",
         "myloc":             "cmd_myloc",
         "delloc":            "cmd_delloc",
     }
 
-    def on_load(self):
-        self._ua = self.bot.cfg["weather"]["user_agent"]
+    def on_load(self) -> None:
+        self._ua: str = self.bot.cfg["weather"]["user_agent"]
 
-    def cmd_regloc(self, nick, reply_to, arg):
+    def cmd_regloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}regloc <zip or city name>")
@@ -30,7 +32,7 @@ class LocationModule(BotModule):
         self.bot.privmsg(reply_to, f"{nick}: location set to {display}")
         log.info(f"regloc {nick} -> {arg!r} ({display})")
 
-    def cmd_myloc(self, nick, reply_to, arg):
+    def cmd_myloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         raw = self.bot.loc_get(nick)
         if raw:
             geo     = geocode(raw, self._ua)
@@ -40,13 +42,13 @@ class LocationModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: no location saved — use {p}regloc <zip or city>")
 
-    def cmd_delloc(self, nick, reply_to, arg):
+    def cmd_delloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.loc_del(nick):
             self.bot.privmsg(reply_to, f"{nick}: saved location removed.")
         else:
             self.bot.privmsg(reply_to, f"{nick}: no saved location.")
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [
             f"  {prefix}regloc/.register_location <zip|city>   Save your default location",
             f"  {prefix}myloc                                   Show your saved location",
@@ -54,5 +56,5 @@ class LocationModule(BotModule):
         ]
 
 
-def setup(bot):
-    return LocationModule(bot)
+def setup(bot: object) -> LocationModule:
+    return LocationModule(bot)  # type: ignore[arg-type]

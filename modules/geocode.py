@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import logging
 import requests
@@ -5,7 +7,7 @@ import requests
 log = logging.getLogger("internets.geocode")
 
 # Full name → USPS abbreviation for display formatting
-_STATE_ABBR = {
+_STATE_ABBR: dict[str, str] = {
     "Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA",
     "Colorado":"CO","Connecticut":"CT","Delaware":"DE","Florida":"FL","Georgia":"GA",
     "Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA",
@@ -22,7 +24,7 @@ _STATE_ABBR = {
 _COORD_RE = re.compile(r"^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$")
 
 
-def _format_name(addr, fallback):
+def _format_name(addr: dict[str, str], fallback: str) -> tuple[str, str]:
     cc   = addr.get("country_code", "").lower()
     city = addr.get("city") or addr.get("town") or addr.get("village") or addr.get("county") or ""
     if cc == "us":
@@ -32,13 +34,13 @@ def _format_name(addr, fallback):
     return f"{city}, {country}".strip(", ") or fallback, cc
 
 
-def geocode(query, user_agent):
+def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] | None:
     """
     Resolve a location string to (lat, lon, display_name, country_code).
     Returns None on failure.  Accepts place names, zip codes, or 'lat,lon'.
     """
     query = query.strip().strip("'\"")
-    hdrs  = {"User-Agent": user_agent}
+    hdrs: dict[str, str] = {"User-Agent": user_agent}
 
     m = _COORD_RE.match(query)
     if m:

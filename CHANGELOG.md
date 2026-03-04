@@ -3,6 +3,56 @@
 All notable changes to the Internets IRC bot are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] — 2026-03-04
+
+Quality and standards pass. Type annotations across the entire codebase, shipping
+test suite, SASL support, exponential reconnect backoff, user pruning, and
+thread-safe channel tracking.
+
+### Added
+
+- **SASL PLAIN authentication** — When the server advertises SASL support and a
+  NickServ password is configured, the bot authenticates during capability
+  negotiation (before registration completes). This eliminates the timing race
+  between NickServ IDENTIFY and `+R` channel joins. Falls back to traditional
+  NickServ IDENTIFY if SASL fails. `AUTHENTICATE` payloads are redacted in logs.
+
+- **Exponential reconnect backoff** — Reconnect delays now follow exponential
+  backoff: 15s, 30s, 60s, 120s, 240s, capped at 5 minutes. Resets on successful
+  connection. Replaces the fixed 15s/30s delays that hammered the server during
+  extended outages.
+
+- **Thread-safe `ChannelSet`** — `active_channels` is now a proper thread-safe
+  container with a lock, replacing the bare `set` with `set()` snapshot hacks.
+  Supports `add`, `discard`, `__contains__`, `snapshot`, iteration, `__len__`,
+  and `__bool__` — all thread-safe.
+
+- **User pruning** — User tracking entries older than 90 days (configurable via
+  `user_max_age_days` in `config.ini`) are automatically pruned during store
+  flushes. Prevents unbounded `users.json` growth on busy networks.
+
+- **Standalone test suite** — 64 tests in `tests/run_tests.py` covering protocol
+  parsing (ISUPPORT, MODE, NAMES, SASL), store (CRUD, flush, atomic writes,
+  pruning), calculator (arithmetic, sandboxing, DoS guards), dice, weather data
+  merging and formatting, unit conversions, sender injection prevention, password
+  hashing, ChannelSet, and exponential backoff. No external dependencies — runs
+  with `python tests/run_tests.py`. Also compatible with pytest.
+
+- **`protocol.py` extraction** — Pure protocol helpers (ISUPPORT parsing, MODE
+  parsing, NAMES parsing, SASL payload encoding, tag stripping) extracted into a
+  separate module. No bot state, no I/O — fully unit-testable.
+
+### Changed
+
+- **Type annotations everywhere** — All files now use `from __future__ import
+  annotations` and PEP 604 union syntax (`str | None` instead of
+  `Optional[str]`). Every public function, method, and class attribute has type
+  annotations. Module `setup()` functions and `BotModule` subclasses are typed.
+
+- **README updated** — Architecture section reflects `protocol.py` and `tests/`.
+  SASL support, exponential backoff, user pruning, testing instructions, and
+  credential redaction for AUTHENTICATE documented. Module example uses type hints.
+
 ## [1.1.0] — 2026-03-02
 
 Full codebase audit and hardening pass. 32 findings identified and resolved

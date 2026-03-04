@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import logging
 import requests
@@ -6,10 +8,15 @@ from .units import cf, fmt_short
 log = logging.getLogger("internets.nws")
 
 _NWS_BASE  = "https://api.weather.gov"
-_ALERT_ICON = {"Extreme": "‼", "Severe": "!", "Moderate": "~", "Minor": "-"}
+_ALERT_ICON: dict[str, str] = {
+    "Extreme": "‼", "Severe": "!", "Moderate": "~", "Minor": "-",
+}
+
+# Type alias for structured current-conditions dict.
+WeatherDict = dict[str, float | str | None]
 
 
-def get_grid(lat, lon, headers):
+def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | None:
     try:
         r = requests.get(f"{_NWS_BASE}/points/{lat:.4f},{lon:.4f}", headers=headers, timeout=10)
         r.raise_for_status()
@@ -19,7 +26,7 @@ def get_grid(lat, lon, headers):
     return None
 
 
-def current(lat, lon, grid, headers):
+def current(lat: float, lon: float, grid: dict, headers: dict[str, str]) -> WeatherDict | None:
     """Return a dict of current conditions, or None on failure.
 
     Keys (all optional, may be None):
@@ -52,7 +59,8 @@ def current(lat, lon, grid, headers):
             log.info("NWS observation has no usable data — all core fields null")
             return None
 
-        feels_c = feels_label = None
+        feels_c: float | None = None
+        feels_label: str | None = None
         if hi_c is not None:
             feels_c, feels_label = hi_c, "Heat index"
         elif wc_c is not None:
@@ -77,20 +85,21 @@ def current(lat, lon, grid, headers):
     return None
 
 
-def forecast(grid, headers):
+def forecast(grid: dict, headers: dict[str, str]) -> str | None:
     try:
         periods = requests.get(
             grid["forecast"], headers=headers, timeout=10,
         ).json()["properties"]["periods"]
 
-        days, i = [], 0
+        days: list[tuple[str, str, float, float | None]] = []
+        i = 0
         while i < len(periods) and len(days) < 4:
             p = periods[i]
             if not p["isDaytime"]:
                 i += 1
                 continue
             hi_c = (p["temperature"] - 32) * 5/9 if p["temperatureUnit"] == "F" else p["temperature"]
-            lo_c = None
+            lo_c: float | None = None
             if i + 1 < len(periods) and not periods[i + 1]["isDaytime"]:
                 nt   = periods[i + 1]
                 lo_c = (nt["temperature"] - 32) * 5/9 if nt["temperatureUnit"] == "F" else nt["temperature"]
@@ -108,13 +117,13 @@ def forecast(grid, headers):
     return None
 
 
-def hourly(grid, headers):
+def hourly(grid: dict, headers: dict[str, str]) -> str | None:
     try:
         periods = requests.get(
             grid["forecastHourly"], headers=headers, timeout=10,
         ).json()["properties"]["periods"][:8]
 
-        chunks = []
+        chunks: list[str] = []
         for p in periods:
             t_c   = (p["temperature"] - 32) * 5/9 if p["temperatureUnit"] == "F" else p["temperature"]
             pop   = p.get("probabilityOfPrecipitation", {})
@@ -127,7 +136,7 @@ def hourly(grid, headers):
     return None
 
 
-def alerts(lat, lon, headers):
+def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] | None:
     """Return list of formatted alert lines, [] if none, None on error."""
     try:
         r = requests.get(
@@ -140,7 +149,7 @@ def alerts(lat, lon, headers):
         if not features:
             return []
 
-        lines = []
+        lines: list[str] = []
         for feat in features[:5]:
             p        = feat.get("properties", {})
             event    = p.get("event", "Unknown Alert")
@@ -152,7 +161,8 @@ def alerts(lat, lon, headers):
                 headline = headline[:197] + "..."
             onset   = p.get("onset") or p.get("effective", "")
             expires = p.get("expires") or p.get("ends", "")
-            onset_s, exp_s = fmt_short(onset) if onset else "", fmt_short(expires) if expires else ""
+            onset_s  = fmt_short(onset) if onset else ""
+            exp_s    = fmt_short(expires) if expires else ""
             if onset_s and exp_s:   time_s = f" | {onset_s} → {exp_s}"
             elif exp_s:             time_s = f" | expires {exp_s}"
             else:                   time_s = ""
@@ -163,7 +173,7 @@ def alerts(lat, lon, headers):
     return None
 
 
-def discussion(grid, headers):
+def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
     """Fetch and return up to 4 [LABEL] sections from the Area Forecast Discussion."""
     try:
         office = grid.get("cwa", "")
@@ -189,7 +199,7 @@ def discussion(grid, headers):
             return None
 
         text = text.replace("\r\n", "\n").replace("\r", "\n")
-        out  = []
+        out: list[str] = []
 
         for section in re.split(r"\s*&&\s*", text):
             section = section.strip()

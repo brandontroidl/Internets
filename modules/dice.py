@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 import random
 import logging
@@ -31,18 +33,18 @@ def _roll(expr: str) -> str:
 
 
 class DiceModule(BotModule):
-    COMMANDS = {"d": "cmd_dice"}
+    COMMANDS: dict[str, str] = {"d": "cmd_dice"}
 
-    def cmd_dice(self, nick, reply_to, arg):
+    def cmd_dice(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}d [X]dN[+/-M]  e.g. {p}d 3d6+2")
             return
         self.bot.privmsg(reply_to, _roll(arg))
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}d [X]dN[+/-M]   Dice roller  e.g. {prefix}d 6  {prefix}d 3d6  {prefix}d 3d6+2"]
 
 
-def setup(bot):
-    return DiceModule(bot)
+def setup(bot: object) -> DiceModule:
+    return DiceModule(bot)  # type: ignore[arg-type]

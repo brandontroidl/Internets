@@ -1,14 +1,17 @@
+from __future__ import annotations
+
 import re
 import ast
 import math
 import operator
 import logging
+from typing import Any
 from .base import BotModule
 
 log = logging.getLogger("internets.calc")
 
 # Safe functions and constants exposed to the calculator.
-_FUNCS = {
+_FUNCS: dict[str, Any] = {
     "abs": abs, "round": round, "min": min, "max": max,
     "sqrt": math.sqrt, "cbrt": math.cbrt,
     "sin": math.sin, "cos": math.cos, "tan": math.tan,
@@ -20,28 +23,26 @@ _FUNCS = {
     "gcd": math.gcd,
     "hypot": math.hypot, "pow": math.pow,
 }
-# factorial is handled separately with an input cap — see _safe_factorial.
-_FUNCS["factorial"] = None  # placeholder, replaced after _safe_factorial is defined
 
-_CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
+_CONSTS: dict[str, float] = {"pi": math.pi, "e": math.e, "tau": math.tau, "inf": math.inf}
 
-_BIN_OPS = {
+_BIN_OPS: dict[type, Any] = {
     ast.Add: operator.add, ast.Sub: operator.sub,
     ast.Mult: operator.mul, ast.Div: operator.truediv,
     ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
     ast.Pow: operator.pow,
 }
 
-_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_UNARY_OPS: dict[type, Any] = {ast.UAdd: operator.pos, ast.USub: operator.neg}
 
-_IMPLICIT_MUL = [
+_IMPLICIT_MUL: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(\d)([a-zA-Z])"), r"\1*\2"),
     (re.compile(r"([a-zA-Z])(\d)"), r"\1*\2"),
 ]
 
 # Function/constant names containing digits that implicit multiplication
 # would mangle (log2 -> log*2).  Protected before regex runs.
-_DIGIT_NAMES = sorted(
+_DIGIT_NAMES: list[str] = sorted(
     [n for n in list(_FUNCS) + list(_CONSTS) if any(c.isdigit() for c in n)],
     key=len, reverse=True,
 )
@@ -50,7 +51,7 @@ _DIGIT_NAMES = sorted(
 _MAX_DEPTH = 50
 
 
-def _safe_factorial(n):
+def _safe_factorial(n: int | float) -> int:
     if not isinstance(n, (int, float)) or n < 0 or n != int(n):
         raise ValueError("factorial requires a non-negative integer")
     if n > 170:
@@ -60,7 +61,7 @@ def _safe_factorial(n):
 _FUNCS["factorial"] = _safe_factorial
 
 
-def _safe_eval(node, depth=0):
+def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
     if depth > _MAX_DEPTH:
         raise ValueError("expression too deeply nested")
     if isinstance(node, ast.Expression):
@@ -100,7 +101,7 @@ def _calc(expr: str) -> str:
     expr = expr.strip()
     # Temporarily hide function names that contain digits (log2, log10, atan2)
     # so the implicit multiplication regex doesn't split them.
-    held = {}
+    held: dict[str, str] = {}
     for i, name in enumerate(_DIGIT_NAMES):
         tag = f"\x01{i}\x01"
         expr = expr.replace(name, tag)
@@ -122,18 +123,18 @@ def _calc(expr: str) -> str:
 
 
 class CalcModule(BotModule):
-    COMMANDS = {"cc": "cmd_calc"}
+    COMMANDS: dict[str, str] = {"cc": "cmd_calc"}
 
-    def cmd_calc(self, nick, reply_to, arg):
+    def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}cc <expression>  e.g. {p}cc 2pi")
             return
         self.bot.privmsg(reply_to, f"[calc] {arg} = {_calc(arg)}")
 
-    def help_lines(self, prefix):
+    def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}cc <expression>   Calculator  e.g. {prefix}cc 2pi  {prefix}cc sqrt(144)"]
 
 
-def setup(bot):
-    return CalcModule(bot)
+def setup(bot: object) -> CalcModule:
+    return CalcModule(bot)  # type: ignore[arg-type]
