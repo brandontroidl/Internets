@@ -9,12 +9,22 @@ from .units import cf, fmt_short
 log = logging.getLogger("internets.nws")
 
 _NWS_BASE  = "https://api.weather.gov"
+_NWS_OFFICE_RE = re.compile(r"^[A-Z]{3}$")
 _ALERT_ICON: dict[str, str] = {
     "Extreme": "‼", "Severe": "!", "Moderate": "~", "Minor": "-",
 }
 
 # Type alias for structured current-conditions dict.
 WeatherDict = dict[str, float | str | None]
+
+
+def _validate_nws_url(url: str | None) -> str | None:
+    """Return url if it belongs to api.weather.gov, else None."""
+    if url and url.startswith(_NWS_BASE + "/"):
+        return url
+    if url:
+        log.warning(f"NWS URL validation failed (possible SSRF): {url!r}")
+    return None
 
 
 def _get(url: str, *, params: dict | None = None,
@@ -37,8 +47,15 @@ async def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | No
 async def current(lat: float, lon: float, grid: dict,
                   headers: dict[str, str]) -> WeatherDict | None:
     try:
-        r   = await asyncio.to_thread(_get, grid["observationStations"], headers=headers)
+        stations_url = _validate_nws_url(grid.get("observationStations"))
+        if not stations_url:
+            return None
+        r   = await asyncio.to_thread(_get, stations_url, headers=headers)
         sid = r.json()["features"][0]["properties"]["stationIdentifier"]
+        # Validate station ID (ICAO-style: alphanumeric, 3-6 chars).
+        if not re.match(r"^[A-Z0-9]{3,6}$", sid):
+            log.warning(f"NWS current: invalid station ID {sid!r}")
+            return None
         obs_r = await asyncio.to_thread(
             _get, f"{_NWS_BASE}/stations/{sid}/observations/latest", headers=headers)
         obs = obs_r.json()["properties"]
@@ -87,7 +104,10 @@ async def current(lat: float, lon: float, grid: dict,
 
 async def forecast(grid: dict, headers: dict[str, str]) -> str | None:
     try:
-        r = await asyncio.to_thread(_get, grid["forecast"], headers=headers)
+        url = _validate_nws_url(grid.get("forecast"))
+        if not url:
+            return None
+        r = await asyncio.to_thread(_get, url, headers=headers)
         periods = r.json()["properties"]["periods"]
 
         days: list[tuple[str, str, float, float | None]] = []
@@ -118,7 +138,10 @@ async def forecast(grid: dict, headers: dict[str, str]) -> str | None:
 
 async def hourly(grid: dict, headers: dict[str, str]) -> str | None:
     try:
-        r = await asyncio.to_thread(_get, grid["forecastHourly"], headers=headers)
+        url = _validate_nws_url(grid.get("forecastHourly"))
+        if not url:
+            return None
+        r = await asyncio.to_thread(_get, url, headers=headers)
         periods = r.json()["properties"]["periods"][:8]
 
         chunks: list[str] = []
@@ -173,7 +196,8 @@ async def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] |
 async def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
     try:
         office = grid.get("cwa", "")
-        if not office:
+        if not office or not _NWS_OFFICE_RE.match(office):
+            log.warning(f"NWS discussion: invalid office code {office!r}")
             return None
 
         products = await asyncio.to_thread(
@@ -185,8 +209,14 @@ async def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
         if not items:
             return None
 
+        # Validate product ID format (UUID-like alphanumeric + hyphens).
+        prod_id = items[0].get("id", "")
+        if not prod_id or not re.match(r"^[a-zA-Z0-9\-]+$", prod_id):
+            log.warning(f"NWS discussion: invalid product ID {prod_id!r}")
+            return None
+
         product = await asyncio.to_thread(
-            _get, f"{_NWS_BASE}/products/{items[0]['id']}", headers=headers)
+            _get, f"{_NWS_BASE}/products/{prod_id}", headers=headers)
         product.raise_for_status()
         text = product.json().get("productText", "")
         if not text:

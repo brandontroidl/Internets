@@ -21,10 +21,11 @@ log = logging.getLogger("internets.sender")
 class Sender:
     CAPACITY: int = 5
     REFILL: float = 1.5
+    MAX_QUEUE: int = 200  # BUG-056: Bound queue to prevent OOM during disconnects
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop   = loop
-        self._q:      asyncio.PriorityQueue[tuple[int, int, str]] = asyncio.PriorityQueue()
+        self._q:      asyncio.PriorityQueue[tuple[int, int, str]] = asyncio.PriorityQueue(maxsize=self.MAX_QUEUE)
         self._seq     = 0
         self._seq_lk  = threading.Lock()       # protects _seq from concurrent enqueue
         self._writer:  asyncio.StreamWriter | None = None
@@ -33,7 +34,7 @@ class Sender:
     def start(self, writer: asyncio.StreamWriter) -> None:
         """Begin draining the queue to *writer*.  Call from the event loop."""
         self._writer = writer
-        self._q      = asyncio.PriorityQueue()
+        self._q      = asyncio.PriorityQueue(maxsize=self.MAX_QUEUE)
         with self._seq_lk:
             self._seq = 0
         self._task = asyncio.create_task(self._drain(), name="sender")
@@ -48,13 +49,20 @@ class Sender:
                 pass
             self._task = None
 
+    def _safe_put(self, item: tuple[int, int, str]) -> None:
+        """Put an item on the queue, dropping if full.  Runs in event loop thread."""
+        try:
+            self._q.put_nowait(item)
+        except asyncio.QueueFull:
+            log.warning("Send queue full — dropping message")
+
     def enqueue(self, msg: str, priority: int = 1) -> None:
         """Thread-safe enqueue.  Safe to call from any thread."""
         with self._seq_lk:
             self._seq += 1
             seq = self._seq
         item = (priority, seq, msg)
-        self._loop.call_soon_threadsafe(self._q.put_nowait, item)
+        self._loop.call_soon_threadsafe(self._safe_put, item)
 
     # Prefixes of outgoing IRC commands whose arguments contain secrets.
     _REDACT_OUT: tuple[str, ...] = (

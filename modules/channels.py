@@ -72,18 +72,21 @@ class ChannelsModule(BotModule):
             while True:
                 await asyncio.sleep(5)
                 now = time.time()
-                with self._lock:
-                    expired = [k for k, p in self._pending.items()
-                               if now - p.created > _VERIFY_TIMEOUT]
-                    for k in expired:
-                        p = self._pending.pop(k)
-                        self.bot.privmsg(
-                            p.reply_to,
-                            f"{p.nick}: ownership verification timed out for {p.channel} "
-                            f"— try /INVITE or ask a bot admin.")
-                        log.info(f"Verify timeout: {p.nick} -> {p.channel}")
-                    self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
-                                     if now - v < _VERIFY_TIMEOUT}
+                try:
+                    with self._lock:
+                        expired = [k for k, p in self._pending.items()
+                                   if now - p.created > _VERIFY_TIMEOUT]
+                        for k in expired:
+                            p = self._pending.pop(k)
+                            self.bot.privmsg(
+                                p.reply_to,
+                                f"{p.nick}: ownership verification timed out for {p.channel} "
+                                f"— try /INVITE or ask a bot admin.")
+                            log.info(f"Verify timeout: {p.nick} -> {p.channel}")
+                        self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
+                                         if now - v < _VERIFY_TIMEOUT}
+                except Exception as e:
+                    log.warning(f"Verify cleanup error: {e}")
         except asyncio.CancelledError:
             pass
 

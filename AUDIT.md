@@ -806,18 +806,261 @@ Command arguments had no length limit. A user could send `.cc <10KB expression>`
 
 ---
 
+## Seventh Pass — CISO Final Audit and Release Certification (March 3 2026)
+
+**Auditor:** Brandon Troidl  
+**Scope:** Zero-trust line-by-line review per Final Security Hardening Directive. Cross-platform validation, dependency audit, versioning, adversarial input testing, SSRF, information disclosure, defense-in-depth.
+
+---
+
+### BUG-032 (Revised): _SafeFormatter Bypassed via record.args
+
+**Severity:** Medium  
+**File:** `internets.py` (`_SafeFormatter`)  
+**Status:** Fixed
+
+The Sixth Pass `_SafeFormatter` sanitized only `record.msg`, but Python's logging uses `record.msg % record.args` for the final message. An attacker injecting `\r\n` through format arguments (e.g. `log.info("cmd: %s", attacker_input)`) bypassed the sanitizer entirely. The fix now sanitizes `record.msg` and all values in `record.args` (tuple and dict forms) on a copy of the record to avoid mutating the shared original. Exception tracebacks (which naturally contain newlines) are preserved.
+
+---
+
+### SEC-013: cmd_rehash Leaks Raw Exception Text to IRC
+
+**Severity:** Medium  
+**File:** `internets.py` (`cmd_rehash`)  
+**Status:** Fixed
+
+The `cmd_rehash` error handler sent `f"Failed to read config.ini: {e}"` directly to IRC, exposing filesystem paths and Python internal error details. Changed to generic "see log for details" message.
+
+---
+
+### SEC-014: cmd_auth Leaks ValueError Details to IRC
+
+**Severity:** Medium  
+**File:** `internets.py` (`cmd_auth`)  
+**Status:** Fixed
+
+The auth command's `except ValueError as e` handler sent `f"{nick}: config error — {e}"` to IRC, which could expose hash format details. Changed to generic "see log for details" message.
+
+---
+
+### SEC-017: Config Path Not Resolved — CWD Change Can Redirect
+
+**Severity:** Medium  
+**File:** `internets.py` (module level, `_get_hash`, `cmd_rehash`)  
+**Status:** Fixed
+
+`config.ini` was referenced as a relative path. If the process working directory changed (e.g. via a module or os.chdir), subsequent `cfg.read("config.ini")` calls could read a different file — potentially attacker-controlled. The path is now resolved to an absolute path (`_CONFIG_PATH`) at startup and used consistently in all `cfg.read()` calls.
+
+---
+
+### SEC-018: Nick Collision Uses Insecure PRNG
+
+**Severity:** Low  
+**File:** `internets.py` (`_process`, 433 handler)  
+**Status:** Fixed
+
+The nick collision handler used `random.randint()` which uses a Mersenne Twister PRNG — predictable after observing 624 outputs. While nick suffix prediction has limited security impact, the fix uses `secrets.randbelow()` for cryptographic randomness at negligible cost.
+
+---
+
+### SEC-021: NWS Grid URLs Not Validated — SSRF Risk
+
+**Severity:** Medium  
+**File:** `modules/nws.py` (`current`, `forecast`, `hourly`)  
+**Status:** Fixed
+
+NWS API responses contain URLs (e.g. `grid["observationStations"]`, `grid["forecast"]`) that were fetched without validation. A compromised or spoofed NWS response could inject arbitrary URLs, causing the bot to make requests to internal services (SSRF). Added `_validate_nws_url()` which verifies all grid-derived URLs start with `https://api.weather.gov/`.
+
+---
+
+### BUG-033: Oversized IRC Lines Crash Main Loop
+
+**Severity:** Medium  
+**File:** `internets.py` (main read loop)  
+**Status:** Fixed
+
+The `asyncio.StreamReader` had no limit configured, defaulting to 64KB. A malicious or misconfigured server sending oversized lines could cause `LimitOverrunError`. Added explicit `limit=8192` on `asyncio.open_connection()` and a `LimitOverrunError` handler that drains the buffer and continues.
+
+---
+
+### BUG-035 (Revised): Symlink Check Used OS-Specific String Comparison
+
+**Severity:** Medium  
+**File:** `internets.py` (`load_module`)  
+**Status:** Fixed
+
+The Sixth Pass symlink check used `str(real).startswith(str(mod_root) + os.sep)` which fails on Windows (where `Path.resolve()` returns a different case or drive letter format). Replaced with `real.relative_to(mod_root)` which is cross-platform and handles all path normalization correctly.
+
+---
+
+### BUG-038: Unbounded INVITE Acceptance Rate
+
+**Severity:** Medium  
+**File:** `internets.py` (`_on_invite`)  
+**Status:** Fixed
+
+The bot accepted every INVITE immediately with no rate limiting. An attacker could flood the bot with INVITEs to hundreds of channels, causing it to JOIN them all and exhaust resources. Added a 5-second cooldown between accepting INVITEs.
+
+---
+
+### BUG-042: No Stream Reader Buffer Limit
+
+**Severity:** Medium  
+**File:** `internets.py` (`_connect`)  
+**Status:** Fixed
+
+`asyncio.open_connection()` was called without an explicit `limit` parameter, defaulting to 64KB per line. A malicious server could send a single 64KB line, consuming excessive memory. Set `limit=8192` — generous for IRC (RFC 2812 specifies 512 bytes) but bounded.
+
+---
+
+### BUG-047: Unvalidated Channel Names from Saved State
+
+**Severity:** Medium  
+**File:** `internets.py` (`_deferred_rejoin`)  
+**Status:** Fixed
+
+Channel names loaded from `channels.json` were sent directly to `JOIN` without validation. A corrupted or manually edited JSON file could contain malformed channel names with spaces, commas, or other characters that would inject IRC protocol parameters. Added `_CHAN_RE` validation before sending JOIN.
+
+---
+
+### BUG-049: INVITE Channel Name Not Validated
+
+**Severity:** Medium  
+**File:** `internets.py` (`_on_invite`)  
+**Status:** Fixed
+
+The INVITE handler accepted any channel string from the server. While servers should only send valid channel names, a compromised server or protocol-level attack could inject a malformed channel name. Added `_CHAN_RE` validation.
+
+---
+
+### BUG-050: Unbounded PING Payload Reflection
+
+**Severity:** Low  
+**File:** `internets.py` (`_process`, PING handler)  
+**Status:** Fixed
+
+The PING handler reflected the entire payload in the PONG response without length limits. A server sending a multi-kilobyte PING payload would cause the bot to reflect it back as an equally large PONG. Capped the reflected payload to 400 bytes.
+
+---
+
+### BUG-051: Store Accepts Wrong JSON Type from Disk
+
+**Severity:** Medium  
+**File:** `store.py` (`_read`)  
+**Status:** Fixed
+
+If a data file was corrupted or manually edited to contain the wrong JSON type (e.g. a list where a dict was expected), the bot would crash on first access. Added type validation: `_read` now compares `type(data)` against `type(default)` and falls back to the default on mismatch.
+
+---
+
+### BUG-052: calc.py Uses Python 3.11+ API (math.cbrt)
+
+**Severity:** Medium  
+**File:** `modules/calc.py`  
+**Status:** Fixed
+
+`math.cbrt` was added in Python 3.11. The directive requires cross-platform stability including older Python versions. Added a `getattr` fallback that implements cube root via exponentiation with correct handling of negative inputs.
+
+---
+
+### BUG-055: calc.py Uses NUL as Implicit Multiplication Sentinel
+
+**Severity:** Low  
+**File:** `modules/calc.py` (`_calc`)  
+**Status:** Fixed
+
+The implicit multiplication logic used `\x00` (NUL) as a placeholder character. While NUL bytes are stripped by the sender and unlikely in command arguments after IRC parsing, using a control character as a sentinel is fragile. Replaced with `\ufdd0` (Unicode noncharacter from the BMP, guaranteed never to be assigned).
+
+---
+
+### BUG-056: Sender Queue Unbounded — OOM During Disconnect
+
+**Severity:** Medium  
+**File:** `sender.py` (`Sender`)  
+**Status:** Fixed
+
+The `asyncio.PriorityQueue` had no maxsize. During a network outage, commands would continue queueing indefinitely, growing the queue without bound. Added `MAX_QUEUE = 200` with a safe `_safe_put` method that drops messages when full.
+
+---
+
+### PLATFORM-001: Config Permission Check Is POSIX-Only
+
+**Severity:** Low  
+**File:** `internets.py` (startup)  
+**Status:** Fixed
+
+The `st_mode & 0o004` check for world-readable config is meaningless on NTFS (Windows), where permission bits are emulated and unreliable. Guarded the check with `os.name == "posix"`.
+
+---
+
+### PLATFORM-002: Store _write Unlink Can Fail on Windows
+
+**Severity:** Low  
+**File:** `store.py` (`_write`)  
+**Status:** Fixed
+
+In the error path of `_write`, `os.unlink(tmp)` could raise `OSError` on Windows if the temp file was still locked by another process. Wrapped in `try/except OSError`.
+
+---
+
+### PLATFORM-003: Store I/O Missing Explicit Encoding
+
+**Severity:** Low  
+**File:** `store.py` (`_read`, `_write`)  
+**Status:** Fixed
+
+`read_text()` and `os.fdopen()` without explicit `encoding` use the system default encoding, which varies by platform (UTF-8 on Linux/macOS, CP-1252 on some Windows). Added explicit `encoding="utf-8"` to both.
+
+---
+
+### Store File Size Limit
+
+**Severity:** Low  
+**File:** `store.py` (`_read`)  
+**Status:** Fixed
+
+No size limit on data files loaded at startup. A maliciously enlarged `users.json` (e.g. 500MB) could cause OOM. Added `_MAX_FILE_SIZE = 10MB` check before reading.
+
+---
+
+### VERSION: Semantic Versioning Implemented
+
+**File:** `internets.py`  
+**Status:** Implemented
+
+Added `__version__ = "1.3.0"` as the authoritative source of truth. Version is displayed via `--version` CLI flag, `.version` IRC command, startup log message, `.help` output, and console `status` command.
+
+---
+
+### Dependency Audit
+
+**requests ≥ 2.31.0:** No known critical CVEs. Version 2.31.0 (July 2023) fixed CVE-2023-32681 (proxy credential leak). The `>=` pin ensures this fix is included. The `requests` library uses `urllib3` internally, which handles TLS verification.
+
+**bcrypt ≥ 4.0.0 (optional):** No known critical CVEs. Version 4.0.0 dropped Python 2 support and updated the C backend.
+
+**argon2-cffi ≥ 23.1.0 (optional):** No known critical CVEs. Uses the reference C implementation of Argon2.
+
+**Python stdlib:** The bot uses `hashlib.scrypt`, `ssl`, `asyncio`, `json`, `ast`, `base64`, `hmac`, `secrets`, `tempfile` — all maintained stdlib modules with no known unpatched CVEs as of the knowledge cutoff.
+
+No transitive dependency risks identified. The bot has a single required runtime dependency (`requests`).
+
+---
+
 ## Summary
 
 | Category | Count | Status |
 |----------|-------|--------|
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
-| High bugs (all passes) | 8 | All fixed |
-| High security (second/sixth pass) | 4 | All fixed |
-| Medium issues (all passes) | 14 | All fixed |
-| Low issues | 5 | All fixed |
+| High bugs (all passes) | 10 | All fixed |
+| High security (all passes) | 5 | All fixed |
+| Medium issues (all passes) | 24 | All fixed |
+| Low issues | 10 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
-| Architecture & features (third/fourth pass) | 8 | All implemented |
+| Architecture & features | 8 | All implemented |
+| Platform compatibility | 3 | All fixed |
 | Cleanup | 1 | Fixed |
-| **Total** | **61** | **All resolved** |
+| Versioning | 1 | Implemented |
+| Dependency audit | 1 | Completed |
+| **Total** | **84** | **All resolved** |

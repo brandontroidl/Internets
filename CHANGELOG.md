@@ -3,6 +3,111 @@
 All notable changes to the Internets IRC bot are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] — 2026-03-03
+
+Security hardening release. Full zero-trust line-by-line audit per the Final
+Security Hardening Directive.  84 total findings across seven audit passes,
+all resolved.  119 automated tests.  Cross-platform validation for UNIX, BSD,
+Linux, macOS, Windows, WSL/WSL2, Cygwin, MinGW, and MSYS2.
+
+### Added
+
+- **Semantic versioning** — `__version__` constant in `internets.py` as the
+  single authoritative source of truth.  Displayed via `--version` CLI flag,
+  `.version` IRC command, `.help` output, startup log, and console `status`.
+
+- **`.version` command** — reports bot version and repository URL.
+
+### Security
+
+- **TLS 1.2 minimum enforced** — `ssl_ctx.minimum_version = TLSv1_2` blocks
+  deprecated TLS 1.0/1.1 connections.  See AUDIT.md SEC-009.
+
+- **Log injection prevented** — `_SafeFormatter` sanitizes both `record.msg`
+  and `record.args` (tuple and dict forms) to strip CR/LF/NUL.  Works on a
+  record copy to avoid mutating shared state.  See AUDIT.md SEC-007, BUG-032.
+
+- **Error info disclosure eliminated** — `_run_cmd`, `load_module`,
+  `unload_module`, `cmd_rehash`, and `cmd_auth` all send generic "see log for
+  details" messages to IRC instead of raw Python exception text.
+  See AUDIT.md SEC-008, SEC-013, SEC-014.
+
+- **Config path resolved at startup** — `config.ini` is resolved to an
+  absolute path (`_CONFIG_PATH`) once, preventing CWD-change attacks from
+  redirecting to a malicious config.  See AUDIT.md SEC-017.
+
+- **Nick collision uses cryptographic RNG** — Replaced `random.randint` with
+  `secrets.randbelow` in the 433 nick-in-use handler.  See AUDIT.md SEC-018.
+
+- **NWS SSRF prevention** — All URLs derived from NWS API grid responses are
+  validated against `https://api.weather.gov/` before fetching.
+  See AUDIT.md SEC-021.
+
+- **PRIVMSG/NOTICE target validation** — Rejects empty or space-containing
+  targets to prevent protocol parameter injection.  See AUDIT.md BUG-027.
+
+- **Symlink traversal blocked (cross-platform)** — Module loader uses
+  `Path.relative_to()` instead of string comparison.  See AUDIT.md BUG-028,
+  BUG-035.
+
+- **IRC 512-byte line limit enforced** — Sender truncates outgoing lines with
+  UTF-8-safe boundary detection.  See AUDIT.md BUG-026.
+
+- **Concurrent task cap** — Active command tasks capped at 50 to prevent
+  resource exhaustion.  See AUDIT.md BUG-030.
+
+- **Command argument length cap** — Arguments exceeding 400 chars rejected
+  before reaching handlers.  See AUDIT.md BUG-031.
+
+- **Sender queue bounded** — `PriorityQueue(maxsize=200)` prevents OOM during
+  prolonged disconnects.  See AUDIT.md BUG-056.
+
+- **INVITE rate limiting** — 5-second cooldown between accepting INVITEs to
+  prevent flood abuse.  See AUDIT.md BUG-038.
+
+- **Channel name validation** — All channel names (from saved state, INVITEs,
+  and user commands) validated against `_CHAN_RE` before use in JOIN.
+  See AUDIT.md BUG-047, BUG-049.
+
+- **PING payload capped** — Reflected PONG payload limited to 400 bytes.
+  See AUDIT.md BUG-050.
+
+- **Stream reader buffer limit** — `asyncio.open_connection(limit=8192)`
+  prevents oversized line attacks.  See AUDIT.md BUG-042, BUG-033.
+
+- **Config permission warning (POSIX only)** — Warns on startup if
+  `config.ini` is world-readable.  Guarded for POSIX; no-op on Windows.
+  See AUDIT.md BUG-029, PLATFORM-001.
+
+### Fixed
+
+- **Store type validation on load** — `_read` validates that loaded JSON
+  matches the expected container type, falling back to defaults on mismatch.
+  See AUDIT.md BUG-051.
+
+- **Store file size limit** — Data files exceeding 10MB are rejected at load
+  time to prevent OOM.
+
+- **Store I/O uses explicit UTF-8** — `read_text(encoding="utf-8")` and
+  `os.fdopen(fd, "w", encoding="utf-8")` prevent platform-dependent encoding.
+  See AUDIT.md PLATFORM-003.
+
+- **Store temp file cleanup is exception-safe** — `os.unlink(tmp)` wrapped in
+  `try/except OSError` for Windows compatibility.  See AUDIT.md PLATFORM-002.
+
+- **calc.py `math.cbrt` fallback** — Uses `getattr` fallback for Python < 3.11
+  compatibility.  See AUDIT.md BUG-052.
+
+- **calc.py NUL sentinel replaced** — Implicit multiplication placeholder
+  changed from `\x00` to `\ufdd0` (Unicode noncharacter).
+  See AUDIT.md BUG-055.
+
+### Testing
+
+- **119 automated tests** covering protocol parsing, store operations, rate
+  limiting, calculator safety, sender behavior, authentication, async
+  architecture, and all security hardening fixes from passes six and seven.
+
 ## [1.2.0] — 2026-03-04
 
 Full async conversion and quality pass.  The entire bot now runs on a single

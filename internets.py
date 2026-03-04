@@ -9,12 +9,15 @@ asyncio.to_thread() inside the handler.
 
 Core commands: .help .modules .auth .deauth
                .load .unload .reload .reloadall .restart .rehash
+               .version
 
 Modules live in modules/. Each exposes setup(bot) -> BotModule.
 See modules/base.py for the interface.
 """
 
 from __future__ import annotations
+
+__version__ = "1.3.0"
 
 import asyncio
 import ssl
@@ -46,7 +49,8 @@ from protocol import (
 )
 
 cfg = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
-cfg.read("config.ini")
+_CONFIG_PATH = str(Path("config.ini").resolve())
+cfg.read(_CONFIG_PATH)
 
 SERVER    = cfg["irc"]["server"]
 PORT      = int(cfg["irc"]["port"])
@@ -135,6 +139,7 @@ debug examples:
 
 interactive console (type 'help' at the > prompt while running):
   debug, loglevel, status, shutdown""")
+_cli.add_argument("--version", action="version", version=f"Internets {__version__}")
 _cli.add_argument("--debug", nargs="*", metavar="SUBSYSTEM", default=None,
                    help="enable debug output.  No args = global debug.  "
                         "With args = per-subsystem (e.g. --debug weather store)")
@@ -156,13 +161,28 @@ LOG_FMT     = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 
 class _SafeFormatter(logging.Formatter):
-    """Formatter that strips CR/LF/NUL from log messages to prevent log injection."""
+    """Formatter that strips CR/LF/NUL from user-controlled log data.
+
+    Sanitizes record.msg and record.args to prevent log injection via
+    format-string interpolation (e.g. ``log.info("cmd: %s", attacker_input)``).
+    Works on a *copy* of the record so other handlers see the original.
+    Exception tracebacks (which naturally contain newlines) are preserved.
+    """
 
     _CONTROL_RE = re.compile(r"[\r\n\x00]")
 
+    def _clean(self, val: Any) -> Any:
+        return self._CONTROL_RE.sub("", val) if isinstance(val, str) else val
+
     def format(self, record: logging.LogRecord) -> str:
-        record.msg = self._CONTROL_RE.sub("", str(record.msg))
-        return super().format(record)
+        safe = logging.makeLogRecord(record.__dict__)
+        safe.msg = self._clean(str(safe.msg))
+        if safe.args:
+            if isinstance(safe.args, dict):
+                safe.args = {k: self._clean(v) for k, v in safe.args.items()}
+            elif isinstance(safe.args, tuple):
+                safe.args = tuple(self._clean(a) for a in safe.args)
+        return super().format(safe)
 
 
 class _DebugFilter(logging.Filter):
@@ -247,6 +267,7 @@ def _setup_logging() -> _DebugFilter:
 
 _log_filter = _setup_logging()
 log = logging.getLogger("internets")
+log.info(f"Internets v{__version__} starting")
 
 if _args.debug is not None:
     if len(_args.debug) == 0:
@@ -261,7 +282,7 @@ if _args.debug is not None:
 
 
 def _get_hash() -> str:
-    cfg.read("config.ini")
+    cfg.read(_CONFIG_PATH)
     return cfg["admin"].get("password_hash", "").strip()
 
 
@@ -280,12 +301,14 @@ def _validate_hash() -> None:
 _validate_hash()
 
 # BUG-029: Warn if config file is world-readable (contains credentials).
-try:
-    _cfg_stat = os.stat("config.ini")
-    if _cfg_stat.st_mode & 0o004:
-        log.warning("config.ini is world-readable — consider: chmod 640 config.ini")
-except OSError:
-    pass
+# Only meaningful on POSIX — NTFS does not use Unix permission bits.
+if os.name == "posix":
+    try:
+        _cfg_stat = os.stat(_CONFIG_PATH)
+        if _cfg_stat.st_mode & 0o004:
+            log.warning("config.ini is world-readable — consider: chmod 640 config.ini")
+    except OSError:
+        pass
 
 _MODE_VALID = re.compile(r"^[a-zA-Z+\- ]*$")
 for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
@@ -311,6 +334,7 @@ class IRCBot:
     _CORE: dict[str, str] = {
         "help":      "cmd_help",
         "modules":   "cmd_modules",
+        "version":   "cmd_version",
         "auth":      "cmd_auth",
         "deauth":    "cmd_deauth",
         "load":      "cmd_load",
@@ -369,6 +393,7 @@ class IRCBot:
         self._quit_msg = "QUIT :Shutting down"
         self._restart_flag = False
         self._tasks: list[asyncio.Task] = []
+        self._last_invite_time: float = 0.0
 
     # ── Outbound messaging (sync, thread-safe via Sender) ────────────
 
@@ -441,7 +466,9 @@ class IRCBot:
                 return False, f"'{path}' not found."
             real = path.resolve()
             mod_root = MODULES_DIR.resolve()
-            if not str(real).startswith(str(mod_root) + os.sep) and real.parent != mod_root:
+            try:
+                real.relative_to(mod_root)
+            except ValueError:
                 log.warning(f"Module {name!r} resolves outside modules dir: {real}")
                 return False, f"'{name}' blocked — path escapes modules directory."
             try:
@@ -504,6 +531,9 @@ class IRCBot:
         if not arg:
             self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
             return
+        if len(arg) > 128:
+            self.preply(nick, reply_to, f"{nick}: password too long.")
+            return
 
         k = nick.lower()
         now = time.time()
@@ -525,7 +555,8 @@ class IRCBot:
         try:
             ok = await asyncio.to_thread(verify_password, arg.strip(), h)
         except ValueError as e:
-            self.preply(nick, reply_to, f"{nick}: config error — {e}")
+            log.error(f"Auth config error for {nick}: {e}")
+            self.preply(nick, reply_to, f"{nick}: config error — see log for details.")
             return
         if ok:
             self._auth_fails.pop(k, None)
@@ -547,8 +578,8 @@ class IRCBot:
     async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
         p     = CMD_PREFIX
         lines = [
-            f"── {self._nick} ──────────────────────────────────────────────────",
-            f"  {p}help  {p}modules  {p}auth <pw>",
+            f"── {self._nick} v{__version__} ──────────────────────────────────────────",
+            f"  {p}help  {p}modules  {p}version  {p}auth <pw>",
         ]
         if self.is_admin(nick):
             lines += [
@@ -569,6 +600,11 @@ class IRCBot:
         lines.append(f"  In PM the '{p}' prefix is optional.")
         for line in lines:
             self.preply(nick, reply_to, line)
+
+    async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
+        self.preply(nick, reply_to,
+            f"Internets {__version__} — async modular IRC bot  "
+            f"https://github.com/brandontroidl/Internets")
 
     async def cmd_modules(self, nick: str, reply_to: str, arg: str | None) -> None:
         with self._mod_lock:
@@ -628,9 +664,11 @@ class IRCBot:
     async def cmd_rehash(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         try:
-            cfg.read("config.ini")
+            cfg.read(_CONFIG_PATH)
         except Exception as e:
-            self.preply(nick, reply_to, f"Failed to read config.ini: {e}"); return
+            log.error(f"Rehash config read failed: {e}")
+            self.preply(nick, reply_to, f"{nick}: failed to read config — see log for details.")
+            return
 
         new_level = cfg["logging"].get("level", "INFO").upper()
         lvl = getattr(logging, new_level, None)
@@ -900,8 +938,11 @@ class IRCBot:
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode    = ssl.CERT_NONE
 
+        # BUG-042: Limit reader buffer to prevent malicious oversized lines.
+        # RFC 2812 specifies 512 bytes max; 8 KB gives generous headroom for
+        # MOTD, ISUPPORT, and non-standard extensions.
         self._reader, self._writer = await asyncio.open_connection(
-            SERVER, PORT, ssl=ssl_ctx,
+            SERVER, PORT, ssl=ssl_ctx, limit=8192,
         )
 
         self._nick = NICKNAME
@@ -925,6 +966,9 @@ class IRCBot:
             await asyncio.sleep(90)
             self.send(f"PING :{SERVER}", priority=0)
 
+    # Valid IRC channel name: starts with #&+!, no spaces/commas/BEL, 1-50 chars.
+    _CHAN_RE = re.compile(r"^[#&+!][^\s,\x07]{1,49}$")
+
     async def _deferred_rejoin(self) -> None:
         """Wait for NickServ confirmation (up to 10s) then rejoin saved channels."""
         if NS_PW:
@@ -942,12 +986,27 @@ class IRCBot:
             log.info("No saved channels — waiting for INVITE.")
             return
         for ch in saved:
+            if not self._CHAN_RE.match(ch):
+                log.warning(f"Skipping invalid channel name from saved list: {ch!r}")
+                continue
             self.send(f"JOIN {ch}")
             log.info(f"Rejoining {ch}")
 
     # ── Channel state ────────────────────────────────────────────────
 
+    _INVITE_COOLDOWN = 5.0  # seconds between accepting INVITEs
+
     def _on_invite(self, nick: str, channel: str) -> None:
+        # BUG-049: Validate channel name format before joining.
+        if not self._CHAN_RE.match(channel):
+            log.warning(f"Ignored INVITE to invalid channel {channel!r} by {nick}")
+            return
+        # BUG-038: Rate-limit INVITE acceptance to prevent flood abuse.
+        now = time.time()
+        if now - self._last_invite_time < self._INVITE_COOLDOWN:
+            log.info(f"INVITE to {channel} by {nick} rate-limited")
+            return
+        self._last_invite_time = now
         log.info(f"Invited to {channel} by {nick}")
         self.send(f"JOIN {channel}")
 
@@ -972,7 +1031,8 @@ class IRCBot:
         """
         if line.startswith("PING"):
             payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
-            self.send(f"PONG :{payload}", priority=0)
+            # Cap PONG payload to prevent reflecting oversized data.
+            self.send(f"PONG :{payload[:400]}", priority=0)
             return
 
         line = strip_tags(line)
@@ -1055,8 +1115,8 @@ class IRCBot:
             if len(self._nick) < len(base) + 3:
                 self._nick = self._nick + "_"
             else:
-                import random
-                self._nick = base + str(random.randint(10, 99))
+                import secrets
+                self._nick = base + str(secrets.randbelow(90) + 10)
             self.send(f"NICK {self._nick}", priority=0)
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
@@ -1232,6 +1292,12 @@ class IRCBot:
 
         nick, hostmask, target, text = m.groups()
         text     = text.strip()
+
+        # BUG-054: Ignore CTCP messages (wrapped in \x01).
+        # CTCP VERSION, ACTION, TIME, etc. should not be processed as commands.
+        if text.startswith("\x01"):
+            return
+
         is_pm    = target.lower() == self._nick.lower()
         reply_to = nick if is_pm else target
 
@@ -1311,6 +1377,15 @@ class IRCBot:
                 except asyncio.TimeoutError:
                     # No data in 300s — connection is probably dead.
                     raise ConnectionResetError("Read timeout (300s)")
+                except asyncio.LimitOverrunError:
+                    # BUG-033: Server sent a line exceeding our limit.
+                    # Drain the reader buffer and skip this line.
+                    log.warning("Oversized IRC line received (>8KB) — discarding")
+                    try:
+                        await self._reader.readuntil(b"\n")
+                    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+                        pass  # best effort
+                    continue
 
                 if not raw:
                     raise ConnectionResetError("Server closed connection")
@@ -1481,6 +1556,7 @@ async def _run_console(bot: IRCBot) -> None:
                 print("usage: loglevel [LEVEL | <logger> LEVEL]")
 
         elif cmd == "status":
+            print(f"  version  = {__version__}")
             print(f"  nick     = {bot._nick}")
             print(f"  channels = {', '.join(sorted(bot.active_channels.snapshot())) or '(none)'}")
             with bot._mod_lock:
@@ -1527,8 +1603,15 @@ async def _main() -> None:
             pass
 
     if bot._restart_flag:
-        log.info("Executing restart via os.execv ...")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        log.info("Executing restart ...")
+        if os.name == "nt":
+            # os.execv on Windows spawns a child instead of replacing the
+            # process, leaving the parent alive.  Use subprocess + exit.
+            import subprocess
+            subprocess.Popen([sys.executable] + sys.argv)
+            sys.exit(0)
+        else:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 if __name__ == "__main__":

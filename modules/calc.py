@@ -12,7 +12,7 @@ log = logging.getLogger("internets.calc")
 
 _FUNCS: dict[str, Any] = {
     "abs": abs, "round": round, "min": min, "max": max,
-    "sqrt": math.sqrt, "cbrt": math.cbrt,
+    "sqrt": math.sqrt, "cbrt": getattr(math, "cbrt", lambda x: x ** (1/3) if x >= 0 else -((-x) ** (1/3))),
     "sin": math.sin, "cos": math.cos, "tan": math.tan,
     "asin": math.asin, "acos": math.acos, "atan": math.atan, "atan2": math.atan2,
     "sinh": math.sinh, "cosh": math.cosh, "tanh": math.tanh,
@@ -94,9 +94,12 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
 
 def _calc(expr: str) -> str:
     expr = expr.strip()
+    # Strip CTCP markers (\x01) — they can appear in IRC and collide with
+    # the implicit-multiplication placeholder logic.
+    expr = expr.replace("\x01", "")
     held: dict[str, str] = {}
     for i, name in enumerate(_DIGIT_NAMES):
-        tag = f"\x01{i}\x01"
+        tag = f"\ufdd0{i}\ufdd0"  # Unicode noncharacter — safe sentinel
         expr = expr.replace(name, tag)
         held[tag] = name
     for pattern, sub in _IMPLICIT_MUL:

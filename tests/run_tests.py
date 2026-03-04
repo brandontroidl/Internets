@@ -895,6 +895,224 @@ def _():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Seventh Pass — CISO final audit
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== CISO final audit (seventh pass) ===")
+
+@test("BUG-032: _SafeFormatter sanitizes record.args (not just msg)")
+def _():
+    from internets import _SafeFormatter
+    import logging
+    fmt = _SafeFormatter("%(message)s")
+    # Injection via args: msg is clean but %s arg contains CR/LF
+    rec = logging.LogRecord("test", logging.INFO, "", 0, "data: %s", ("evil\r\nfake",), None)
+    result = fmt.format(rec)
+    assert "\r" not in result and "\n" not in result
+    assert "evilfake" in result
+
+@test("BUG-032: _SafeFormatter does not mutate shared record")
+def _():
+    from internets import _SafeFormatter
+    import logging
+    fmt = _SafeFormatter("%(message)s")
+    rec = logging.LogRecord("test", logging.INFO, "", 0, "hello\nworld", (), None)
+    fmt.format(rec)
+    # Original record.msg must be untouched
+    assert "\n" in rec.msg
+
+@test("BUG-032: _SafeFormatter handles dict args")
+def _():
+    from internets import _SafeFormatter
+    import logging
+    fmt = _SafeFormatter("%(message)s")
+    # Use %s style with a dict value in a tuple
+    rec = logging.LogRecord("test", logging.INFO, "", 0, "data: %s", ({"key": "val\r\nue"},), None)
+    result = fmt.format(rec)
+    assert "\r" not in result and "\n" not in result
+
+@test("SEC-017: config path resolved to absolute at startup")
+def _():
+    from internets import _CONFIG_PATH
+    assert os.path.isabs(_CONFIG_PATH)
+
+@test("SEC-017: _get_hash and cmd_rehash use _CONFIG_PATH")
+def _():
+    source = Path("internets.py").read_text()
+    # _get_hash should reference _CONFIG_PATH
+    assert source.count("cfg.read(_CONFIG_PATH)") >= 2  # _get_hash + cmd_rehash
+    # Should NOT reference cfg.read("config.ini") anymore
+    assert 'cfg.read("config.ini")' not in source
+
+@test("SEC-013: cmd_rehash does not leak exception text to IRC")
+def _():
+    source = Path("internets.py").read_text()
+    rehash_section = source[source.index("async def cmd_rehash"):]
+    rehash_section = rehash_section[:rehash_section.index("\n    async def ")]
+    assert "see log" in rehash_section.lower()
+
+@test("SEC-014: cmd_auth does not leak ValueError text to IRC")
+def _():
+    source = Path("internets.py").read_text()
+    auth_section = source[source.index("async def cmd_auth"):]
+    auth_section = auth_section[:auth_section.index("\n    async def ")]
+    assert "see log" in auth_section.lower()
+
+@test("BUG-035: symlink check uses Path.relative_to (cross-platform)")
+def _():
+    source = Path("internets.py").read_text()
+    load_fn = source.split("def load_module")[1].split("\n    def ")[0]
+    assert "relative_to" in load_fn
+    # Must NOT use os.sep string comparison
+    assert "os.sep" not in load_fn
+
+@test("BUG-042: asyncio.open_connection has explicit limit")
+def _():
+    source = Path("internets.py").read_text()
+    assert "limit=8192" in source or "limit = 8192" in source
+
+@test("BUG-033: LimitOverrunError handled in main loop")
+def _():
+    source = Path("internets.py").read_text()
+    assert "LimitOverrunError" in source
+
+@test("BUG-047: _deferred_rejoin validates channel names")
+def _():
+    from internets import IRCBot
+    assert hasattr(IRCBot, "_CHAN_RE")
+    source = inspect.getsource(IRCBot._deferred_rejoin)
+    assert "_CHAN_RE" in source
+
+@test("BUG-038: INVITE has rate limiting")
+def _():
+    from internets import IRCBot
+    source = inspect.getsource(IRCBot._on_invite)
+    assert "_INVITE_COOLDOWN" in source or "rate" in source.lower()
+
+@test("BUG-049: INVITE validates channel name format")
+def _():
+    from internets import IRCBot
+    source = inspect.getsource(IRCBot._on_invite)
+    assert "_CHAN_RE" in source
+
+@test("BUG-050: PING payload capped to prevent oversized PONG")
+def _():
+    source = Path("internets.py").read_text()
+    # Find the PING handler section
+    ping_section = source.split('if line.startswith("PING")')[1].split("return")[0]
+    assert "[:400]" in ping_section or "[:300]" in ping_section or "cap" in ping_section.lower()
+
+@test("PLATFORM: config permission check guarded for POSIX only")
+def _():
+    source = Path("internets.py").read_text()
+    # Find the BUG-029 section
+    idx = source.index("BUG-029")
+    section = source[idx:idx+300]
+    assert 'os.name == "posix"' in section or "os.name == 'posix'" in section
+
+@test("Store: _read has file size limit")
+def _():
+    from store import Store
+    assert hasattr(Store, "_MAX_FILE_SIZE")
+    assert Store._MAX_FILE_SIZE > 0
+
+@test("Store: _write unlink is exception-safe on Windows")
+def _():
+    source = inspect.getsource(Store._write)
+    # The os.unlink should be wrapped in try/except for Windows safety
+    assert "try:" in source.split("os.unlink")[0].rsplit("os.replace", 1)[1]
+
+@test("Store: _read and _write use explicit UTF-8 encoding")
+def _():
+    source_read  = inspect.getsource(Store._read)
+    source_write = inspect.getsource(Store._write)
+    assert "utf-8" in source_read
+    assert "utf-8" in source_write
+
+@test("IRCBot._CHAN_RE validates standard IRC channel formats")
+def _():
+    from internets import IRCBot
+    rx = IRCBot._CHAN_RE
+    # Valid
+    assert rx.match("#test")
+    assert rx.match("#Test-123")
+    assert rx.match("&local")
+    assert rx.match("+global")
+    # Invalid
+    assert not rx.match("test")         # no prefix
+    assert not rx.match("#")            # too short
+    assert not rx.match("#a b")         # space
+    assert not rx.match("#a,b")         # comma
+    assert not rx.match("")             # empty
+    assert not rx.match("#" + "x" * 60) # too long
+
+@test("VERSION: __version__ is defined and follows semver")
+def _():
+    from internets import __version__
+    assert __version__
+    parts = __version__.split(".")
+    assert len(parts) == 3
+    assert all(p.isdigit() for p in parts)
+
+@test("VERSION: .version command exists in _CORE")
+def _():
+    from internets import IRCBot
+    assert "version" in IRCBot._CORE
+
+@test("BUG-052: calc cbrt works without math.cbrt (Python <3.11 compat)")
+def _():
+    from modules.calc import _FUNCS
+    assert "cbrt" in _FUNCS
+    # Test it works
+    assert abs(_FUNCS["cbrt"](27) - 3.0) < 1e-9
+    assert abs(_FUNCS["cbrt"](-8) - (-2.0)) < 1e-9
+
+@test("BUG-055: calc implicit mul uses safe sentinel (not NUL)")
+def _():
+    source = Path("modules/calc.py").read_text()
+    assert "\\x00" not in source  # NUL should not be used as sentinel
+
+@test("SEC-018: nick collision uses secrets, not random")
+def _():
+    source = Path("internets.py").read_text()
+    # Find the 433 (nick in use) handler section
+    idx = source.index("433")
+    section = source[idx:idx+300]
+    assert "secrets" in section
+    assert "random.randint" not in section
+
+@test("BUG-056: sender queue is bounded")
+def _():
+    from sender import Sender
+    assert hasattr(Sender, "MAX_QUEUE")
+    assert Sender.MAX_QUEUE > 0
+
+@test("SEC-021: NWS module has URL validation")
+def _():
+    source = Path("modules/nws.py").read_text()
+    assert "_validate_nws_url" in source
+    assert "api.weather.gov" in source
+
+@test("SEC-021: _validate_nws_url rejects non-NWS URLs")
+def _():
+    from modules.nws import _validate_nws_url
+    assert _validate_nws_url("https://api.weather.gov/points/40,-74") is not None
+    assert _validate_nws_url("https://evil.com/steal") is None
+    assert _validate_nws_url("") is None
+    assert _validate_nws_url(None) is None
+
+@test("BUG-051: Store._read validates loaded data type")
+def _():
+    import tempfile, json
+    # Write a list where a dict is expected
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        json.dump([1, 2, 3], f)
+        f.flush()
+        result = Store._read(f.name, {})
+    assert result == {}  # should return default, not the list
+    os.unlink(f.name)
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")

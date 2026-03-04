@@ -1,8 +1,14 @@
 # Internets
 
+**v1.3.0** — Security hardening release (2026-03-03)
+
 A modular IRC bot built on Python's asyncio and RFC 2812. Handles worldwide weather, calculator, dice, translation, and Urban Dictionary lookups. Designed around a plugin architecture with hot-reload so you never take it offline to ship changes.
 
 US weather pulls from weather.gov (NWS API). International weather uses Open-Meteo. Neither requires an API key.
+
+**Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
+**Python:** 3.10+  
+**Dependencies:** `requests` (single runtime dependency).  Optional: `bcrypt`, `argon2-cffi` for stronger password hashing.
 
 ## Architecture
 
@@ -241,29 +247,33 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 ## Security
 
-**Admin auth brute-force protection:** After 5 failed password attempts, the nick is locked out for 5 minutes. Counter resets after the lockout expires or on successful auth.
+The bot has been through seven audit passes with 84 findings, all resolved. See AUDIT.md for the complete finding inventory.
 
-**Admin sessions cleared on reconnect:** When the bot loses connection, all `_authed` sessions are wiped. Nicks may belong to different people on a new connection, so sessions cannot safely persist.
+**Authentication:** Admin passwords are hashed with scrypt (default), bcrypt, or argon2. Constant-time comparison via `hmac.compare_digest`. Brute-force lockout after 5 failures (5-minute cooldown). Sessions cleared on disconnect. Auth commands restricted to PM.
 
-**Credential redaction in logs:** Outgoing `PASS`, `IDENTIFY`, `OPER`, and `AUTHENTICATE` commands are redacted in the sender's debug log. Incoming `AUTH` messages are redacted in the main loop debug log. The command dispatch log also redacts auth arguments.
+**Transport:** TLS 1.2 minimum enforced. No fallback to TLS 1.0/1.1. Certificate verification enabled by default (configurable for self-signed certs).
 
-**IRC injection prevention:** All outgoing messages have `\r` and `\n` stripped before writing to the socket. This prevents CRLF injection of arbitrary IRC protocol commands.
+**Input validation:** Module names validated against `^[a-z][a-z0-9_]*$`. Channel names validated against IRC format regex. Command arguments capped at 400 characters. PRIVMSG/NOTICE targets validated (no spaces). All user input treated as untrusted.
 
-**Module path traversal prevention:** Module names are validated against `^[a-z][a-z0-9_]*$` before loading. Path components like `..`, `/`, and `.` in module names are rejected.
+**Protocol compliance:** Outgoing lines capped at 512 bytes (RFC 2812). Incoming lines limited to 8KB buffer. CRLF/NUL stripped from all outgoing messages. PING payload reflection capped at 400 bytes.
 
-**Calculator sandboxing:** The calculator uses a recursive AST walker with a strict whitelist of operators and functions. No `eval()`, no `exec()`, no attribute access, no list comprehensions. Exponent inputs are capped at 10,000. Factorial inputs are capped at 170. Expression nesting depth is limited to 50.
+**Injection prevention:** Log injection prevented via `_SafeFormatter` (sanitizes msg and args). No `eval()`/`exec()` anywhere — calculator uses AST walker with strict whitelist. Module loader blocks symlink traversal. Config path resolved to absolute at startup.
 
-**Atomic file writes:** All disk flushes use write-to-temp-then-`os.replace()`. A crash during write cannot corrupt the data file.
+**Resource limits:** Concurrent command tasks capped at 50. Sender queue bounded at 200 messages. INVITE acceptance rate-limited (5s cooldown). Store data files capped at 10MB on load. API and flood rate limiters per-nick.
+
+**Information disclosure:** All error messages sent to IRC are generic ("see log for details"). No stack traces, file paths, or internal state exposed. Outgoing credentials (PASS, IDENTIFY, OPER, AUTHENTICATE) redacted in logs.
+
+**Cross-platform:** Config permission check guarded for POSIX. Store I/O uses explicit UTF-8 encoding. Temp file cleanup is exception-safe on Windows. Restart uses subprocess on Windows (os.execv doesn't replace the process). math.cbrt fallback for Python < 3.11.
 
 ## Testing
 
-The project ships with a standalone test suite in `tests/run_tests.py`. No external test framework is required — it runs with just Python and the project's own dependencies:
+119 automated tests in `tests/run_tests.py`. No external test framework required:
 
 ```
 python tests/run_tests.py
 ```
 
-The suite covers protocol parsing (ISUPPORT, MODE, NAMES, SASL), the store (CRUD, flush, atomic writes, user pruning), the calculator (arithmetic, sandboxing, DoS guards), dice, weather data merging and formatting, unit conversions, sender injection prevention, password hashing round-trips, the ChannelSet thread-safe container, exponential backoff, the async sender (drain, priority bypass, thread-safe enqueue from executors), and async handler verification (all module and core command handlers confirmed as coroutines). Tests are also compatible with pytest if you have it installed.
+Covers protocol parsing, store operations (CRUD, flush, atomic writes, pruning, type validation), calculator sandboxing and DoS guards, dice, weather data merging, unit conversions, sender injection prevention and line limits, password hashing, thread-safe containers, async architecture verification, and all security hardening fixes from audit passes six and seven. Compatible with pytest.
 
 ## Known Limitations
 
@@ -272,6 +282,8 @@ The translation module uses an undocumented Google Translate endpoint (`translat
 **Persistence:** The store loads all JSON files into memory once at startup. Mutations happen in-memory; a background thread flushes dirty data to disk every 30 seconds. Each dataset (locations, channels, users) has its own lock, so weather lookups never block on user-tracking writes. Worst-case data loss on a hard crash is 30 seconds of user-tracking timestamps — channel list and location changes are also flushed on `.shutdown`, `.restart`, and signal handlers.
 
 The bot does not parse `353` (NAMES reply) for user roster purposes. Users who were already in the channel when the bot joined will not appear in `.users` output until they trigger an observable event (JOIN, PART, QUIT, NICK, or sending a message).
+
+**Atomic writes on Windows:** `os.replace()` is atomic on POSIX but not guaranteed atomic on NTFS. It is the best Python offers cross-platform. Data loss from a crash during the brief write window is unlikely but theoretically possible on Windows.
 
 ## License
 

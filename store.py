@@ -57,12 +57,26 @@ class Store:
 
     # ── Disk I/O (private) ───────────────────────────────────────────
 
+    _MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB cap on data files
+
     @staticmethod
     def _read(path: str, default: Any) -> Any:
         try:
             p = Path(path)
             if p.exists():
-                return json.loads(p.read_text())
+                size = p.stat().st_size
+                if size > Store._MAX_FILE_SIZE:
+                    log.warning(f"Store file {path} exceeds size limit ({size} bytes) — using default")
+                    return default
+                data = json.loads(p.read_text(encoding="utf-8"))
+                # BUG-051: Validate loaded data matches expected type.
+                # A corrupted file returning a list instead of a dict (or vice versa)
+                # would crash on first access.
+                if type(data) is not type(default):
+                    log.warning(f"Store file {path} has type {type(data).__name__}, "
+                                f"expected {type(default).__name__} — using default")
+                    return default
+                return data
         except Exception as e:
             log.warning(f"Store load {path}: {e}")
         return default
@@ -73,12 +87,15 @@ class Store:
             p = Path(path)
             fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
             try:
-                with os.fdopen(fd, "w") as f:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2)
                 os.replace(tmp, str(p))
                 return True
             except Exception:
-                os.unlink(tmp)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass  # best effort — may fail on Windows if locked
                 raise
         except Exception as e:
             log.warning(f"Store save {path}: {e}")

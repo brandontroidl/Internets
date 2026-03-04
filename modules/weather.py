@@ -36,9 +36,10 @@ WMO_CODES: dict[int, str] = {
 }
 
 
-def _om_get(url: str, **kwargs) -> requests.Response:
+def _om_get(url: str, *, params: dict | None = None,
+            timeout: int = 10) -> requests.Response:
     """Blocking HTTP GET for Open-Meteo — called via asyncio.to_thread."""
-    return requests.get(url, **kwargs)
+    return requests.get(url, params=params, timeout=timeout)
 
 
 async def _om_current(lat: float, lon: float) -> WeatherDict | None:

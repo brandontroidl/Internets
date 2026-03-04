@@ -146,6 +146,8 @@ def main():
         sys.exit("Passwords do not match.")
     if len(pw) < 8:
         sys.exit("Password must be at least 8 characters.")
+    if len(pw) > 1024:
+        sys.exit("Password too long (max 1024 characters).")
 
     print("Hashing ...", end=" ", flush=True)
     hashed = _ALGOS[args.algo](pw)
@@ -160,8 +162,10 @@ def main():
     print(f"    password_hash = {hashed}")
     print("─" * 72)
 
-    assert verify_password(pw, hashed),          "self-test failed: verify returned False"
-    assert not verify_password("wrong", hashed), "self-test failed: false positive"
+    if not verify_password(pw, hashed):
+        sys.exit("Self-test FAILED: verify returned False")
+    if verify_password("wrong", hashed):
+        sys.exit("Self-test FAILED: false positive")
     print("\nSelf-test passed ✓")
 
 
