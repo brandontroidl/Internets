@@ -77,6 +77,18 @@ Security-hardened per the Final Security Hardening Directive (eighth audit pass,
 - **`_merge_current` / `_om_current` / `_om_forecast`** — legacy helper
   functions replaced by the provider abstraction.
 
+### Fixed
+
+- **PLATFORM: Windows cp1252 test crash** — Test runner used Unicode markers
+  (`✓` / `✗`) that can't encode in Windows cp1252 console encoding. All Python
+  versions on Windows CI (3.10–3.13) failed identically. Replaced with ASCII
+  `[PASS]` / `[FAIL]` markers and added `sys.stdout.reconfigure(errors="replace")`
+  fallback. Added `PYTHONIOENCODING=utf-8` to GitHub Actions workflow as a
+  belt-and-suspenders defense.
+
+- **CI: Lint step now covers all source files** — Added `weather_providers/`
+  and `modules/` glob to syntax check in GitHub Actions.
+
 ### Testing
 
 - 154 automated tests (up from 142).  Added: `WeatherResult` dataclass tests,

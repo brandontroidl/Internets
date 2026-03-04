@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  # Ensure Python uses UTF-8 on all platforms (prevents cp1252 crashes on Windows).
+  PYTHONIOENCODING: utf-8
+
 jobs:
   test:
     strategy:
@@ -49,5 +53,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check syntax
+      - name: Check syntax (core)
         run: python -m py_compile internets.py sender.py store.py protocol.py hashpw.py
+
+      - name: Check syntax (weather_providers)
+        run: |
+          python -m py_compile weather_providers/__init__.py
+          python -m py_compile weather_providers/base.py
+          python -m py_compile weather_providers/_http.py
+          python -m py_compile weather_providers/openmeteo.py
+          python -m py_compile weather_providers/weatherapi.py
+          python -m py_compile weather_providers/tomorrowio.py
+
+      - name: Check syntax (modules)
+        run: |
+          for f in modules/*.py; do python -m py_compile "$f"; done

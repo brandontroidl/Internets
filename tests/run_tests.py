@@ -16,12 +16,26 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
+# PLATFORM: Reconfigure stdout to handle encoding errors on Windows (cp1252)
+# instead of crashing on Unicode test-output markers.  Has no effect on
+# UTF-8 terminals (Linux, macOS, modern Windows Terminal).
+try:
+    sys.stdout.reconfigure(errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(errors="replace")  # type: ignore[union-attr]
+except (AttributeError, OSError):
+    pass  # Python < 3.7 or non-reconfigurable stream (piped, etc.)
+
 # Ensure project root is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 _pass = 0
 _fail = 0
 _errors: list[str] = []
+
+# Use ASCII-safe markers for test output so the runner doesn't crash on
+# Windows consoles with cp1252 encoding (GitHub Actions, cmd.exe, PowerShell).
+_MARK_PASS = "[PASS]"
+_MARK_FAIL = "[FAIL]"
 
 
 def test(name: str):
@@ -31,12 +45,12 @@ def test(name: str):
         try:
             fn()
             _pass += 1
-            print(f"  ✓ {name}")
+            print(f"  {_MARK_PASS} {name}")
         except Exception as e:
             _fail += 1
             tb = traceback.format_exc()
-            _errors.append(f"  ✗ {name}\n{tb}")
-            print(f"  ✗ {name}: {e}")
+            _errors.append(f"  {_MARK_FAIL} {name}\n{tb}")
+            print(f"  {_MARK_FAIL} {name}: {e}")
         return fn
     return decorator
 

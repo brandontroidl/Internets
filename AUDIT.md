@@ -1168,6 +1168,18 @@ Both providers used `data["current"]` which raises `KeyError` if the API returns
 
 ---
 
+### PLATFORM-WP-001: Test Runner Crashes on Windows (cp1252)
+
+**Severity:** High (blocks all CI on Windows)
+**File:** `tests/run_tests.py`
+**Status:** Fixed
+
+The test runner used Unicode check mark (✓, U+2713) and cross mark (✗, U+2717) in `print()` calls. On Windows with the default cp1252 console encoding (cmd.exe, PowerShell, GitHub Actions), these characters cannot be encoded, causing an immediate `UnicodeEncodeError` crash before even the first test runs. All four Python versions (3.10–3.13) fail identically.
+
+**Resolution:** Replaced Unicode markers with ASCII-safe `[PASS]` / `[FAIL]` strings. Added `sys.stdout.reconfigure(errors="replace")` as a defense-in-depth fallback for any future non-ASCII output. Added `PYTHONIOENCODING=utf-8` to the GitHub Actions workflow environment. Verified that all test output (stdout + stderr combined) is fully cp1252-encodable.
+
+---
+
 ## Summary
 
 | Category | Count | Status |
@@ -1181,9 +1193,9 @@ Both providers used `data["current"]` which raises `KeyError` if the API returns
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
 | Architecture & features | 8 | All implemented |
-| Platform compatibility | 3 | All fixed |
+| Platform compatibility | 4 | All fixed |
 | Cleanup | 1 | Fixed |
 | Versioning | 1 | Implemented |
 | Dependency audit | 1 | Completed |
 | Info/documented | 1 | Documented |
-| **Total** | **94** | **All resolved** |
+| **Total** | **95** | **All resolved** |
