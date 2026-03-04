@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# CWE-275 / CodeQL actions/missing-workflow-permissions:
+# Explicit least-privilege GITHUB_TOKEN scope.  This workflow only checks
+# out code and runs tests — it never writes to the repo, creates issues,
+# or publishes packages.
+permissions:
+  contents: read
+
 env:
   # Ensure Python uses UTF-8 on all platforms (prevents cp1252 crashes on Windows).
   PYTHONIOENCODING: utf-8
