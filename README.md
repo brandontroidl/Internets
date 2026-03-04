@@ -1,15 +1,15 @@
 # Internets
 
-A modular IRC bot built on raw sockets and RFC 2812. Handles worldwide weather, calculator, dice, translation, and Urban Dictionary lookups. Designed around a plugin architecture with hot-reload so you never take it offline to ship changes.
+A modular IRC bot built on Python's asyncio and RFC 2812. Handles worldwide weather, calculator, dice, translation, and Urban Dictionary lookups. Designed around a plugin architecture with hot-reload so you never take it offline to ship changes.
 
 US weather pulls from weather.gov (NWS API). International weather uses Open-Meteo. Neither requires an API key.
 
 ## Architecture
 
 ```
-internets.py          Core: connection lifecycle, IRC state machine, command dispatch
+internets.py          Core: asyncio event loop, IRC state machine, command dispatch
 protocol.py           Pure protocol helpers (ISUPPORT parsing, MODE parsing, SASL, NAMES)
-sender.py             Outbound message queue with token-bucket rate limiting
+sender.py             Async outbound queue with token-bucket rate limiting
 store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
 hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
 
@@ -173,7 +173,7 @@ Authenticate first: `/MSG Internets AUTH <password>`
 
 ### Console Commands
 
-When running interactively (stdin is a TTY), the bot starts a console thread.
+When running interactively (stdin is a TTY), the bot starts a console task.
 Type commands at the `>` prompt — no auth required.  Disable with `--no-console`
 or when running under a process manager (auto-detected: console is skipped when
 stdin is not a TTY).

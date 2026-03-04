@@ -1,14 +1,14 @@
 # Security & Stability Audit
 
-**Reviewer:** Brandon Troidl
-**Date:** 2026-03-02
-**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `config.ini`, and all modules in `modules/`.
+**Auditor:** Brandon Troidl
+**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review)
+**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `config.ini`, and all modules in `modules/`.
 
 All findings have been resolved. See `CHANGELOG.md` for the release-oriented summary of changes.
 
 ---
 
-## First Pass — Functional Audit
+## First Pass — Functional Audit (2026-03-02)
 
 ### BUG-001: Remote Code Execution via `eval()` in Calculator Module
 
@@ -185,7 +185,7 @@ Hand-rolled `_ct_eq` function replaced with `hmac.compare_digest`, which is impl
 **File:** `internets.py:625-636`
 **Status:** Fixed
 
-`KeyboardInterrupt` called `sys.exit(0)` without sending `QUIT`. Added `SIGTERM`/`SIGINT` handlers that send `QUIT` and sleep 2s to flush the sender queue.
+`KeyboardInterrupt` called `sys.exit(0)` without sending `QUIT`. Added `SIGTERM`/`SIGINT` handlers that send `QUIT` and flush the sender queue before exit.
 
 ---
 
@@ -281,7 +281,7 @@ Reordered to send `QUIT` first, then `time.sleep(2)` to flush, then `os.execv`. 
 
 ---
 
-## Second Pass — Security Hardening
+## Second Pass — Security Hardening (2026-03-02)
 
 ### SEC-001: Admin Password Logged in Plaintext
 
@@ -313,7 +313,7 @@ The command log line wrote `cmd='auth' arg='theActualPassword'` to both the log 
 
 The sender wrote raw `msg + "\r\n"` to the socket. If any `msg` contains embedded `\r\n` (from module output, crafted channel names, etc.), the IRC server interprets it as multiple commands. An attacker could inject arbitrary IRC protocol commands.
 
-**Resolution:** `_write()` strips all `\r` and `\n` from outgoing messages before sending.
+**Resolution:** `_write()` strips all `\r`, `\n`, and `\x00` from outgoing messages before sending.
 
 ---
 
@@ -325,7 +325,7 @@ The sender wrote raw `msg + "\r\n"` to the socket. If any `msg` contains embedde
 
 At DEBUG log level, the sender logged every outgoing message including `PASS`, `IDENTIFY`, and `OPER` commands with their passwords. The main loop logged every incoming line including `AUTH` from users.
 
-**Resolution:** Sender redacts `PASS`, `IDENTIFY`, and `OPER` arguments. Main loop redacts incoming lines matching AUTH patterns.
+**Resolution:** Sender redacts `PASS`, `IDENTIFY`, `OPER`, and `AUTHENTICATE` arguments. Main loop redacts incoming lines matching AUTH patterns.
 
 ---
 
@@ -429,7 +429,191 @@ Channels are correctly saved to `channels.json` on invite/join, but rejoin after
 
 - Added 473 handler: on invite-only rejection, bot sends `PRIVMSG ChanServ :INVITE #channel`. ChanServ re-invites the bot (if the bot's NickServ account has channel access), triggering the existing `_on_invite` → `JOIN` flow.
 - Added 471/474/475 handlers: log the rejection and remove the channel from saved channels (user must re-invite).
-- Replaced the fixed 1-second `time.sleep` with a background thread (`_deferred_rejoin`) that waits up to 10 seconds for NickServ confirmation (NOTICE containing "identified"/"recognized", or 900 numeric) before rejoining. Falls back to rejoining anyway after the timeout.
+- Replaced the fixed 1-second `time.sleep` with a deferred rejoin task that waits up to 10 seconds for NickServ confirmation (NOTICE containing "identified"/"recognized", or 900 numeric) before rejoining. Falls back to rejoining anyway after the timeout.
+
+---
+
+## Third Pass — Data Architecture & Protocol Fixes (2026-03-03)
+
+### ARCH-001: Hybrid Weather Data Source Merging
+
+**Severity:** N/A (feature)
+**Files:** `modules/nws.py`, `modules/weather.py`
+**Status:** Implemented
+
+Previously the weather module returned NWS data as a pre-formatted string for US locations and Open-Meteo as a separate pre-formatted string for non-US. If NWS returned null fields (common for temperature, humidity, or visibility at some stations), the user saw "N/A" even though Open-Meteo had the data.
+
+**Resolution:** Both `nws.current()` and `_om_current()` now return structured `WeatherDict` dicts with consistent keys (`temp_c`, `feels_c`, `humidity`, `wind_kph`, etc.). A `_merge_current()` function combines them — NWS values take priority, Open-Meteo fills gaps. A single `_format_current()` function produces the output string. For US locations, both sources are queried and merged. For non-US, only Open-Meteo is used. NWS heat index and wind chill labels are preserved through the merge.
+
+---
+
+### BUG-017: MODE Arg Consumption Uses Hardcoded List, Ignores ISUPPORT
+
+**Severity:** High
+**File:** `internets.py` (MODE processing)
+**Status:** Fixed
+
+The MODE parser hardcoded which modes consume parameters (`h, v, b, e, I, k, l`), but the server sends `CHANMODES=beI,kL,lH,...` in 005 ISUPPORT. Modes `L` (type B — always takes a parameter) and `H` (type C — parameter on set only) were unknown to the parser. A mode change like `+Loq #target nick1 nick2` would fail to consume the `L` parameter, causing `+o` to read `#target` as the nick instead of `nick1`. This corrupted the chanop tracking set — the bot would think `#target` was an operator nick.
+
+The ISUPPORT `PREFIX` value (e.g., `(qaohv)~&@%+`) was also never parsed — the bot hardcoded `qaohv` and never updated from the server's actual prefix mode list.
+
+**Resolution:** Added 005 ISUPPORT parsing that populates `_chanmode_types` and `_prefix_modes` from the server's actual capabilities. The MODE parser now uses these dicts. Handles all four CHANMODES types:
+- **A** (list modes, always take a parameter): `b`, `e`, `I`
+- **B** (always take a parameter): `k`, `L`
+- **C** (parameter on set, none on unset): `l`, `H`
+- **D** (never take a parameter): `i`, `m`, `n`, `p`, `s`, `t`
+
+Plus all PREFIX modes (parameter on both set and unset). These helpers were extracted to `protocol.py` as `parse_isupport_chanmodes()`, `parse_isupport_prefix()`, and `parse_mode_changes()` for unit testing.
+
+---
+
+### BUG-018: `active_channels` Set Modified From Multiple Threads
+
+**Severity:** Medium
+**File:** `internets.py`
+**Status:** Fixed
+
+`active_channels` was a plain `set` modified from the main loop thread, dispatch threads (via `_on_invite`), and the `_deferred_rejoin` thread. `sorted(self.active_channels)` could yield `RuntimeError: Set changed size during iteration` under concurrent access. CPython's GIL masks this in practice but it's not guaranteed and will break on alternative Python implementations.
+
+**Resolution:** Replaced with `ChannelSet`, a thread-safe container with `threading.Lock` protecting all operations. All iteration sites now use `snapshot()` which returns a frozen copy.
+
+---
+
+### BUG-019: Gusts Displayed When Wind Is Zero
+
+**Severity:** Low
+**File:** `modules/weather.py` (`_format_current`)
+**Status:** Fixed
+
+```python
+if gusts and gusts > wind_kph * 1.3:
+```
+
+When `wind_kph` is 0, `0 * 1.3 = 0`, so any nonzero gust value passes the check. The output would show "Calm (gusts 5.0km/h)" which is contradictory. Also, `gusts` being `0.0` is falsy in Python, which would hide the gust display even if the check was otherwise correct — but that's benign since zero gusts shouldn't be displayed anyway.
+
+**Resolution:** Added explicit `wind_kph > 0` guard: `if gusts is not None and gusts > 0 and wind_kph > 0 and gusts > wind_kph * 1.3`.
+
+---
+
+### CLEANUP-001: Stale `fmt_dt` Import in `nws.py`
+
+**Severity:** N/A
+**File:** `modules/nws.py`
+**Status:** Fixed
+
+After the dict refactor (ARCH-001), `fmt_dt` was no longer used in `nws.py` but was still imported. Removed.
+
+---
+
+## Fourth Pass — Async Architecture & Type Safety (2026-03-04)
+
+### ARCH-002: Full Async Conversion
+
+**Severity:** N/A (architecture)
+**Files:** All
+**Status:** Implemented
+
+The bot was previously built on a synchronous socket + daemon threads model. Every command handler ran in a new thread via `asyncio.to_thread()`, the sender used a `queue.PriorityQueue` with a blocking drain loop, and the keepalive/rejoin were standalone `threading.Thread` instances. While functional at IRC scale, this model made it difficult to reason about concurrency and required careful locking.
+
+**Resolution:** Full conversion to single-event-loop asyncio:
+
+- `internets.py`: Connection via `asyncio.open_connection()`. Line reading via `asyncio.StreamReader.readline()` with 300s timeout. Signal handling via `loop.add_signal_handler()`. All 15 core command handlers converted to `async def`.
+- `sender.py`: Rewritten as async drain loop over `asyncio.PriorityQueue` + `StreamWriter.drain()`. Token-bucket uses `asyncio.sleep()`. `enqueue()` remains thread-safe via `loop.call_soon_threadsafe()`.
+- `modules/base.py`: Docstring updated to document that all handlers are coroutines.
+- `modules/geocode.py`: `geocode()` is now `async def` with `await asyncio.to_thread()` for HTTP calls.
+- `modules/nws.py`: All functions (`get_grid`, `current`, `forecast`, `hourly`, `alerts`, `discussion`) converted to `async def`.
+- `modules/weather.py`: All command handlers converted to `async def`. HTTP-dependent functions (`_om_current`, `_om_forecast`) converted to `async def`.
+- `modules/location.py`: All command handlers converted to `async def`.
+- `modules/calc.py`: Handler converted to `async def`. Pure computation runs directly in event loop.
+- `modules/dice.py`: Handler converted to `async def`. Pure computation runs directly in event loop.
+- `modules/translate.py`: Handler converted to `async def` with `asyncio.to_thread()` for HTTP.
+- `modules/urbandictionary.py`: Handler converted to `async def` with `asyncio.to_thread()` for HTTP.
+- `modules/channels.py`: Handlers converted to `async def`. Verification timeout GC converted from `threading.Thread` to `asyncio.create_task()`.
+- `_run_cmd()`: Now `await handler(nick, reply_to, arg)` directly instead of `await asyncio.to_thread(handler, ...)`.
+- Console: Uses `asyncio.to_thread(input)` for non-blocking stdin, running as an asyncio task alongside the main bot task via `asyncio.wait(return_when=FIRST_COMPLETED)`.
+
+---
+
+### ARCH-003: Type Annotations Throughout
+
+**Severity:** N/A (quality)
+**Files:** All
+**Status:** Implemented
+
+All files now use `from __future__ import annotations` with PEP 604 union syntax (`str | None` instead of `Optional[str]`). Every public function, method, and class attribute is annotated. Module `setup()` functions return typed `BotModule` subclasses. Internal helpers (`_DebugFilter`, `_setup_logging`, `_get_hash`, `_validate_hash`, signal handler, `_run_console`) all have proper signatures.
+
+---
+
+### ARCH-004: SASL PLAIN Authentication
+
+**Severity:** N/A (feature)
+**Files:** `internets.py`, `protocol.py`
+**Status:** Implemented
+
+When the server advertises SASL support in CAP LS and a NickServ password is configured, the bot authenticates via SASL PLAIN during capability negotiation — before registration completes. This eliminates the timing race between NickServ IDENTIFY and `+R` channel joins / ChanServ access lists. If SASL fails (902/904/905 numerics), the bot falls back to traditional NickServ IDENTIFY after MOTD. `AUTHENTICATE` payloads are redacted in sender logs.
+
+`sasl_plain_payload()` extracted to `protocol.py` for unit testing.
+
+---
+
+### ARCH-005: `protocol.py` Extraction
+
+**Severity:** N/A (quality)
+**Files:** `protocol.py` (new, 111 lines)
+**Status:** Implemented
+
+Pure protocol helper functions extracted from `internets.py`:
+- `strip_tags()` — Remove IRCv3 message tags from raw lines
+- `parse_isupport_chanmodes()` — Parse CHANMODES= from 005 ISUPPORT
+- `parse_isupport_prefix()` — Parse PREFIX= from 005 ISUPPORT
+- `parse_mode_changes()` — Parse MODE changes with correct arg consumption
+- `parse_names_entry()` — Parse a single entry from 353 NAMES reply
+- `sasl_plain_payload()` — Encode SASL PLAIN `\0nick\0password` as base64
+
+No bot state, no I/O, no side effects — fully unit-testable.
+
+---
+
+### ARCH-006: Exponential Reconnect Backoff
+
+**Severity:** N/A (reliability)
+**File:** `internets.py`
+**Status:** Implemented
+
+Previously used fixed 15s/30s delays between reconnect attempts, which would hammer the server during extended outages. Replaced with exponential backoff: 15s, 30s, 60s, 120s, 240s, capped at 300s (5 minutes). Attempt counter resets on successful connection. Applied to both initial connection and mid-session reconnects.
+
+---
+
+### ARCH-007: User Pruning
+
+**Severity:** N/A (maintenance)
+**Files:** `store.py`, `config.ini`
+**Status:** Implemented
+
+User tracking entries older than `user_max_age_days` (default 90, configurable in `config.ini`) are automatically pruned during store flushes. Prevents unbounded `users.json` growth on busy networks with high nick churn.
+
+---
+
+### ARCH-008: Test Suite
+
+**Severity:** N/A (quality)
+**File:** `tests/run_tests.py` (new)
+**Status:** Implemented
+
+73 tests with no external dependencies (no pytest required, but compatible with it). Coverage:
+
+- Protocol parsing: ISUPPORT CHANMODES, ISUPPORT PREFIX, MODE changes with multi-type args, NAMES entries with multi-prefix, SASL payload encoding, tag stripping
+- Store: location CRUD, channel save/load, user tracking (join/part/quit/rename), flush-to-disk, atomic write verification, user pruning of stale entries
+- Calculator: basic arithmetic, division, powers, implicit multiplication, math functions, factorial with cap, exponent bomb blocked, division by zero, unknown names rejected, nesting depth limit, `log2`/`log10` names preserved from implicit multiplication
+- Dice: single die, XdN format, XdN+M modifiers, invalid format rejection, count limits, large-roll display truncation
+- Weather: merge (both None, primary None, fallback None, primary wins, NWS heat index label preserved), format (complete dict, None input, calm wind, gusts threshold, no N/A, feels-like suppression)
+- Units: temperature (C/F), wind direction cardinal, wind speed (kph/mph), distance (km/mi), pressure (mb/in), datetime formatting
+- Sender: CRLF/NUL injection stripped, credential redaction for PASS/IDENTIFY/OPER/AUTHENTICATE
+- Password hashing: scrypt round-trip, invalid hash format rejection, empty hash handling
+- ChannelSet: thread-safe add/discard/contains, snapshot returns independent copy, iteration safety
+- Backoff: exponential curve with cap at 300s
+- Async sender: enqueue + drain produces output, priority 0 bypasses token bucket, thread-safe enqueue from executor
+- Async handlers: all 7 module command handler classes confirmed as coroutines, all 15 core command handlers confirmed as coroutines, geocode/nws/weather async functions verified, sync pure functions (`_merge_current`, `_format_current`) confirmed non-async
 
 ---
 
@@ -439,9 +623,12 @@ Channels are correctly saved to `channels.json` on invite/join, but rejoin after
 |----------|-------|--------|
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
-| High bugs | 5 | All fixed |
-| High security | 3 | All fixed |
-| Medium issues | 4 | All fixed |
+| High bugs (all passes) | 8 | All fixed |
+| High security (second pass) | 2 | All fixed |
+| Medium issues (all passes) | 4 | All fixed |
+| Low issues | 2 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
-| **Total** | **33** | **All resolved** |
+| Architecture & features (third/fourth pass) | 8 | All implemented |
+| Cleanup | 1 | Fixed |
+| **Total** | **46** | **All resolved** |

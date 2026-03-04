@@ -82,13 +82,23 @@ via `asyncio.to_thread()` inside the handler, keeping the event loop free.
   tests.  Module example uses async handlers.  SASL, backoff, pruning, testing
   documented.
 
-## [1.1.0] — 2026-03-02
+## [1.1.0] — 2026-03-03
 
-Full codebase audit and hardening pass. 32 findings identified and resolved
+Full codebase audit and hardening pass. 39 findings identified and resolved
 across security, stability, architecture, and quality-of-life categories.
+Includes hybrid weather data source merging, MODE/ISUPPORT parsing fixes,
+and thread safety improvements found in the follow-up review.
 See `AUDIT.md` for detailed forensic writeups of each finding.
 
 ### Added
+
+- **Hybrid weather data merging** — Weather commands for US locations now query
+  both NWS and Open-Meteo, merging results into a single output. NWS values
+  take priority; Open-Meteo fills gaps (common for NWS stations that report
+  null temperature, visibility, or humidity). Both sources return structured
+  `WeatherDict` dicts instead of pre-formatted strings. A `_merge_current()`
+  function combines them, and `_format_current()` produces the output. NWS heat
+  index and wind chill labels are preserved through the merge.
 
 - **Channel founder verification** — `.join` and `.part` now verify the
   requesting user is the registered channel founder via IRC services before
@@ -256,6 +266,26 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
 
 - **Empty prefix crash** — Sending just the command prefix character (`.`)
   with nothing after it produced an empty list and `IndexError`. Guarded.
+
+- **MODE arg desync corrupted chanop tracking** — The MODE parser hardcoded
+  which modes consume parameters, ignoring the server's ISUPPORT CHANMODES
+  and PREFIX values. Unknown modes (e.g. `L` type B, `H` type C) caused arg
+  misalignment, shifting all subsequent parameters. A `+Loq` change would
+  assign the wrong nicks to the wrong modes. Added 005 ISUPPORT parsing for
+  both CHANMODES and PREFIX. MODE processing now handles all four CHANMODES
+  types correctly. See AUDIT.md BUG-017.
+
+- **Thread safety on `active_channels` iteration** — The `active_channels` set
+  was modified from multiple threads without synchronization. `sorted()` on the
+  set during concurrent mutation could crash. All iteration sites now use
+  `set()` snapshots. See AUDIT.md BUG-018.
+
+- **Gusts displayed when wind is zero** — `_format_current` showed gusts for
+  any nonzero value when wind speed was 0 (`0 * 1.3 = 0` always passes).
+  Added explicit `wind_kph > 0` guard. See AUDIT.md BUG-019.
+
+- **Stale `fmt_dt` import in `nws.py`** — Unused import left over after the
+  structured dict refactor. Removed.
 
 ### Security
 
