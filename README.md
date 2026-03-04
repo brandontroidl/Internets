@@ -1,14 +1,14 @@
 # Internets
 
-**v1.3.0** — Security hardening release (2026-03-03)
+**v1.4.0** — Multi-provider weather release (2026-03-04)
 
 A modular IRC bot built on Python's asyncio and RFC 2812. Handles worldwide weather, calculator, dice, translation, and Urban Dictionary lookups. Designed around a plugin architecture with hot-reload so you never take it offline to ship changes.
 
-US weather pulls from weather.gov (NWS API). International weather uses Open-Meteo. Neither requires an API key.
+Weather queries are served by a multi-provider system with automatic fallback: Open-Meteo (free, no key), WeatherAPI.com, and Tomorrow.io. The first provider to return a result wins. Adding a new provider is one file and one registration line.
 
 **Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
 **Python:** 3.10+  
-**Dependencies:** `requests` (single runtime dependency).  Optional: `bcrypt`, `argon2-cffi` for stronger password hashing.
+**Dependencies:** `requests` (single runtime dependency). Optional: `aiohttp` for true async HTTP, `bcrypt`, `argon2-cffi` for stronger password hashing.
 
 ## Architecture
 
@@ -19,12 +19,19 @@ sender.py             Async outbound queue with token-bucket rate limiting
 store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
 hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
 
+weather_providers/
+  base.py             WeatherResult / ForecastDay dataclasses, WeatherProvider protocol
+  _http.py            Async HTTP helper (aiohttp with requests fallback)
+  openmeteo.py        Open-Meteo provider — free, no API key
+  weatherapi.py       WeatherAPI.com provider — requires API key
+  tomorrowio.py       Tomorrow.io provider — requires API key
+  __init__.py         Provider registry, configure(), get_weather(), get_forecast()
+
 modules/
   base.py             BotModule base class — the interface every plugin implements
   geocode.py          Location resolution via Nominatim (supports city names, zip codes, lat/lon)
-  nws.py              NWS API client: observations, forecast, hourly, alerts, AFD discussion
   units.py            Temperature, wind, pressure, and distance formatting with dual-unit display
-  weather.py          Weather command handler — routes US queries to NWS, international to Open-Meteo
+  weather.py          Weather command handler — calls weather_providers for data
   location.py         User location registration and lookup
   calc.py             Expression evaluator
   dice.py             Dice roller with XdN+M notation
@@ -46,9 +53,9 @@ The outbound path goes through `Sender`, an async drain loop over `asyncio.Prior
 
 **Founder-gated channel control.** `.join` and `.part` require the requesting user to be either a bot admin or the registered channel founder. Founder verification is done asynchronously: the bot WHOIS-es the user for their NickServ account and queries IRC services (`INFO #channel`) for the channel founder, then compares. This works across Anope, Atheme, Epona, X2, X3, and forks — anything that responds with a `Founder:` or `Owner:` line. The services bot nick is configurable via `services_nick` in `config.ini` (default: `ChanServ`). Users who aren't the founder can still bring the bot in via IRC's native `/INVITE`, which is always accepted. Joined channels are persisted to `channels.json` and restored on reconnect.
 
-**Two-tier rate limiting.** A global per-nick flood gate drops commands that arrive faster than `flood_cooldown` seconds. A separate API cooldown rate-limits expensive operations (geocoding + weather API calls). Authed admins bypass the flood gate but not the API cooldown. This is a deliberate split: we don't want a fast-typing admin to trigger weather.gov rate limits, but we also don't want them locked out of `.reload` during an incident.
+**Two-tier rate limiting.** A global per-nick flood gate drops commands that arrive faster than `flood_cooldown` seconds. A separate API cooldown rate-limits expensive operations (geocoding + weather API calls). Authed admins bypass the flood gate but not the API cooldown. This is a deliberate split: we don't want a fast-typing admin to trigger provider rate limits, but we also don't want them locked out of `.reload` during an incident.
 
-**NWS-first for US, Open-Meteo for everything else.** NWS provides richer data for US locations (heat index, wind chill, visibility, alerts, AFD discussions). Open-Meteo covers the rest of the world. The weather module attempts NWS first for US coordinates and falls back to Open-Meteo if the grid lookup fails (which happens near borders and territories).
+**Multi-provider weather with automatic fallback.** Weather queries go through an ordered provider chain configured in `[weather_providers]`. The first provider to return a result wins. If one fails (network error, rate limit, invalid key), the system silently tries the next. Open-Meteo requires no key and is always available as the last-resort fallback. Adding a new provider is one Python file implementing the `WeatherProvider` protocol and one line in the factory registry. All responses are normalized to `WeatherResult` / `ForecastDay` dataclasses so the command module never touches raw API responses.
 
 **Response routing.** Regular output goes to the channel. Help text and admin command responses go as `NOTICE` to the requesting user (keeps help spam out of channels). Everything in PM stays as `PRIVMSG`. This is the `reply()` / `preply()` split.
 
@@ -83,7 +90,7 @@ Paste the output into `config.ini` under `[admin] password_hash`. Plaintext pass
 
 **Configure `config.ini`:**
 
-Set `server`, `port`, `nickname`, and `user_agent` (required by weather.gov's Terms of Service — use a real contact email). Everything else has sane defaults.
+Set `server`, `port`, `nickname`, and `user_agent` (required by geocoding services — use a real contact email). Everything else has sane defaults.
 
 **Run:**
 
@@ -135,13 +142,10 @@ The bot verifies ownership by checking the user's NickServ account against the c
 <Internets> alice: location set to Beverly Hills, CA
 
 <alice> .w
-<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ...
+<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ... :: [Open-Meteo] ::
 
 <alice> .w -n bob
-<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ...
-
-<alice> .wx
-<Internets> :: Beverly Hills, CA :: No active NWS alerts.
+<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ... :: [WeatherAPI] ::
 
 <alice> .u yolo /2
 <Internets> [2/7] An acronym for "you only live once", used to justify doing ...
@@ -197,7 +201,9 @@ The bot reads `config.ini` at startup. Relevant sections:
 
 **`[admin]`** — Hashed password for admin authentication. Supports `scrypt$`, `bcrypt$`, and `argon2$` prefixes.
 
-**`[weather]`** — User-Agent string (required by weather.gov ToS) and default unit system.
+**`[weather]`** — User-Agent string (required by geocoding services) and default unit system.
+
+**`[weather_providers]`** — Provider priority order and API keys. Open-Meteo requires no key. WeatherAPI.com and Tomorrow.io require API keys configured here.
 
 **`[logging]`** — Log level, output file, rotation, and optional debug file.  The
 main log is rotated at `max_bytes` (default 5 MB) keeping `backup_count` old
@@ -215,11 +221,8 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 |---------|-------------|
 | `.help` | Show available commands (admin commands visible only when authed) |
 | `.modules` | List loaded and available modules |
-| `.weather` / `.w [location]` | Current conditions — worldwide |
-| `.forecast` / `.f [location]` | 4-day forecast — worldwide |
-| `.hourly` / `.fh [location]` | Next 8 hours — US only (NWS) |
-| `.alerts` / `.wx [location]` | Active NWS alerts — US only |
-| `.discuss` / `.disc [location]` | NWS area forecast discussion — US only |
+| `.weather` / `.w [location]` | Current conditions — worldwide (multi-provider) |
+| `.forecast` / `.f [location]` | Multi-day forecast — worldwide (multi-provider) |
 | `.regloc <location>` | Save your default location |
 | `.myloc` | Show your saved location |
 | `.delloc` | Delete your saved location |
@@ -311,6 +314,53 @@ Available from `self.bot`: `cfg` (ConfigParser), `loc_get(nick)`, `loc_set(nick,
 
 Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` runs before it's removed. `on_raw(line)` is called for every incoming IRC line (after IRCv3 tag stripping) and lets modules react to server numerics, NOTICEs, or any other traffic the core doesn't dispatch as a command. Use these for setup, cleanup, and advanced protocol integration.
 
+## Adding a Weather Provider
+
+Create a new file in `weather_providers/`. Implement a class with `name`, `requires_key`, `get_weather()`, and `get_forecast()`:
+
+```python
+from weather_providers.base import WeatherResult, ForecastDay
+from weather_providers._http import get_json
+
+class MyProvider:
+    name = "MyWeather"
+    requires_key = True
+
+    def __init__(self, api_key: str) -> None:
+        self._key = api_key
+
+    async def get_weather(self, lat, lon, location, **kwargs) -> WeatherResult:
+        data = await get_json("https://api.myweather.com/current",
+                              params={"key": self._key, "lat": lat, "lon": lon})
+        return WeatherResult(
+            source=self.name,
+            temperature=data["temp_c"],
+            description=data["condition"],
+            location=location,
+        )
+
+    async def get_forecast(self, lat, lon, location, days=4, **kwargs) -> WeatherResult:
+        data = await get_json("https://api.myweather.com/forecast",
+                              params={"key": self._key, "lat": lat, "lon": lon, "days": days})
+        fc = [ForecastDay(d["name"], d["high"], d["low"], d["desc"]) for d in data["days"]]
+        return WeatherResult(source=self.name, temperature=None, description="",
+                             location=location, forecast=fc)
+```
+
+Then register it in `weather_providers/__init__.py`:
+
+```python
+from .myprovider import MyProvider
+
+def _make_myprovider(cfg):
+    key = cfg.get("weather_providers", "myprovider_key", fallback="").strip()
+    return MyProvider(key) if key else None
+
+_register("myprovider", _make_myprovider)
+```
+
+Add `myprovider_key = <your-key>` to `config.ini` under `[weather_providers]` and optionally add it to the `priority` list. The system handles errors, fallback, and response normalization automatically.
+
 ## Operational Notes
 
 **Nick collision recovery:** If the configured nick is taken, the bot appends `_` and retries.
@@ -347,13 +397,13 @@ The bot has been through seven audit passes with 84 findings, all resolved. See 
 
 ## Testing
 
-119 automated tests in `tests/run_tests.py`. No external test framework required:
+147 automated tests in `tests/run_tests.py`. No external test framework required:
 
 ```
 python tests/run_tests.py
 ```
 
-Covers protocol parsing, store operations (CRUD, flush, atomic writes, pruning, type validation), calculator sandboxing and DoS guards, dice, weather data merging, unit conversions, sender injection prevention and line limits, password hashing, thread-safe containers, async architecture verification, and all security hardening fixes from audit passes six and seven. Compatible with pytest.
+Covers protocol parsing, store operations (CRUD, flush, atomic writes, pruning, type validation), calculator sandboxing and DoS guards, dice, weather provider registry and output formatting, unit conversions, sender injection prevention and line limits, password hashing, thread-safe containers, async architecture verification, and all security hardening fixes from audit passes six and seven. Compatible with pytest.
 
 ## Known Limitations
 

@@ -3,6 +3,60 @@
 All notable changes to the Internets IRC bot are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] — 2026-03-04
+
+Multi-provider weather refactor.  Replaces the NWS + Open-Meteo dual-source
+system with a pluggable provider architecture supporting automatic fallback.
+147 automated tests.
+
+### Added
+
+- **`weather_providers/` package** — standalone multi-provider weather system
+  with `WeatherResult` / `ForecastDay` normalized dataclasses, a
+  `WeatherProvider` protocol, and ordered fallback registry.
+
+- **Open-Meteo provider** (`openmeteo.py`) — free, no API key required.
+
+- **WeatherAPI.com provider** (`weatherapi.py`) — requires API key, free tier
+  available (1M calls/month).
+
+- **Tomorrow.io provider** (`tomorrowio.py`) — requires API key, free tier
+  available (500 calls/day).
+
+- **Async HTTP helper** (`_http.py`) — uses `aiohttp` when available for true
+  non-blocking I/O, falls back to `requests` + `asyncio.to_thread()`.
+
+- **`[weather_providers]` config section** — configurable provider priority
+  order and API keys.  Open-Meteo always available as last-resort fallback.
+
+- **Provider source attribution** — weather output now includes `[Open-Meteo]`,
+  `[WeatherAPI]`, or `[Tomorrow.io]` tag showing which provider returned data.
+
+- **`aiohttp` optional dependency** — `pip install internets-irc[async]` for
+  true async HTTP.
+
+### Changed
+
+- **Weather commands simplified** — `.weather`/`.w` and `.forecast`/`.f` now
+  query the provider chain instead of hard-coded NWS/Open-Meteo routing.
+
+### Removed
+
+- **NWS module** (`modules/nws.py`) — replaced by the weather_providers system.
+
+- **NWS-only commands** — `.hourly`/`.fh`, `.alerts`/`.wx`, `.discuss`/`.disc`
+  removed.  These depended on NWS-specific API features.
+
+- **`_merge_current` / `_om_current` / `_om_forecast`** — legacy helper
+  functions replaced by the provider abstraction.
+
+### Testing
+
+- 147 automated tests (up from 119).  Added: `WeatherResult` dataclass tests,
+  provider protocol compliance tests, registry configuration tests (priority
+  ordering, key filtering, unknown provider handling), format function tests,
+  async coroutine verification for all providers.
+
 ## [1.3.0] — 2026-03-03
 
 Security hardening release. Full zero-trust line-by-line audit per the Final

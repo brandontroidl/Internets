@@ -17,7 +17,7 @@ See modules/base.py for the interface.
 
 from __future__ import annotations
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 import asyncio
 import ssl
@@ -674,7 +674,7 @@ class IRCBot:
             f"Loaded: {', '.join(loaded)}" if loaded else "No modules loaded.")
         avail = sorted(
             p.stem for p in MODULES_DIR.glob("*.py")
-            if p.stem not in ("__init__", "base", "geocode", "nws", "units")
+            if p.stem not in ("__init__", "base", "geocode", "units")
             and p.stem not in loaded
         )
         if avail:

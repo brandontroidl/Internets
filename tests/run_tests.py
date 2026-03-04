@@ -335,93 +335,221 @@ def _():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# modules/weather.py (merge/format logic)
+# weather_providers + modules/weather.py (multi-provider system)
 # ══════════════════════════════════════════════════════════════════════
-print("\n=== modules/weather.py ===")
-from modules.weather import _merge_current, _format_current
+print("\n=== weather_providers ===")
+import inspect  # needed for protocol checks in this section
 
-_BASE_DICT = {
-    "conditions": "Clear", "temp_c": 20.0, "feels_c": 20.0,
-    "feels_label": "Feels like", "dewpoint_c": 10.0,
-    "pressure_mb": 1013.0, "humidity": 50.0, "visibility_m": 16000.0,
-    "wind_kph": 15.0, "wind_deg": 180, "wind_gusts_kph": 20.0,
-    "updated": "2026-03-03T12:00",
-}
-
-@test("weather merge: both None → None")
+@test("WeatherResult: dataclass is frozen and has required fields")
 def _():
-    assert _merge_current(None, None) is None
+    from weather_providers.base import WeatherResult, ForecastDay
+    r = WeatherResult(
+        source="Test", temperature=20.0, description="Clear",
+        location="Testville", feels_like_c=18.0, humidity=50.0,
+        wind_kph=15.0, wind_dir="S", pressure_mb=1013.0,
+        visibility_m=16000.0, dewpoint_c=10.0,
+    )
+    assert r.source == "Test"
+    assert r.temperature == 20.0
+    assert r.forecast == []
+    # Frozen — attributes can't be mutated.
+    try:
+        r.source = "Other"
+        assert False, "should be frozen"
+    except AttributeError:
+        pass
 
-@test("weather merge: primary None → fallback")
+@test("ForecastDay: dataclass is frozen")
 def _():
-    fb = dict(_BASE_DICT)
-    assert _merge_current(None, fb) is fb
+    from weather_providers.base import ForecastDay
+    fd = ForecastDay(day_name="Monday", high_c=25.0, low_c=15.0, description="Sunny")
+    assert fd.day_name == "Monday"
+    assert fd.high_c == 25.0
+    try:
+        fd.day_name = "Tuesday"
+        assert False, "should be frozen"
+    except AttributeError:
+        pass
 
-@test("weather merge: fallback None → primary")
+@test("WeatherResult: forecast field holds ForecastDay list")
 def _():
-    pr = dict(_BASE_DICT)
-    assert _merge_current(pr, None) is pr
+    from weather_providers.base import WeatherResult, ForecastDay
+    fc = [ForecastDay("Mon", 25.0, 15.0, "Sunny"), ForecastDay("Tue", 20.0, 12.0, "Rain")]
+    r = WeatherResult(source="X", temperature=20.0, description="Clear",
+                      location="Here", forecast=fc)
+    assert len(r.forecast) == 2
+    assert r.forecast[0].day_name == "Mon"
 
-@test("weather merge: primary wins, fallback fills gaps")
+@test("OpenMeteoProvider: implements WeatherProvider protocol")
 def _():
-    pr = {"conditions": None, "temp_c": 10.0, "pressure_mb": None,
-           "humidity": 91.0, "feels_c": None, "feels_label": None,
-           "dewpoint_c": 8.0, "visibility_m": None,
-           "wind_kph": 23.0, "wind_deg": 0, "wind_gusts_kph": None,
-           "updated": "2026-03-03T06:55"}
-    fb = dict(_BASE_DICT)
-    m = _merge_current(pr, fb)
-    assert m["temp_c"] == 10.0      # NWS wins
-    assert m["humidity"] == 91.0    # NWS wins
-    assert m["conditions"] == "Clear"  # OM fills gap
-    assert m["pressure_mb"] == 1013.0  # OM fills gap
-    assert m["visibility_m"] == 16000.0  # OM fills gap
+    from weather_providers.base import WeatherProvider
+    from weather_providers.openmeteo import OpenMeteoProvider
+    p = OpenMeteoProvider()
+    assert isinstance(p, WeatherProvider)
+    assert p.name == "Open-Meteo"
+    assert p.requires_key is False
+    assert inspect.iscoroutinefunction(p.get_weather)
+    assert inspect.iscoroutinefunction(p.get_forecast)
 
-@test("weather merge: NWS heat index label preserved")
+@test("WeatherAPIProvider: implements WeatherProvider protocol")
 def _():
-    pr = dict(_BASE_DICT, feels_c=35.0, feels_label="Heat index")
-    fb = dict(_BASE_DICT, feels_c=30.0, feels_label="Feels like")
-    m = _merge_current(pr, fb)
-    assert m["feels_label"] == "Heat index"
+    from weather_providers.base import WeatherProvider
+    from weather_providers.weatherapi import WeatherAPIProvider
+    p = WeatherAPIProvider("test-key")
+    assert isinstance(p, WeatherProvider)
+    assert p.name == "WeatherAPI"
+    assert p.requires_key is True
+    assert inspect.iscoroutinefunction(p.get_weather)
+    assert inspect.iscoroutinefunction(p.get_forecast)
 
-@test("weather format: complete dict produces valid output")
+@test("TomorrowIOProvider: implements WeatherProvider protocol")
 def _():
-    body = _format_current(_BASE_DICT)
-    assert body is not None
+    from weather_providers.base import WeatherProvider
+    from weather_providers.tomorrowio import TomorrowIOProvider
+    p = TomorrowIOProvider("test-key")
+    assert isinstance(p, WeatherProvider)
+    assert p.name == "Tomorrow.io"
+    assert p.requires_key is True
+    assert inspect.iscoroutinefunction(p.get_weather)
+    assert inspect.iscoroutinefunction(p.get_forecast)
+
+@test("OpenMeteo WMO_CODES: covers common weather codes")
+def _():
+    from weather_providers.openmeteo import WMO_CODES
+    assert WMO_CODES[0] == "Clear"
+    assert WMO_CODES[3] == "Overcast"
+    assert WMO_CODES[63] == "Rain"
+    assert WMO_CODES[95] == "Thunderstorm"
+
+@test("OpenMeteo _deg_to_card: converts degrees to cardinal")
+def _():
+    from weather_providers.openmeteo import _deg_to_card
+    assert _deg_to_card(0) == "N"
+    assert _deg_to_card(90) == "E"
+    assert _deg_to_card(180) == "S"
+    assert _deg_to_card(270) == "W"
+    assert _deg_to_card(None) == ""
+
+@test("configure: defaults to Open-Meteo when no config section")
+def _():
+    from configparser import ConfigParser
+    import weather_providers as wp
+    cfg = ConfigParser()
+    wp.configure(cfg)
+    providers = wp.get_providers()
+    assert len(providers) >= 1
+    assert providers[0].name == "Open-Meteo"
+
+@test("configure: skips providers without API keys")
+def _():
+    from configparser import ConfigParser
+    import weather_providers as wp
+    cfg = ConfigParser()
+    cfg.add_section("weather_providers")
+    cfg.set("weather_providers", "priority", "weatherapi, openmeteo")
+    # No weatherapi_key set → should skip weatherapi.
+    wp.configure(cfg)
+    providers = wp.get_providers()
+    names = [p.name for p in providers]
+    assert "WeatherAPI" not in names
+    assert "Open-Meteo" in names
+
+@test("configure: registers providers with keys in priority order")
+def _():
+    from configparser import ConfigParser
+    import weather_providers as wp
+    cfg = ConfigParser()
+    cfg.add_section("weather_providers")
+    cfg.set("weather_providers", "priority", "weatherapi, tomorrowio, openmeteo")
+    cfg.set("weather_providers", "weatherapi_key", "fake-key-1")
+    cfg.set("weather_providers", "tomorrowio_key", "fake-key-2")
+    wp.configure(cfg)
+    providers = wp.get_providers()
+    names = [p.name for p in providers]
+    assert names == ["WeatherAPI", "Tomorrow.io", "Open-Meteo"]
+
+@test("configure: ignores unknown provider IDs")
+def _():
+    from configparser import ConfigParser
+    import weather_providers as wp
+    cfg = ConfigParser()
+    cfg.add_section("weather_providers")
+    cfg.set("weather_providers", "priority", "nonexistent, openmeteo")
+    wp.configure(cfg)
+    providers = wp.get_providers()
+    assert len(providers) == 1
+    assert providers[0].name == "Open-Meteo"
+
+@test("weather _format_current: produces valid output from WeatherResult")
+def _():
+    from weather_providers.base import WeatherResult
+    from modules.weather import _format_current
+    r = WeatherResult(
+        source="TestAPI", temperature=20.0, description="Clear",
+        location="Testville", feels_like_c=18.0, humidity=50.0,
+        wind_kph=15.0, wind_dir="S", pressure_mb=1013.0,
+        visibility_m=16000.0, dewpoint_c=10.0,
+    )
+    body = _format_current(r)
     assert "Conditions Clear" in body
     assert "Temperature" in body
     assert "Humidity 50%" in body
+    assert "[TestAPI]" in body
 
-@test("weather format: None → None")
+@test("weather _format_current: calm wind when < 1 kph")
 def _():
-    assert _format_current(None) is None
+    from weather_providers.base import WeatherResult
+    from modules.weather import _format_current
+    r = WeatherResult(
+        source="X", temperature=20.0, description="Clear",
+        location="Here", wind_kph=0.5,
+    )
+    assert "Calm" in _format_current(r)
 
-@test("weather format: calm wind (< 1 kph)")
+@test("weather _format_current: feels-like hidden when < 2° diff")
 def _():
-    d = dict(_BASE_DICT, wind_kph=0.5)
-    body = _format_current(d)
-    assert "Calm" in body
+    from weather_providers.base import WeatherResult
+    from modules.weather import _format_current
+    r_close = WeatherResult(
+        source="X", temperature=20.0, description="Clear",
+        location="Here", feels_like_c=20.5,
+    )
+    assert "Feels like" not in _format_current(r_close)
+    r_far = WeatherResult(
+        source="X", temperature=20.0, description="Clear",
+        location="Here", feels_like_c=15.0,
+    )
+    assert "Feels like" in _format_current(r_far)
 
-@test("weather format: gusts only shown when > 1.3x wind")
+@test("weather _format_forecast: produces valid output from WeatherResult")
 def _():
-    d_gusty = dict(_BASE_DICT, wind_kph=20.0, wind_gusts_kph=30.0)
-    assert "gusts" in _format_current(d_gusty)
-    d_mild = dict(_BASE_DICT, wind_kph=20.0, wind_gusts_kph=25.0)
-    assert "gusts" not in _format_current(d_mild)
+    from weather_providers.base import WeatherResult, ForecastDay
+    from modules.weather import _format_forecast
+    r = WeatherResult(
+        source="TestAPI", temperature=20.0, description="Clear",
+        location="Testville",
+        forecast=[
+            ForecastDay("Monday", 25.0, 15.0, "Sunny"),
+            ForecastDay("Tuesday", 20.0, 12.0, "Rain"),
+        ],
+    )
+    body = _format_forecast(r)
+    assert "Monday Sunny" in body
+    assert "Tuesday Rain" in body
+    assert "[TestAPI]" in body
 
-@test("weather format: no N/A when all fields present")
+@test("weather _format_forecast: empty on no forecast data")
 def _():
-    body = _format_current(_BASE_DICT)
-    assert "N/A" not in body
+    from weather_providers.base import WeatherResult
+    from modules.weather import _format_forecast
+    r = WeatherResult(source="X", temperature=20.0, description="Clear",
+                      location="Here")
+    assert _format_forecast(r) == ""
 
-@test("weather format: feels-like hidden when < 2° diff")
+@test("_http module: get_json is async")
 def _():
-    d = dict(_BASE_DICT, temp_c=20.0, feels_c=20.5)
-    body = _format_current(d)
-    assert "Feels like" not in body
-    d2 = dict(_BASE_DICT, temp_c=20.0, feels_c=15.0)
-    body2 = _format_current(d2)
-    assert "Feels like" in body2
+    from weather_providers._http import get_json
+    assert inspect.iscoroutinefunction(get_json)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -765,24 +893,28 @@ def _():
     from modules.geocode import geocode
     assert inspect.iscoroutinefunction(geocode)
 
-@test("async nws functions are coroutines")
+@test("async weather provider methods are coroutines")
 def _():
-    from modules import nws
-    for name in ("get_grid", "current", "forecast", "hourly", "alerts", "discussion"):
-        fn = getattr(nws, name)
-        assert inspect.iscoroutinefunction(fn), f"nws.{name} is not async"
+    from weather_providers.openmeteo import OpenMeteoProvider
+    from weather_providers.weatherapi import WeatherAPIProvider
+    from weather_providers.tomorrowio import TomorrowIOProvider
+    for cls, args in [(OpenMeteoProvider, ()), (WeatherAPIProvider, ("k",)),
+                      (TomorrowIOProvider, ("k",))]:
+        p = cls(*args)
+        assert inspect.iscoroutinefunction(p.get_weather), f"{cls.__name__}.get_weather not async"
+        assert inspect.iscoroutinefunction(p.get_forecast), f"{cls.__name__}.get_forecast not async"
 
-@test("async weather helpers (_om_current, _om_forecast) are coroutines")
+@test("weather _format_current and _format_forecast are sync (pure functions)")
 def _():
-    from modules.weather import _om_current, _om_forecast
-    assert inspect.iscoroutinefunction(_om_current)
-    assert inspect.iscoroutinefunction(_om_forecast)
-
-@test("weather _merge_current and _format_current are sync (pure functions)")
-def _():
-    from modules.weather import _merge_current, _format_current
-    assert not inspect.iscoroutinefunction(_merge_current)
+    from modules.weather import _format_current, _format_forecast
     assert not inspect.iscoroutinefunction(_format_current)
+    assert not inspect.iscoroutinefunction(_format_forecast)
+
+@test("weather_providers.get_weather and get_forecast are async")
+def _():
+    from weather_providers import get_weather, get_forecast
+    assert inspect.iscoroutinefunction(get_weather)
+    assert inspect.iscoroutinefunction(get_forecast)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1085,20 +1217,6 @@ def _():
     from sender import Sender
     assert hasattr(Sender, "MAX_QUEUE")
     assert Sender.MAX_QUEUE > 0
-
-@test("SEC-021: NWS module has URL validation")
-def _():
-    source = Path("modules/nws.py").read_text()
-    assert "_validate_nws_url" in source
-    assert "api.weather.gov" in source
-
-@test("SEC-021: _validate_nws_url rejects non-NWS URLs")
-def _():
-    from modules.nws import _validate_nws_url
-    assert _validate_nws_url("https://api.weather.gov/points/40,-74") is not None
-    assert _validate_nws_url("https://evil.com/steal") is None
-    assert _validate_nws_url("") is None
-    assert _validate_nws_url(None) is None
 
 @test("BUG-051: Store._read validates loaded data type")
 def _():
