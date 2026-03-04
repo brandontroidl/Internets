@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
 import requests
@@ -10,7 +11,8 @@ log = logging.getLogger("internets.ud")
 _IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 
 
-def _lookup(term: str, index: int, user_agent: str) -> str:
+def _lookup_sync(term: str, index: int, user_agent: str) -> str:
+    """Blocking HTTP call — run via asyncio.to_thread."""
     try:
         r    = requests.get(
             "https://api.urbandictionary.com/v0/define",
@@ -41,7 +43,7 @@ class UDModule(BotModule):
         except KeyError:
             self._ua = "Internets/1.0"
 
-    def cmd_ud(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_ud(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}u <word> [/N]  e.g. {p}u yolo /2")
@@ -49,7 +51,8 @@ class UDModule(BotModule):
         m    = _IDX_RE.match(arg.strip())
         term = m.group(1).strip() if m else arg.strip()
         idx  = int(m.group(2))    if m else 1
-        self.bot.privmsg(reply_to, _lookup(term, idx, self._ua))
+        result = await asyncio.to_thread(_lookup_sync, term, idx, self._ua)
+        self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}u/.urbandictionary <word> [/N]   Urban Dictionary  e.g. {prefix}u yolo /2"]

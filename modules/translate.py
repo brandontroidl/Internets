@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
 import requests
@@ -10,7 +11,8 @@ log = logging.getLogger("internets.translate")
 _LANG_RE = re.compile(r"^[a-z]{2}$")
 
 
-def _translate(src: str | None, tgt: str, text: str) -> str:
+def _translate_sync(src: str | None, tgt: str, text: str) -> str:
+    """Blocking HTTP call — run via asyncio.to_thread."""
     try:
         r = requests.get(
             "https://translate.googleapis.com/translate_a/single",
@@ -30,7 +32,7 @@ def _translate(src: str | None, tgt: str, text: str) -> str:
 class TranslateModule(BotModule):
     COMMANDS: dict[str, str] = {"t": "cmd_translate", "translate": "cmd_translate"}
 
-    def cmd_translate(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_translate(self, nick: str, reply_to: str, arg: str | None) -> None:
         p = self.bot.cfg["bot"]["command_prefix"]
         if not arg:
             self.bot.privmsg(reply_to, f"{nick}: {p}t [src] <tgt> <text>  e.g. {p}t en es Hello")
@@ -43,7 +45,8 @@ class TranslateModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: {p}t [src] <tgt> <text>")
             return
-        self.bot.privmsg(reply_to, _translate(src, tgt, text))
+        result = await asyncio.to_thread(_translate_sync, src, tgt, text)
+        self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
         return [f"  {prefix}t/.translate [src] <tgt> <text>   Translate  e.g. {prefix}t en es Hello"]

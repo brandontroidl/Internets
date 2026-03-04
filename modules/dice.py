@@ -35,7 +35,7 @@ def _roll(expr: str) -> str:
 class DiceModule(BotModule):
     COMMANDS: dict[str, str] = {"d": "cmd_dice"}
 
-    def cmd_dice(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_dice(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}d [X]dN[+/-M]  e.g. {p}d 3d6+2")

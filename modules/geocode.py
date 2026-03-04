@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
 import requests
@@ -34,7 +35,13 @@ def _format_name(addr: dict[str, str], fallback: str) -> tuple[str, str]:
     return f"{city}, {country}".strip(", ") or fallback, cc
 
 
-def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] | None:
+def _get(url: str, *, params: dict | None = None,
+         headers: dict | None = None, timeout: int = 10) -> requests.Response:
+    """Blocking HTTP GET — always called via asyncio.to_thread."""
+    return requests.get(url, params=params, headers=headers, timeout=timeout)
+
+
+async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] | None:
     """
     Resolve a location string to (lat, lon, display_name, country_code).
     Returns None on failure.  Accepts place names, zip codes, or 'lat,lon'.
@@ -46,22 +53,22 @@ def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] | None
     if m:
         lat, lon = float(m.group(1)), float(m.group(2))
         try:
-            r    = requests.get(
-                "https://nominatim.openstreetmap.org/reverse",
+            r = await asyncio.to_thread(
+                _get, "https://nominatim.openstreetmap.org/reverse",
                 params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
-                headers=hdrs, timeout=10,
+                headers=hdrs,
             )
-            d    = r.json()
+            d = r.json()
             name, cc = _format_name(d.get("address", {}), f"{lat:.4f},{lon:.4f}")
             return lat, lon, name, cc
         except Exception:
             return lat, lon, f"{lat:.4f},{lon:.4f}", ""
 
     try:
-        r = requests.get(
-            "https://nominatim.openstreetmap.org/search",
+        r = await asyncio.to_thread(
+            _get, "https://nominatim.openstreetmap.org/search",
             params={"q": query, "format": "json", "limit": 1, "addressdetails": 1},
-            headers=hdrs, timeout=10,
+            headers=hdrs,
         )
         hits = r.json()
         if not hits:

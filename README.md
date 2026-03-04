@@ -30,11 +30,13 @@ tests/
   run_tests.py        Standalone test suite (no external dependencies)
 ```
 
-The core (`internets.py`) owns the socket, IRC state machine, and command dispatch. Everything else is a module. Modules register commands via a `COMMANDS` dict mapping command names to method names, receive `(nick, reply_to, arg)` on invocation, and talk back through `bot.privmsg()` / `bot.notice()` / `bot.reply()`. Every command invocation runs on its own daemon thread.
+The core (`internets.py`) owns the asyncio event loop, IRC state machine, and command dispatch. Everything else is a module. Modules register commands via a `COMMANDS` dict mapping command names to async method names, receive `(nick, reply_to, arg)` on invocation, and talk back through `bot.privmsg()` / `bot.notice()` / `bot.reply()`. Every command invocation runs as an `asyncio.Task`.
 
-The outbound path goes through `Sender`, which implements a token-bucket (5 burst, ~40 msg/min sustained) to stay under IRC flood limits. Protocol messages (PONG, CAP, NICK) bypass the bucket at priority 0.
+The outbound path goes through `Sender`, an async drain loop over `asyncio.PriorityQueue` that implements a token-bucket (5 burst, ~40 msg/min sustained) to stay under IRC flood limits. Protocol messages (PONG, CAP, NICK) bypass the bucket at priority 0. `Sender.enqueue()` is thread-safe via `loop.call_soon_threadsafe()`.
 
 ## Design Decisions
+
+**Async architecture.** The bot runs on a single asyncio event loop. The connection, line reading, command dispatch, send queue, keepalive, and console all run as async tasks or coroutines. Module command handlers are coroutines too — blocking I/O (HTTP via `requests`, password hashing) runs via `asyncio.to_thread()` inside the handler. This keeps the event loop free for protocol processing while still supporting the `requests` library without requiring `aiohttp` as an additional dependency.
 
 **Founder-gated channel control.** `.join` and `.part` require the requesting user to be either a bot admin or the registered channel founder. Founder verification is done asynchronously: the bot WHOIS-es the user for their NickServ account and queries IRC services (`INFO #channel`) for the channel founder, then compares. This works across Anope, Atheme, Epona, X2, X3, and forks — anything that responds with a `Founder:` or `Owner:` line. The services bot nick is configurable via `services_nick` in `config.ini` (default: `ChanServ`). Users who aren't the founder can still bring the bot in via IRC's native `/INVITE`, which is always accepted. Joined channels are persisted to `channels.json` and restored on reconnect.
 
@@ -197,7 +199,7 @@ from .base import BotModule
 class PingModule(BotModule):
     COMMANDS: dict[str, str] = {"ping": "cmd_ping"}
 
-    def cmd_ping(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_ping(self, nick: str, reply_to: str, arg: str | None) -> None:
         self.bot.privmsg(reply_to, f"{nick}: pong")
 
     def help_lines(self, prefix: str) -> list[str]:
@@ -207,7 +209,17 @@ def setup(bot: object) -> PingModule:
     return PingModule(bot)
 ```
 
-The bot passes `nick` (who sent the command), `reply_to` (the channel or nick to respond to), and `arg` (everything after the command, or `None`). Use `self.bot.privmsg()` for public responses, `self.bot.notice()` for private ones, or `self.bot.reply()` / `self.bot.preply()` for automatic routing.
+The bot passes `nick` (who sent the command), `reply_to` (the channel or nick to respond to), and `arg` (everything after the command, or `None`). All command handlers are coroutines (`async def`). Use `self.bot.privmsg()` for public responses, `self.bot.notice()` for private ones, or `self.bot.reply()` / `self.bot.preply()` for automatic routing.
+
+For blocking I/O (HTTP, disk, CPU-heavy work), use `await asyncio.to_thread(...)`:
+
+```python
+import asyncio, requests
+
+async def cmd_fetch(self, nick, reply_to, arg):
+    resp = await asyncio.to_thread(requests.get, "https://api.example.com/data", timeout=10)
+    self.bot.privmsg(reply_to, f"Got: {resp.json()}")
+```
 
 Available from `self.bot`: `cfg` (ConfigParser), `loc_get(nick)`, `loc_set(nick, raw)`, `loc_del(nick)`, `rate_limited(nick)`, `flood_limited(nick)`, `is_admin(nick)`, `channel_users(channel)`, `active_channels`, `send(raw_irc, priority)`.
 
@@ -219,7 +231,7 @@ Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` 
 
 **Auto-reconnect with exponential backoff.** On disconnect, the bot reconnects with exponential backoff: 15s, 30s, 60s, 120s, 240s, capped at 5 minutes. The attempt counter resets on successful connection. Channel list is restored from `channels.json`. If SASL is available, identification happens during registration. Otherwise, if a NickServ password is configured, the bot waits for identification confirmation (up to 10 seconds) before sending JOINs so that `+R` channels and ChanServ access lists work. If a saved channel is invite-only (`+i`), the bot asks ChanServ to re-invite it. Channels that reject with 471 (full), 474 (banned), or 475 (bad key) are logged and removed from the saved list.
 
-**Keepalive:** A background thread sends `PING` every 90 seconds. If the socket is dead, the reconnect logic takes over.
+**Keepalive:** An async task sends `PING` every 90 seconds. If the read times out after 300 seconds with no data, the connection is presumed dead and the reconnect logic takes over.
 
 **User tracking.** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps in memory, flushed to `users.json` every 30 seconds. Populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster). Entries older than 90 days (configurable via `user_max_age_days` in `config.ini`) are automatically pruned during flushes.
 
@@ -251,7 +263,7 @@ The project ships with a standalone test suite in `tests/run_tests.py`. No exter
 python tests/run_tests.py
 ```
 
-The suite covers protocol parsing (ISUPPORT, MODE, NAMES, SASL), the store (CRUD, flush, atomic writes, user pruning), the calculator (arithmetic, sandboxing, DoS guards), dice, weather data merging and formatting, unit conversions, sender injection prevention, password hashing round-trips, the ChannelSet thread-safe container, and exponential backoff. Tests are also compatible with pytest if you have it installed.
+The suite covers protocol parsing (ISUPPORT, MODE, NAMES, SASL), the store (CRUD, flush, atomic writes, user pruning), the calculator (arithmetic, sandboxing, DoS guards), dice, weather data merging and formatting, unit conversions, sender injection prevention, password hashing round-trips, the ChannelSet thread-safe container, exponential backoff, the async sender (drain, priority bypass, thread-safe enqueue from executors), and async handler verification (all module and core command handlers confirmed as coroutines). Tests are also compatible with pytest if you have it installed.
 
 ## Known Limitations
 

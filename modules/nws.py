@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
 import requests
@@ -16,9 +17,16 @@ _ALERT_ICON: dict[str, str] = {
 WeatherDict = dict[str, float | str | None]
 
 
-def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | None:
+def _get(url: str, *, params: dict | None = None,
+         headers: dict | None = None, timeout: int = 10) -> requests.Response:
+    """Blocking HTTP GET — always called via asyncio.to_thread."""
+    return requests.get(url, params=params, headers=headers, timeout=timeout)
+
+
+async def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | None:
     try:
-        r = requests.get(f"{_NWS_BASE}/points/{lat:.4f},{lon:.4f}", headers=headers, timeout=10)
+        r = await asyncio.to_thread(
+            _get, f"{_NWS_BASE}/points/{lat:.4f},{lon:.4f}", headers=headers)
         r.raise_for_status()
         return r.json().get("properties")
     except Exception as e:
@@ -26,21 +34,14 @@ def get_grid(lat: float, lon: float, headers: dict[str, str]) -> dict | None:
     return None
 
 
-def current(lat: float, lon: float, grid: dict, headers: dict[str, str]) -> WeatherDict | None:
-    """Return a dict of current conditions, or None on failure.
-
-    Keys (all optional, may be None):
-        conditions, temp_c, feels_c, feels_label,
-        dewpoint_c, pressure_mb, humidity, visibility_m,
-        wind_kph, wind_deg, wind_gusts_kph, updated
-    """
+async def current(lat: float, lon: float, grid: dict,
+                  headers: dict[str, str]) -> WeatherDict | None:
     try:
-        r   = requests.get(grid["observationStations"], headers=headers, timeout=10)
+        r   = await asyncio.to_thread(_get, grid["observationStations"], headers=headers)
         sid = r.json()["features"][0]["properties"]["stationIdentifier"]
-        obs = requests.get(
-            f"{_NWS_BASE}/stations/{sid}/observations/latest",
-            headers=headers, timeout=10,
-        ).json()["properties"]
+        obs_r = await asyncio.to_thread(
+            _get, f"{_NWS_BASE}/stations/{sid}/observations/latest", headers=headers)
+        obs = obs_r.json()["properties"]
 
         temp_c   = obs.get("temperature",        {}).get("value")
         wind_ms  = obs.get("windSpeed",          {}).get("value")
@@ -54,7 +55,6 @@ def current(lat: float, lon: float, grid: dict, headers: dict[str, str]) -> Weat
         vis_m    = obs.get("visibility",         {}).get("value")
         desc     = obs.get("textDescription") or None
 
-        # If the core fields are all null, the station has no usable data.
         if temp_c is None and humidity is None and wind_ms is None:
             log.info("NWS observation has no usable data — all core fields null")
             return None
@@ -85,11 +85,10 @@ def current(lat: float, lon: float, grid: dict, headers: dict[str, str]) -> Weat
     return None
 
 
-def forecast(grid: dict, headers: dict[str, str]) -> str | None:
+async def forecast(grid: dict, headers: dict[str, str]) -> str | None:
     try:
-        periods = requests.get(
-            grid["forecast"], headers=headers, timeout=10,
-        ).json()["properties"]["periods"]
+        r = await asyncio.to_thread(_get, grid["forecast"], headers=headers)
+        periods = r.json()["properties"]["periods"]
 
         days: list[tuple[str, str, float, float | None]] = []
         i = 0
@@ -117,11 +116,10 @@ def forecast(grid: dict, headers: dict[str, str]) -> str | None:
     return None
 
 
-def hourly(grid: dict, headers: dict[str, str]) -> str | None:
+async def hourly(grid: dict, headers: dict[str, str]) -> str | None:
     try:
-        periods = requests.get(
-            grid["forecastHourly"], headers=headers, timeout=10,
-        ).json()["properties"]["periods"][:8]
+        r = await asyncio.to_thread(_get, grid["forecastHourly"], headers=headers)
+        periods = r.json()["properties"]["periods"][:8]
 
         chunks: list[str] = []
         for p in periods:
@@ -136,13 +134,12 @@ def hourly(grid: dict, headers: dict[str, str]) -> str | None:
     return None
 
 
-def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] | None:
-    """Return list of formatted alert lines, [] if none, None on error."""
+async def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] | None:
     try:
-        r = requests.get(
-            f"{_NWS_BASE}/alerts/active",
+        r = await asyncio.to_thread(
+            _get, f"{_NWS_BASE}/alerts/active",
             params={"point": f"{lat:.4f},{lon:.4f}", "status": "actual"},
-            headers=headers, timeout=10,
+            headers=headers,
         )
         r.raise_for_status()
         features = r.json().get("features", [])
@@ -173,26 +170,23 @@ def alerts(lat: float, lon: float, headers: dict[str, str]) -> list[str] | None:
     return None
 
 
-def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
-    """Fetch and return up to 4 [LABEL] sections from the Area Forecast Discussion."""
+async def discussion(grid: dict, headers: dict[str, str]) -> list[str] | None:
     try:
         office = grid.get("cwa", "")
         if not office:
             return None
 
-        products = requests.get(
-            f"{_NWS_BASE}/products/types/AFD/locations/{office}",
-            headers=headers, timeout=10,
+        products = await asyncio.to_thread(
+            _get, f"{_NWS_BASE}/products/types/AFD/locations/{office}",
+            headers=headers,
         )
         products.raise_for_status()
         items = products.json().get("@graph", [])
         if not items:
             return None
 
-        product = requests.get(
-            f"{_NWS_BASE}/products/{items[0]['id']}",
-            headers=headers, timeout=10,
-        )
+        product = await asyncio.to_thread(
+            _get, f"{_NWS_BASE}/products/{items[0]['id']}", headers=headers)
         product.raise_for_status()
         text = product.json().get("productText", "")
         if not text:

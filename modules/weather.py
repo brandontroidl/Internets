@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import logging
 import requests
@@ -35,20 +36,22 @@ WMO_CODES: dict[int, str] = {
 }
 
 
-def _om_current(lat: float, lon: float) -> WeatherDict | None:
-    """Return a dict of current conditions from Open-Meteo, or None on failure.
+def _om_get(url: str, **kwargs) -> requests.Response:
+    """Blocking HTTP GET for Open-Meteo — called via asyncio.to_thread."""
+    return requests.get(url, **kwargs)
 
-    Keys match nws.current(): conditions, temp_c, feels_c, feels_label,
-    dewpoint_c, pressure_mb, humidity, visibility_m, wind_kph, wind_deg,
-    wind_gusts_kph, updated.
-    """
+
+async def _om_current(lat: float, lon: float) -> WeatherDict | None:
     try:
-        r = requests.get(_OM_BASE, params={
-            "latitude": lat, "longitude": lon,
-            "current": _OM_CURRENT_FIELDS,
-            "wind_speed_unit": "kmh",
-            "timezone": "auto",
-        }, timeout=10)
+        r = await asyncio.to_thread(
+            _om_get, _OM_BASE,
+            params={
+                "latitude": lat, "longitude": lon,
+                "current": _OM_CURRENT_FIELDS,
+                "wind_speed_unit": "kmh",
+                "timezone": "auto",
+            }, timeout=10,
+        )
         r.raise_for_status()
         cur = r.json().get("current", {})
 
@@ -77,7 +80,6 @@ def _om_current(lat: float, lon: float) -> WeatherDict | None:
 
 
 def _merge_current(primary: WeatherDict | None, fallback: WeatherDict | None) -> WeatherDict | None:
-    """Merge two weather dicts.  Primary values win; fallback fills None gaps."""
     if primary is None:
         return fallback
     if fallback is None:
@@ -90,17 +92,16 @@ def _merge_current(primary: WeatherDict | None, fallback: WeatherDict | None) ->
 
 
 def _format_current(d: WeatherDict | None) -> str | None:
-    """Format a weather dict into a single IRC output line."""
     if d is None:
         return None
 
-    temp_c   = d.get("temp_c")
-    feels_c  = d.get("feels_c")
-    label    = d.get("feels_label", "Feels like")
+    temp_c       = d.get("temp_c")
+    feels_c      = d.get("feels_c")
+    label        = d.get("feels_label", "Feels like")
     wind_kph_val = d.get("wind_kph")
-    wind_deg = d.get("wind_deg")
-    gusts    = d.get("wind_gusts_kph")
-    humidity = d.get("humidity")
+    wind_deg     = d.get("wind_deg")
+    gusts        = d.get("wind_gusts_kph")
+    humidity     = d.get("humidity")
 
     if wind_kph_val is not None and wind_kph_val < 1:
         wind_str = "Calm"
@@ -115,7 +116,6 @@ def _format_current(d: WeatherDict | None) -> str | None:
     cond = d.get("conditions") or "N/A"
     parts: list[str] = [f"Conditions {cond}", f"Temperature {cf(temp_c)}"]  # type: ignore[arg-type]
 
-    # Show feels-like / heat index / wind chill when meaningfully different.
     if feels_c is not None and temp_c is not None and abs(feels_c - temp_c) >= 2:  # type: ignore[operator]
         parts.append(f"{label} {cf(feels_c)}")  # type: ignore[arg-type]
 
@@ -130,14 +130,17 @@ def _format_current(d: WeatherDict | None) -> str | None:
     return " :: ".join(parts)
 
 
-def _om_forecast(lat: float, lon: float) -> str | None:
+async def _om_forecast(lat: float, lon: float) -> str | None:
     try:
-        r = requests.get(_OM_BASE, params={
-            "latitude": lat, "longitude": lon,
-            "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-            "forecast_days": 4,
-            "timezone": "auto",
-        }, timeout=10)
+        r = await asyncio.to_thread(
+            _om_get, _OM_BASE,
+            params={
+                "latitude": lat, "longitude": lon,
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                "forecast_days": 4,
+                "timezone": "auto",
+            }, timeout=10,
+        )
         r.raise_for_status()
         daily = r.json().get("daily", {})
         dates = daily.get("time", [])
@@ -190,45 +193,37 @@ class WeatherModule(BotModule):
         p = self.bot.cfg["bot"]["command_prefix"]
         return None, f"{nick}: no location saved — use {p}regloc <city or zip> first."
 
-    def _geo(self, nick: str, reply_to: str, arg: str | None) -> tuple[float, float, str, str] | None:
-        """Resolve location to coordinates. Checks rate limit before any API call."""
+    async def _geo(self, nick: str, reply_to: str, arg: str | None) -> tuple[float, float, str, str] | None:
         raw, err = self._resolve(nick, arg)
         if raw is None:
             self.bot.privmsg(reply_to, err)  # type: ignore[arg-type]
             return None
-        # Rate-check here: after the local lookup succeeds but before any API call.
         if self.bot.rate_limited(nick):
             self.bot.notice(nick, f"{nick}: slow down ({self._cooldown}s cooldown)")
             return None
-        geo = geocode(raw, self._ua)
+        geo = await geocode(raw, self._ua)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{raw}'")
         return geo
 
-    def _nws_grid(self, nick: str, reply_to: str, lat: float, lon: float, display: str) -> dict | None:
-        grid = nws.get_grid(lat, lon, self._headers)
-        if grid is None:
-            self.bot.privmsg(reply_to, f"{nick}: weather.gov has no grid data for {display}.")
-        return grid
-
     def _us_only(self, nick: str, reply_to: str, feature: str) -> None:
         self.bot.privmsg(reply_to, f"{nick}: {feature} requires a US location (NWS).")
 
-    def cmd_weather(self, nick: str, reply_to: str, arg: str | None) -> None:
-        geo = self._geo(nick, reply_to, arg)
+    async def cmd_weather(self, nick: str, reply_to: str, arg: str | None) -> None:
+        geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         log.info(f"weather {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
 
         nws_data: WeatherDict | None = None
         if cc == "us":
-            grid = nws.get_grid(lat, lon, self._headers)
+            grid = await nws.get_grid(lat, lon, self._headers)
             if grid:
-                nws_data = nws.current(lat, lon, grid, self._headers)
+                nws_data = await nws.current(lat, lon, grid, self._headers)
             else:
                 log.info(f"NWS no grid for {display!r}, falling back to Open-Meteo")
 
-        om_data = _om_current(lat, lon)
+        om_data = await _om_current(lat, lon)
         merged  = _merge_current(nws_data, om_data)
         body    = _format_current(merged)
 
@@ -237,44 +232,46 @@ class WeatherModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: weather data unavailable right now.")
 
-    def cmd_forecast(self, nick: str, reply_to: str, arg: str | None) -> None:
-        geo = self._geo(nick, reply_to, arg)
+    async def cmd_forecast(self, nick: str, reply_to: str, arg: str | None) -> None:
+        geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         log.info(f"forecast {display!r} ({cc or '?'}) [{lat:.4f},{lon:.4f}]")
         body: str | None = None
         if cc == "us":
-            grid = nws.get_grid(lat, lon, self._headers)
+            grid = await nws.get_grid(lat, lon, self._headers)
             if grid:
-                body = nws.forecast(grid, self._headers)
+                body = await nws.forecast(grid, self._headers)
             else:
                 log.info(f"NWS no grid for {display!r}, falling back to Open-Meteo")
         if body is None:
-            body = _om_forecast(lat, lon)
+            body = await _om_forecast(lat, lon)
         if body:
             self.bot.privmsg(reply_to, f":: {display} :: {body} ::")
         else:
             self.bot.privmsg(reply_to, f"{nick}: forecast unavailable right now.")
 
-    def cmd_hourly(self, nick: str, reply_to: str, arg: str | None) -> None:
-        geo = self._geo(nick, reply_to, arg)
+    async def cmd_hourly(self, nick: str, reply_to: str, arg: str | None) -> None:
+        geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         if cc != "us": return self._us_only(nick, reply_to, "hourly forecast")
-        grid = self._nws_grid(nick, reply_to, lat, lon, display)
-        if grid is None: return
-        body = nws.hourly(grid, self._headers)
+        grid = await nws.get_grid(lat, lon, self._headers)
+        if grid is None:
+            self.bot.privmsg(reply_to, f"{nick}: weather.gov has no grid data for {display}.")
+            return
+        body = await nws.hourly(grid, self._headers)
         if body:
             self.bot.privmsg(reply_to, f":: {display} — Next 8 Hours :: {body} ::")
         else:
             self.bot.privmsg(reply_to, f"{nick}: hourly forecast unavailable right now.")
 
-    def cmd_alerts(self, nick: str, reply_to: str, arg: str | None) -> None:
-        geo = self._geo(nick, reply_to, arg)
+    async def cmd_alerts(self, nick: str, reply_to: str, arg: str | None) -> None:
+        geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         if cc != "us": return self._us_only(nick, reply_to, "NWS alerts")
-        lines = nws.alerts(lat, lon, self._headers)
+        lines = await nws.alerts(lat, lon, self._headers)
         if lines is None:
             self.bot.privmsg(reply_to, f"{nick}: alerts unavailable right now.")
         elif not lines:
@@ -284,15 +281,17 @@ class WeatherModule(BotModule):
             for line in lines:
                 self.bot.privmsg(reply_to, line)
 
-    def cmd_discuss(self, nick: str, reply_to: str, arg: str | None) -> None:
-        geo = self._geo(nick, reply_to, arg)
+    async def cmd_discuss(self, nick: str, reply_to: str, arg: str | None) -> None:
+        geo = await self._geo(nick, reply_to, arg)
         if geo is None: return
         lat, lon, display, cc = geo
         if cc != "us": return self._us_only(nick, reply_to, "forecast discussion")
-        grid = self._nws_grid(nick, reply_to, lat, lon, display)
-        if grid is None: return
+        grid = await nws.get_grid(lat, lon, self._headers)
+        if grid is None:
+            self.bot.privmsg(reply_to, f"{nick}: weather.gov has no grid data for {display}.")
+            return
         office = grid.get("cwa", "?")
-        paras  = nws.discussion(grid, self._headers)
+        paras  = await nws.discussion(grid, self._headers)
         if paras is None:
             self.bot.privmsg(reply_to, f"{nick}: no forecast discussion for {display} ({office}).")
         else:

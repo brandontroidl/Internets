@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import time
-import threading
 import logging
 from .base import BotModule
 
@@ -16,7 +16,6 @@ _VERIFY_TIMEOUT = 15
 
 
 class _PendingJoin:
-    """State for an in-flight ownership verification."""
     __slots__ = ("nick", "channel", "reply_to", "created",
                  "account", "founder", "whois_done", "info_failed", "action")
 
@@ -40,8 +39,6 @@ class ChannelsModule(BotModule):
     or the registered channel founder.  Founder verification is async:
     WHOIS for the user's NickServ account, INFO on the channel via
     services, then compare.  Times out after 15s.
-
-    /INVITE bypasses all of this — handled by the core, always accepted.
     """
 
     COMMANDS: dict[str, str] = {
@@ -54,38 +51,45 @@ class ChannelsModule(BotModule):
         self._services: str = self.bot.cfg["bot"].get("services_nick", "ChanServ").strip()
         self._pending: dict[str, _PendingJoin] = {}
         self._svc_ctx: dict[str, float] = {}
+        # Lock is a threading.Lock because on_raw() is called from the event
+        # loop thread synchronously, while command handlers may run concurrently.
+        import threading
         self._lock = threading.Lock()
-
-        self._cleanup_stop = threading.Event()
-        self._cleanup_thread = threading.Thread(
-            target=self._cleanup_loop, daemon=True, name="chan-verify-gc")
-        self._cleanup_thread.start()
+        # Start the async cleanup task.
+        self._cleanup_task = asyncio.get_event_loop().create_task(
+            self._cleanup_loop(), name="chan-verify-gc")
         log.info(f"Services nick for ownership checks: {self._services}")
 
     def on_unload(self) -> None:
-        self._cleanup_stop.set()
+        if hasattr(self, "_cleanup_task") and self._cleanup_task:
+            self._cleanup_task.cancel()
 
     # ── Cleanup ──────────────────────────────────────────────────────────
 
-    def _cleanup_loop(self) -> None:
-        while not self._cleanup_stop.wait(timeout=5):
-            now = time.time()
-            with self._lock:
-                expired = [k for k, p in self._pending.items()
-                           if now - p.created > _VERIFY_TIMEOUT]
-                for k in expired:
-                    p = self._pending.pop(k)
-                    self.bot.privmsg(
-                        p.reply_to,
-                        f"{p.nick}: ownership verification timed out for {p.channel} "
-                        f"— try /INVITE or ask a bot admin.")
-                    log.info(f"Verify timeout: {p.nick} -> {p.channel}")
-                self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
-                                 if now - v < _VERIFY_TIMEOUT}
+    async def _cleanup_loop(self) -> None:
+        """Periodically expire stale verification requests."""
+        try:
+            while True:
+                await asyncio.sleep(5)
+                now = time.time()
+                with self._lock:
+                    expired = [k for k, p in self._pending.items()
+                               if now - p.created > _VERIFY_TIMEOUT]
+                    for k in expired:
+                        p = self._pending.pop(k)
+                        self.bot.privmsg(
+                            p.reply_to,
+                            f"{p.nick}: ownership verification timed out for {p.channel} "
+                            f"— try /INVITE or ask a bot admin.")
+                        log.info(f"Verify timeout: {p.nick} -> {p.channel}")
+                    self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
+                                     if now - v < _VERIFY_TIMEOUT}
+        except asyncio.CancelledError:
+            pass
 
     # ── Commands ─────────────────────────────────────────────────────────
 
-    def cmd_join(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_join(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}join <#channel>")
@@ -104,7 +108,7 @@ class ChannelsModule(BotModule):
 
         self._start_verify(nick, chan, reply_to, action="join")
 
-    def cmd_part(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_part(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg or not _CHAN_RE.match(arg):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}part <#channel>")
@@ -124,7 +128,7 @@ class ChannelsModule(BotModule):
 
         self._start_verify(nick, chan, reply_to, action="part")
 
-    def cmd_users(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_users(self, nick: str, reply_to: str, arg: str | None) -> None:
         if arg and arg.startswith(("#", "&", "+", "!")):
             channel = arg.strip()
         elif reply_to.startswith(("#", "&", "+", "!")):
@@ -239,12 +243,10 @@ class ChannelsModule(BotModule):
                 return
 
     def _ctx_by_recency(self) -> list[str]:
-        """Return context channel keys ordered by most recently seen.  Under lock."""
         return [k for k, _ in sorted(self._svc_ctx.items(),
                                      key=lambda x: x[1], reverse=True)]
 
     def _try_complete(self, p: _PendingJoin) -> None:
-        """Resolve a pending verification if enough data has arrived.  Under lock."""
         if p.info_failed:
             self._resolve(p, False,
                 f"{p.channel} is not registered with {self._services} "
@@ -268,7 +270,6 @@ class ChannelsModule(BotModule):
             return
 
     def _resolve(self, p: _PendingJoin, approved: bool, reason: str | None) -> None:
-        """Complete a pending verification.  Called under self._lock."""
         self._pending.pop(p.channel.lower(), None)
 
         if approved:

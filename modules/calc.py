@@ -10,7 +10,6 @@ from .base import BotModule
 
 log = logging.getLogger("internets.calc")
 
-# Safe functions and constants exposed to the calculator.
 _FUNCS: dict[str, Any] = {
     "abs": abs, "round": round, "min": min, "max": max,
     "sqrt": math.sqrt, "cbrt": math.cbrt,
@@ -40,13 +39,10 @@ _IMPLICIT_MUL: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"([a-zA-Z])(\d)"), r"\1*\2"),
 ]
 
-# Function/constant names containing digits that implicit multiplication
-# would mangle (log2 -> log*2).  Protected before regex runs.
 _DIGIT_NAMES: list[str] = sorted(
     [n for n in list(_FUNCS) + list(_CONSTS) if any(c.isdigit() for c in n)],
     key=len, reverse=True,
 )
-
 
 _MAX_DEPTH = 50
 
@@ -77,7 +73,6 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
         if op is None:
             raise ValueError(f"unsupported operator: {type(node.op).__name__}")
         left, right = _safe_eval(node.left, depth + 1), _safe_eval(node.right, depth + 1)
-        # Guard against exponent bombs (e.g. 9**9**9**9)
         if isinstance(node.op, ast.Pow):
             if isinstance(right, (int, float)) and abs(right) > 10000:
                 raise ValueError("exponent too large")
@@ -99,8 +94,6 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
 
 def _calc(expr: str) -> str:
     expr = expr.strip()
-    # Temporarily hide function names that contain digits (log2, log10, atan2)
-    # so the implicit multiplication regex doesn't split them.
     held: dict[str, str] = {}
     for i, name in enumerate(_DIGIT_NAMES):
         tag = f"\x01{i}\x01"
@@ -125,7 +118,7 @@ def _calc(expr: str) -> str:
 class CalcModule(BotModule):
     COMMANDS: dict[str, str] = {"cc": "cmd_calc"}
 
-    def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}cc <expression>  e.g. {p}cc 2pi")

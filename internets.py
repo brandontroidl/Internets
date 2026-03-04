@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Internets — modular IRC bot.
+Internets — async modular IRC bot.
+
+Architecture: asyncio event loop for connection, dispatch, and background
+tasks.  Module command handlers are coroutines.  Blocking I/O (HTTP via
+requests, disk, CPU-heavy work like password hashing) runs via
+asyncio.to_thread() inside the handler.
 
 Core commands: .help .modules .auth .deauth
                .load .unload .reload .reloadall .restart .rehash
@@ -11,13 +16,14 @@ See modules/base.py for the interface.
 
 from __future__ import annotations
 
+import asyncio
 import ssl
-import socket
 import re
 import sys
 import os
 import time
 import base64
+import signal
 import threading
 import logging
 import logging.handlers
@@ -61,14 +67,19 @@ MODULES_DIR = Path(cfg["bot"].get("modules_dir", "modules"))
 AUTO_LOAD   = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
 
 # All optional — the bot works fine if the server supports none of these.
-DESIRED_CAPS = {
+DESIRED_CAPS: set[str] = {
     "multi-prefix", "away-notify", "account-notify", "chghost",
     "extended-join", "server-time", "message-tags", "sasl",
 }
 
 
 class ChannelSet:
-    """Thread-safe set of active channel names (lowercased)."""
+    """Thread-safe set of active channel names (lowercased).
+
+    Thread safety is required because module command handlers run in
+    asyncio.to_thread (thread pool), but state mutations happen in
+    the event loop thread.
+    """
 
     def __init__(self) -> None:
         self._channels: set[str] = set()
@@ -106,10 +117,13 @@ def _backoff(attempt: int, base: float = 15.0, cap: float = 300.0) -> float:
     """Exponential backoff: 15, 30, 60, 120, 240, 300 (capped at 5 min)."""
     return min(base * (2 ** attempt), cap)
 
+
+# ── CLI ──────────────────────────────────────────────────────────────
+
 import argparse
 
 _cli = argparse.ArgumentParser(
-    description="Internets — modular IRC bot",
+    description="Internets — async modular IRC bot",
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""\
 debug examples:
@@ -145,8 +159,8 @@ class _DebugFilter(logging.Filter):
     """
     Attached to main-log and console handlers.  Passes a record if:
       - record level >= self.base_level (normal output), OR
-      - global_debug is True (`.debug on`), OR
-      - record's logger name is in the subsystem debug set (`.debug weather`)
+      - global_debug is True (.debug on), OR
+      - record's logger name is in the subsystem debug set (.debug weather)
     """
 
     def __init__(self, base_level: int = logging.INFO) -> None:
@@ -162,7 +176,6 @@ class _DebugFilter(logging.Filter):
         if self.global_debug:
             return True
         with self._lock:
-            # Check if this record's logger or any parent is in the debug set.
             name = record.name
             for sub in self._subsystems:
                 if name == sub or name.startswith(sub + "."):
@@ -192,35 +205,31 @@ class _DebugFilter(logging.Filter):
 def _setup_logging() -> _DebugFilter:
     """Configure the internets logger with rotating file + console + optional debug file."""
     root = logging.getLogger("internets")
-    root.setLevel(logging.DEBUG)  # let handlers decide what to emit
+    root.setLevel(logging.DEBUG)
     root.handlers.clear()
 
-    fmt = logging.Formatter(LOG_FMT)
-
+    fmt  = logging.Formatter(LOG_FMT)
     filt = _DebugFilter(getattr(logging, LOG_LEVEL, logging.INFO))
 
-    # Main log file — level from config, rotated.
     fh = logging.handlers.RotatingFileHandler(
         LOG_FILE, maxBytes=LOG_MAX, backupCount=LOG_BACKUPS, encoding="utf-8")
-    fh.setLevel(logging.DEBUG)  # filter does the real gating
+    fh.setLevel(logging.DEBUG)
     fh.setFormatter(fmt)
     fh.addFilter(filt)
     root.addHandler(fh)
 
-    # Console — same level as file.
     ch = logging.StreamHandler(sys.stdout)
     ch.setLevel(logging.DEBUG)
     ch.setFormatter(fmt)
     ch.addFilter(filt)
     root.addHandler(ch)
 
-    # Optional debug file — always DEBUG, no filter, captures everything.
     if LOG_DEBUG:
         dh = logging.handlers.RotatingFileHandler(
             LOG_DEBUG, maxBytes=LOG_MAX, backupCount=LOG_BACKUPS, encoding="utf-8")
         dh.setLevel(logging.DEBUG)
         dh.setFormatter(fmt)
-        dh._debug_file = True  # tag so runtime commands skip it
+        dh._debug_file = True
         root.addHandler(dh)
 
     return filt
@@ -229,14 +238,11 @@ def _setup_logging() -> _DebugFilter:
 _log_filter = _setup_logging()
 log = logging.getLogger("internets")
 
-# Apply --debug CLI flags.
 if _args.debug is not None:
     if len(_args.debug) == 0:
-        # --debug with no args: global debug
         _log_filter.global_debug = True
         log.info("CLI: global debug enabled")
     else:
-        # --debug weather store: per-subsystem
         for sub in _args.debug:
             full = f"internets.{sub}" if not sub.startswith("internets") else sub
             logging.getLogger(full).setLevel(logging.DEBUG)
@@ -274,11 +280,14 @@ for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
         log.info(f"Config {_name} = {_val}")
 
 
+# ═════════════════════════════════════════════════════════════════════
+# IRCBot
+# ═════════════════════════════════════════════════════════════════════
+
 class IRCBot:
-    # IRC line limit is 512 bytes incl. CRLF; 400 bytes body leaves room for any prefix.
     _MAX_BODY = 400
 
-    _CORE = {
+    _CORE: dict[str, str] = {
         "help":      "cmd_help",
         "modules":   "cmd_modules",
         "auth":      "cmd_auth",
@@ -298,8 +307,7 @@ class IRCBot:
     }
 
     def __init__(self) -> None:
-        self.sock: Optional[socket.socket] = None
-        self.cfg             = cfg
+        self.cfg               = cfg
         self.active_channels: ChannelSet = ChannelSet()
         self._modules: dict[str, Any]  = {}
         self._commands: dict[str, tuple[str, str]] = {}
@@ -307,26 +315,14 @@ class IRCBot:
         self._authed: set[str] = set()
         self._auth_fails: dict[str, tuple[int, float]] = {}
         self._AUTH_MAX_FAILS: int = 5
-        self._AUTH_LOCKOUT: int   = 300  # 5-minute lockout after max failures
-        self._ka_stop        = threading.Event()
-        self._sender         = Sender()
-        self._store          = Store(
-            cfg["bot"].get("locations_file", "locations.json"),
-            cfg["bot"].get("channels_file",  "channels.json"),
-            cfg["bot"].get("users_file",     "users.json"),
-            user_max_age_days=int(cfg["bot"].get("user_max_age_days", "90")),
-        )
-        self._rate     = RateLimiter(FLOOD_CD, API_CD)
-        self._cap_busy = False
-        self._caps: set[str] = set()
+        self._AUTH_LOCKOUT: int   = 300
         self._nick: str    = NICKNAME
-        # Channel operator tracking: {channel_lower: {nick_lower, ...}}
         self._chanops: dict[str, set[str]] = {}
         self._ns_identified = False
-        self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
-        # SASL state
         self._sasl_in_progress = False
-        # CHANMODES from 005 ISUPPORT
+        self._cap_busy = False
+        self._caps: set[str] = set()
+        self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
         self._chanmode_types: dict[str, str] = {
             "b": "A", "e": "A", "I": "A",
             "k": "B",
@@ -334,22 +330,30 @@ class IRCBot:
             "i": "D", "m": "D", "n": "D", "p": "D", "s": "D", "t": "D",
         }
         self._prefix_modes: set[str] = set("qaohv")
-        # Periodic user pruning (daily)
-        self._prune_stop = threading.Event()
-        self._prune_thread = threading.Thread(
-            target=self._prune_loop, daemon=True, name="user-prune")
-        self._prune_thread.start()
 
-    def _prune_loop(self) -> None:
-        """Run user pruning once per day."""
-        while not self._prune_stop.wait(timeout=86400):
-            try:
-                self._store.prune_users()
-            except Exception as e:
-                log.warning(f"User prune failed: {e}")
+        self._store = Store(
+            cfg["bot"].get("locations_file", "locations.json"),
+            cfg["bot"].get("channels_file",  "channels.json"),
+            cfg["bot"].get("users_file",     "users.json"),
+            user_max_age_days=int(cfg["bot"].get("user_max_age_days", "90")),
+        )
+        self._rate = RateLimiter(FLOOD_CD, API_CD)
+
+        # Set once run() starts.
+        self._loop:    asyncio.AbstractEventLoop | None = None
+        self._sender:  Sender | None = None
+        self._reader:  asyncio.StreamReader | None = None
+        self._writer:  asyncio.StreamWriter | None = None
+        self._stop:    asyncio.Event | None = None
+        self._quit_msg = "QUIT :Shutting down"
+        self._restart_flag = False
+        self._tasks: list[asyncio.Task] = []
+
+    # ── Outbound messaging (sync, thread-safe via Sender) ────────────
 
     def send(self, msg: str, priority: int = 1) -> None:
-        self._sender.enqueue(msg, priority)
+        if self._sender:
+            self._sender.enqueue(msg, priority)
 
     def privmsg(self, target: str, msg: str) -> None:
         for chunk in self._split_msg(msg):
@@ -359,7 +363,8 @@ class IRCBot:
         for chunk in self._split_msg(msg):
             self.send(f"NOTICE {target} :{chunk}")
 
-    def reply(self, nick: str, reply_to: str, msg: str, privileged: bool = False) -> None:
+    def reply(self, nick: str, reply_to: str, msg: str,
+              privileged: bool = False) -> None:
         if not reply_to.startswith(("#", "&", "+", "!")):
             self.privmsg(nick, msg)
         elif privileged:
@@ -370,33 +375,36 @@ class IRCBot:
     def preply(self, nick: str, reply_to: str, msg: str) -> None:
         self.reply(nick, reply_to, msg, privileged=True)
 
-    def _split_msg(self, msg: str):
+    def _split_msg(self, msg: str) -> list[str]:
+        chunks: list[str] = []
         enc = msg.encode("utf-8", errors="replace")
         while enc:
             chunk = enc[:self._MAX_BODY]
-            # Back up to the last valid UTF-8 character boundary.
-            # Continuation bytes have the pattern 10xxxxxx (0x80..0xBF).
             if len(enc) > self._MAX_BODY:
                 while chunk and (chunk[-1] & 0xC0) == 0x80:
                     chunk = chunk[:-1]
                 if not chunk:
-                    chunk = enc[:self._MAX_BODY]  # fallback: force split
-            yield chunk.decode("utf-8", errors="replace")
+                    chunk = enc[:self._MAX_BODY]
+            chunks.append(chunk.decode("utf-8", errors="replace"))
             enc = enc[len(chunk):]
+        return chunks
+
+    # ── Accessors (sync, called from module threads) ─────────────────
 
     def is_admin(self, nick: str) -> bool:       return nick in self._authed
     def is_chanop(self, channel: str, nick: str) -> bool:
         return nick.lower() in self._chanops.get(channel.lower(), set())
     def flood_limited(self, nick: str) -> bool:  return self._rate.flood_check(nick, self.is_admin(nick))
     def rate_limited(self, nick: str) -> bool:   return self._rate.api_check(nick)
-    def loc_get(self, nick: str) -> Optional[str]:        return self._store.loc_get(nick)
-    def loc_set(self, nick: str, raw: str) -> None:   self._store.loc_set(nick, raw)
+    def loc_get(self, nick: str) -> str | None:  return self._store.loc_get(nick)
+    def loc_set(self, nick: str, raw: str) -> None:  self._store.loc_set(nick, raw)
     def loc_del(self, nick: str) -> bool:        return self._store.loc_del(nick)
-    def channel_users(self, ch: str) -> dict[str, Any]:    return self._store.channel_users(ch)
+    def channel_users(self, ch: str) -> dict[str, Any]:  return self._store.channel_users(ch)
+
+    # ── Module management ────────────────────────────────────────────
 
     def load_module(self, name: str) -> tuple[bool, str]:
         with self._mod_lock:
-            # Reject path separators / parent refs.
             if not re.match(r"^[a-z][a-z0-9_]*$", name):
                 return False, f"Invalid module name '{name}' — lowercase alphanumeric and _ only."
             if name in self._modules:
@@ -448,13 +456,15 @@ class IRCBot:
             ok, msg = self.load_module(name)
             (log.info if ok else log.warning)(msg)
 
+    # ── Admin / core commands (async) ──────────────────────────────────
+
     def _require_admin(self, nick: str, reply_to: str) -> bool:
         if not self.is_admin(nick):
             self.preply(nick, reply_to, f"{nick}: auth first — /MSG {self._nick} AUTH <pw>")
             return False
         return True
 
-    def cmd_auth(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_auth(self, nick: str, reply_to: str, arg: str | None) -> None:
         h = _get_hash()
         if not h:
             self.preply(nick, reply_to, f"{nick}: no password_hash configured — run hashpw.py")
@@ -463,7 +473,6 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
             return
 
-        # Prune stale lockout entries every 50 attempts.
         k = nick.lower()
         now = time.time()
         if len(self._auth_fails) > 50:
@@ -473,7 +482,7 @@ class IRCBot:
             }
         fails, last_t = self._auth_fails.get(k, (0, 0))
         if now - last_t > self._AUTH_LOCKOUT:
-            fails = 0  # Reset after lockout expires
+            fails = 0
         if fails >= self._AUTH_MAX_FAILS:
             remaining = int(self._AUTH_LOCKOUT - (now - last_t))
             self.preply(nick, reply_to,
@@ -482,7 +491,7 @@ class IRCBot:
             return
 
         try:
-            ok = verify_password(arg.strip(), h)
+            ok = await asyncio.to_thread(verify_password, arg.strip(), h)
         except ValueError as e:
             self.preply(nick, reply_to, f"{nick}: config error — {e}")
             return
@@ -496,14 +505,14 @@ class IRCBot:
             self.preply(nick, reply_to, f"{nick}: wrong password.")
             log.warning(f"Failed auth: {nick} ({fails + 1}/{self._AUTH_MAX_FAILS})")
 
-    def cmd_deauth(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_deauth(self, nick: str, reply_to: str, arg: str | None) -> None:
         if nick in self._authed:
             self._authed.discard(nick)
             self.preply(nick, reply_to, f"{nick}: session ended.")
         else:
             self.preply(nick, reply_to, f"{nick}: not authenticated.")
 
-    def cmd_help(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
         p     = CMD_PREFIX
         lines = [
             f"── {self._nick} ──────────────────────────────────────────────────",
@@ -518,7 +527,9 @@ class IRCBot:
                 f"  {p}debug [on|off|<subsystem> [off]]               [admin]",
             ]
         lines.append("────────────────────────────────────────────────────────────")
-        for name, inst in self._modules.items():
+        with self._mod_lock:
+            module_items = list(self._modules.items())
+        for name, inst in module_items:
             hl = inst.help_lines(p)
             if hl:
                 lines.append(f"  [{name}]")
@@ -527,42 +538,44 @@ class IRCBot:
         for line in lines:
             self.preply(nick, reply_to, line)
 
-    def cmd_modules(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
-        loaded = list(self._modules)
+    async def cmd_modules(self, nick: str, reply_to: str, arg: str | None) -> None:
+        with self._mod_lock:
+            loaded = list(self._modules)
         self.preply(nick, reply_to,
             f"Loaded: {', '.join(loaded)}" if loaded else "No modules loaded.")
         avail = sorted(
             p.stem for p in MODULES_DIR.glob("*.py")
             if p.stem not in ("__init__", "base", "geocode", "nws", "units")
-            and p.stem not in self._modules
+            and p.stem not in loaded
         )
         if avail:
             self.preply(nick, reply_to, f"Available: {', '.join(avail)}")
 
-    def cmd_load(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_load(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}load <module>"); return
         _, msg = self.load_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_unload(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_unload(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}unload <module>"); return
         _, msg = self.unload_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_reload(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_reload(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}reload <module>"); return
         _, msg = self.reload_module(arg.strip().lower())
         self.preply(nick, reply_to, msg)
 
-    def cmd_reloadall(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_reloadall(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
-        names = list(self._modules)
+        with self._mod_lock:
+            names = list(self._modules)
         if not names:
             self.preply(nick, reply_to, "No modules loaded."); return
         self.preply(nick, reply_to, f"Reloading: {', '.join(names)}")
@@ -573,43 +586,20 @@ class IRCBot:
                 ([f"FAILED: {', '.join(fail)}"] if fail else [])
         self.preply(nick, reply_to, " | ".join(parts))
 
-    def cmd_restart(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_restart(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
+        self._restart_flag = True
+        self.request_shutdown("Restarting ...")
 
-        # Save state and unload modules before replacing process.
-        try:
-            self._store.channels_save(self.active_channels.snapshot())
-        except Exception:
-            pass
-        with self._mod_lock:
-            names = list(self._modules)
-        for name in names:
-            try:
-                self.unload_module(name)
-            except Exception:
-                pass
-        try:
-            self._store.stop()
-        except Exception:
-            pass
-
-        try:
-            self.send("QUIT :Restarting ...", priority=0)
-        except Exception:
-            pass
-        time.sleep(2)  # Let sender thread flush QUIT before execv replaces process
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-
-    def cmd_rehash(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_rehash(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         try:
             cfg.read("config.ini")
         except Exception as e:
             self.preply(nick, reply_to, f"Failed to read config.ini: {e}"); return
 
-        # Apply log level from config.
         new_level = cfg["logging"].get("level", "INFO").upper()
         lvl = getattr(logging, new_level, None)
         if lvl:
@@ -633,37 +623,31 @@ class IRCBot:
             self.preply(nick, reply_to, f"Cleared {n} admin session(s) — re-authenticate.")
         log.info(f"Rehash by {nick}")
 
-    def cmd_mode(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_mode(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
-        p = CMD_PREFIX
         if not arg:
-            self.preply(nick, reply_to, f"usage: {p}mode <+/-modes>  e.g. {p}mode +ix")
-            return
+            self.preply(nick, reply_to, f"usage: {CMD_PREFIX}mode <+/-modes>"); return
         mode_str = arg.strip()
         if not re.match(r"^[a-zA-Z+\- ]+$", mode_str):
-            self.preply(nick, reply_to, f"{nick}: invalid mode string.")
-            return
+            self.preply(nick, reply_to, f"{nick}: invalid mode string."); return
         self.send(f"MODE {self._nick} {mode_str}")
         self.preply(nick, reply_to, f"MODE {self._nick} {mode_str}")
         log.info(f"Mode set by {nick}: {mode_str}")
 
-    def cmd_snomask(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_snomask(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
-        p = CMD_PREFIX
         if not arg:
-            self.preply(nick, reply_to, f"usage: {p}snomask <+/-flags>  e.g. {p}snomask +cCkK")
-            return
+            self.preply(nick, reply_to, f"usage: {CMD_PREFIX}snomask <+/-flags>"); return
         mask = arg.strip()
         if not re.match(r"^[a-zA-Z+\-]+$", mask):
-            self.preply(nick, reply_to, f"{nick}: invalid snomask string.")
-            return
+            self.preply(nick, reply_to, f"{nick}: invalid snomask string."); return
         self.send(f"MODE {self._nick} +s {mask}")
         self.preply(nick, reply_to, f"MODE {self._nick} +s {mask}")
         log.info(f"Snomask set by {nick}: {mask}")
 
-    _VALID_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+    _VALID_LEVELS: tuple[str, ...] = ("DEBUG", "INFO", "WARNING", "ERROR")
 
-    def cmd_loglevel(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_loglevel(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         p = CMD_PREFIX
 
@@ -721,16 +705,13 @@ class IRCBot:
         else:
             self.preply(nick, reply_to, f"usage: {p}loglevel [LEVEL | <logger> <LEVEL>]")
 
-    def cmd_debug(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
-        """Quick toggle: .debug [on|off|<subsystem> [off]]"""
+    async def cmd_debug(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
-
         if not arg or arg.strip().lower() == "on":
             _log_filter.global_debug = True
             self.preply(nick, reply_to, "Debug output ON (all subsystems)")
             log.info(f"Debug ON by {nick}")
             return
-
         parts = arg.strip().lower().split()
         if parts[0] == "off":
             _log_filter.global_debug = False
@@ -738,8 +719,6 @@ class IRCBot:
             self.preply(nick, reply_to, f"Debug output OFF (back to {LOG_LEVEL})")
             log.info(f"Debug OFF by {nick}")
             return
-
-        # .debug weather  or  .debug weather off
         subsys = f"internets.{parts[0]}" if not parts[0].startswith("internets") else parts[0]
         if len(parts) >= 2 and parts[1] == "off":
             logging.getLogger(subsys).setLevel(logging.NOTSET)
@@ -752,14 +731,23 @@ class IRCBot:
             self.preply(nick, reply_to, f"{subsys} debug ON")
             log.info(f"Debug {subsys} ON by {nick}")
 
-    def cmd_shutdown(self, nick: str, reply_to: str, arg: Optional[str]) -> None:
+    async def cmd_shutdown(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._require_admin(nick, reply_to): return
         reason = arg.strip() if arg else "Shutting down"
         self.preply(nick, reply_to, f"Shutting down: {reason}")
         log.info(f"Shutdown by {nick}: {reason}")
-        self.graceful_shutdown(f"QUIT :{reason}")
+        self.request_shutdown(reason)
 
-    def graceful_shutdown(self, quit_msg: str = "QUIT :Shutting down") -> None:
+    # ── Shutdown coordination ────────────────────────────────────────
+
+    def request_shutdown(self, reason: str = "Shutting down") -> None:
+        """Thread-safe: request the event loop to shut down cleanly."""
+        self._quit_msg = f"QUIT :{reason}"
+        if self._stop and self._loop:
+            self._loop.call_soon_threadsafe(self._stop.set)
+
+    async def graceful_shutdown(self) -> None:
+        """Clean exit: save state, unload modules, send QUIT, close socket."""
         log.info("Graceful shutdown initiated.")
 
         try:
@@ -776,8 +764,6 @@ class IRCBot:
             except Exception as e:
                 log.warning(f"Unload {name} failed: {e}")
 
-        # Flush all store data after modules are unloaded (on_unload may
-        # write state), then stop the periodic flush timer.
         try:
             self._store.stop()
             log.info("Store flushed to disk.")
@@ -785,24 +771,37 @@ class IRCBot:
             log.warning(f"Store flush failed: {e}")
 
         try:
-            self.send(quit_msg, priority=0)
+            self.send(self._quit_msg, priority=0)
         except Exception:
             pass
-        time.sleep(2)
 
-        self._ka_stop.set()
-        self._prune_stop.set()
-        self._sender.stop()
-        try:
-            if self.sock:
-                self.sock.close()
-        except Exception:
-            pass
+        # Give the sender time to flush QUIT.
+        await asyncio.sleep(2)
+
+        if self._sender:
+            await self._sender.stop()
+        if self._writer:
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception:
+                pass
+
+        # Cancel all running tasks.
+        for task in self._tasks:
+            task.cancel()
 
         log.info("Shutdown complete.")
-        sys.exit(0)
 
-    def dispatch(self, nick: str, reply_to: str, cmd: str, arg: Optional[str], is_pm: bool) -> None:
+    # ── Dispatch ─────────────────────────────────────────────────────
+
+    def _dispatch(self, nick: str, reply_to: str, cmd: str,
+                  arg: str | None, is_pm: bool) -> None:
+        """Create an async task to run a command handler.
+
+        Called from _process() which runs in the event loop thread, so
+        loop.create_task() is safe.  All handlers are coroutines.
+        """
         if cmd in ("auth", "deauth") and not is_pm:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM.")
             return
@@ -811,62 +810,96 @@ class IRCBot:
             log.debug(f"Flood drop: {cmd!r} from {nick}")
             return
 
-        def run(fn, *a):
-            def _wrapper():
-                try:
-                    fn(*a)
-                except Exception as e:
-                    log.error(f"Command {cmd!r} from {nick} crashed: {e}", exc_info=True)
-            threading.Thread(target=_wrapper, daemon=True).start()
-
+        handler = None
         if cmd in self._CORE:
-            run(getattr(self, self._CORE[cmd]), nick, reply_to, arg)
+            handler = getattr(self, self._CORE[cmd])
         else:
             with self._mod_lock:
                 entry = self._commands.get(cmd)
                 inst  = self._modules.get(entry[0]) if entry else None
             if inst and entry:
-                run(getattr(inst, entry[1]), nick, reply_to, arg)
+                handler = getattr(inst, entry[1])
 
-    def _make_socket(self) -> socket.socket:
+        if handler and self._loop:
+            task = self._loop.create_task(
+                self._run_cmd(handler, nick, reply_to, arg, cmd),
+                name=f"cmd-{cmd}",
+            )
+            self._tasks.append(task)
+            task.add_done_callback(self._tasks.remove)
+
+    async def _run_cmd(self, handler: Any, nick: str, reply_to: str,
+                       arg: str | None, cmd: str) -> None:
+        """Run an async command handler as a task."""
+        try:
+            await handler(nick, reply_to, arg)
+        except Exception as e:
+            log.error(f"Command {cmd!r} from {nick} crashed: {e}", exc_info=True)
+
+    # ── Connection ───────────────────────────────────────────────────
+
+    async def _connect(self) -> None:
+        """Open an async SSL/plain connection to the IRC server."""
         use_ssl = cfg["irc"].getboolean("ssl",        fallback=True)
         verify  = cfg["irc"].getboolean("ssl_verify", fallback=True)
         log.info(f"Connecting {SERVER}:{PORT} "
                  f"({'SSL' if use_ssl else 'plain'}"
                  f"{', no verify' if use_ssl and not verify else ''})")
-        raw = socket.create_connection((SERVER, PORT), timeout=30)
+
+        ssl_ctx: ssl.SSLContext | None = None
         if use_ssl:
-            ctx = ssl.create_default_context()
+            ssl_ctx = ssl.create_default_context()
             if not verify:
-                ctx.check_hostname = False
-                ctx.verify_mode    = ssl.CERT_NONE
-            raw = ctx.wrap_socket(raw, server_hostname=SERVER)
-        raw.settimeout(300)
-        return raw
+                ssl_ctx.check_hostname = False
+                ssl_ctx.verify_mode    = ssl.CERT_NONE
 
-    def _start_keepalive(self) -> None:
-        stop = self._ka_stop
-        def _loop():
-            while not stop.wait(timeout=90):
-                try:
-                    self.send(f"PING :{SERVER}", priority=0)
-                except Exception:
-                    break
-        threading.Thread(target=_loop, daemon=True, name="keepalive").start()
+        self._reader, self._writer = await asyncio.open_connection(
+            SERVER, PORT, ssl=ssl_ctx,
+        )
 
-    def _connect(self) -> None:
-        self._ka_stop.set()
-        self._sender.stop()
-        self._ka_stop  = threading.Event()
-        self._nick     = NICKNAME
+        self._nick = NICKNAME
         self._cap_busy = False
         self._caps     = set()
-        self._chanops  = {}  # Wipe stale op data; rebuilt from 353 after rejoin
+        self._chanops  = {}
         self._ns_identified = False
         self._sasl_in_progress = False
-        self.sock      = self._make_socket()
-        self._sender.start(self.sock)
-        self._start_keepalive()
+
+        # (Re)start the sender on the new writer.
+        if self._sender:
+            await self._sender.stop()
+        self._sender = Sender(self._loop)
+        self._sender.start(self._writer)
+
+    # ── Background tasks ─────────────────────────────────────────────
+
+    async def _keepalive(self) -> None:
+        """Send PING every 90s to detect dead connections."""
+        while True:
+            await asyncio.sleep(90)
+            self.send(f"PING :{SERVER}", priority=0)
+
+    async def _deferred_rejoin(self) -> None:
+        """Wait for NickServ confirmation (up to 10s) then rejoin saved channels."""
+        if NS_PW:
+            for _ in range(40):
+                if self._ns_identified:
+                    break
+                await asyncio.sleep(0.25)
+            if self._ns_identified:
+                log.info("NickServ confirmed — rejoining channels.")
+            else:
+                log.warning("NickServ did not confirm within 10s — "
+                            "rejoining anyway (some +R channels may reject).")
+        saved = self._store.channels_load()
+        if not saved:
+            log.info("No saved channels — waiting for INVITE.")
+            return
+        for ch in saved:
+            self.send(f"JOIN {ch}")
+            self.active_channels.add(ch.lower())
+            log.info(f"Rejoined {ch}")
+
+    # ── Channel state ────────────────────────────────────────────────
 
     def _on_invite(self, nick: str, channel: str) -> None:
         log.info(f"Invited to {channel} by {nick}")
@@ -885,126 +918,22 @@ class IRCBot:
         self._store.channels_save(self.active_channels.snapshot())
         log.info(f"Left {channel}")
 
-    def _rejoin_channels(self) -> None:
-        saved = self._store.channels_load()
-        if not saved:
-            log.info("No saved channels — waiting for INVITE.")
-            return
-        for ch in saved:
-            self.send(f"JOIN {ch}")
-            self.active_channels.add(ch.lower())
-            log.info(f"Rejoined {ch}")
-
-    def _deferred_rejoin(self) -> None:
-        """Wait for NickServ confirmation (up to 10s) then rejoin saved channels."""
-        if NS_PW:
-            deadline = time.time() + 10
-            while not self._ns_identified and time.time() < deadline:
-                time.sleep(0.25)
-            if self._ns_identified:
-                log.info("NickServ confirmed — rejoining channels.")
-            else:
-                log.warning("NickServ did not confirm within 10s — "
-                            "rejoining anyway (some +R channels may reject).")
-        self._rejoin_channels()
-
-    def run(self) -> None:
-        self.autoload_modules()
-        log.info(f"Desired caps: {', '.join(sorted(DESIRED_CAPS))}")
-
-        attempt = 0
-        while True:
-            try:
-                self._connect()
-                attempt = 0
-                break
-            except Exception as e:
-                delay = _backoff(attempt)
-                log.error(f"Connect failed: {e} — retry in {delay:.0f}s")
-                time.sleep(delay)
-                attempt += 1
-
-        buf, identified, registered = "", False, False
-
-        while True:
-            try:
-                if not registered and self.sock:
-                    if SERVER_PW:
-                        self.send(f"PASS {SERVER_PW}", priority=0)
-                    self.send("CAP LS 302", priority=0)
-                    self._cap_busy = True
-                    self.send(f"NICK {self._nick}", priority=0)
-                    self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
-                    registered = True
-
-                data = self.sock.recv(4096).decode("utf-8", errors="replace")
-                if not data:
-                    raise ConnectionResetError("Server closed connection")
-
-                buf += data
-                while "\r\n" in buf:
-                    line, buf = buf.split("\r\n", 1)
-                    # Redact auth passwords from debug log.
-                    if re.search(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", line, re.IGNORECASE):
-                        log.debug(f"<< {line.split(':',2)[0]}:*** AUTH [REDACTED] ***")
-                    else:
-                        log.debug(f"<< {line}")
-                    self._process(line)
-
-                    if not identified and re.match(r":\S+ (376|422) ", line):
-                        if self._cap_busy:
-                            self.send("CAP END", priority=0)
-                            self._cap_busy = False
-                        # Set user modes before anything else (e.g. +ix for
-                        # cloaking before joining channels).
-                        if USER_MODES:
-                            self.send(f"MODE {self._nick} {USER_MODES}")
-                            log.info(f"User modes: MODE {self._nick} {USER_MODES}")
-                        # If SASL succeeded, NickServ IDENTIFY is redundant.
-                        if NS_PW and not self._ns_identified:
-                            self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
-                        if OPER_N and OPER_PW:
-                            self.send(f"OPER {OPER_N} {OPER_PW}")
-                        # Rejoin in background: waits for NickServ confirmation
-                        # (if applicable) before sending JOINs, so +R channels
-                        # and ChanServ access lists work.
-                        threading.Thread(target=self._deferred_rejoin,
-                                         daemon=True, name="rejoin").start()
-                        identified = True
-
-            except (ConnectionResetError, ConnectionAbortedError,
-                    BrokenPipeError, ssl.SSLError, OSError) as e:
-                self._sender.stop()
-                if self._authed:
-                    log.info(f"Cleared {len(self._authed)} admin session(s) on disconnect.")
-                    self._authed.clear()
-                identified, registered, buf = False, False, ""
-                attempt = 0
-                while True:
-                    delay = _backoff(attempt)
-                    log.warning(f"Lost connection: {e} — reconnect in {delay:.0f}s")
-                    time.sleep(delay)
-                    try:
-                        self._connect()
-                        break
-                    except Exception as ce:
-                        log.error(f"Reconnect failed: {ce}")
-                        attempt += 1
-
-            except Exception as e:
-                log.error(f"Unexpected error in main loop: {e}")
-                time.sleep(5)
+    # ── IRC line processing ──────────────────────────────────────────
 
     def _process(self, line: str) -> None:
+        """Parse a single IRC line and dispatch.
+
+        Runs in the event loop thread.  All work is in-memory;
+        command handlers are dispatched to the thread pool.
+        """
         if line.startswith("PING"):
             payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
             self.send(f"PONG :{payload}", priority=0)
             return
 
-        # Strip IRCv3 message tags before parsing.
         line = strip_tags(line)
 
-        # Let modules see every raw line for numerics, NOTICEs, etc.
+        # Let modules see every raw line.
         with self._mod_lock:
             snapshot = list(self._modules.values())
         for inst in snapshot:
@@ -1031,8 +960,6 @@ class IRCBot:
                     log.info(f"Caps ACK: {self._caps}")
                 else:
                     log.info(f"Caps NAK: {params}")
-                # If SASL was ACKed and we have a NickServ password, authenticate
-                # via SASL PLAIN before sending CAP END.
                 if "sasl" in self._caps and NS_PW and not self._sasl_in_progress:
                     self._sasl_in_progress = True
                     self.send("AUTHENTICATE PLAIN", priority=0)
@@ -1047,13 +974,11 @@ class IRCBot:
                     self.send(f"CAP REQ :{' '.join(sorted(new))}", priority=0)
             return
 
-        # SASL: server sends "AUTHENTICATE +" to indicate readiness.
         if line == "AUTHENTICATE +" and self._sasl_in_progress:
             payload = sasl_plain_payload(NICKNAME, NS_PW)
             self.send(f"AUTHENTICATE {payload}", priority=0)
             return
 
-        # 903 = RPL_SASLSUCCESS
         if re.match(r":\S+ 903 ", line):
             self._sasl_in_progress = False
             self._ns_identified = True
@@ -1062,7 +987,6 @@ class IRCBot:
             self._cap_busy = False
             return
 
-        # 902/904/905 = SASL failure numerics
         if re.match(r":\S+ (902|904|905) ", line):
             self._sasl_in_progress = False
             log.warning("SASL authentication failed — will fall back to NickServ IDENTIFY")
@@ -1070,21 +994,18 @@ class IRCBot:
             self._cap_busy = False
             return
 
-        # 421 = "Unknown command" — server has no CAP support at all
         if re.match(r":\S+ 421 \S+ CAP ", line):
             if self._cap_busy:
                 self._cap_busy = False
                 log.info("Server has no CAP support — continuing without IRCv3")
             return
 
-        # 451 = "Not registered" — some servers fire this before we send CAP END
         if re.match(r":\S+ 451 ", line):
             if self._cap_busy:
                 self.send("CAP END", priority=0)
                 self._cap_busy = False
             return
 
-        # 433 = "Nickname in use" — try alternatives, capped at 9 chars of suffix.
         if re.match(r":\S+ 433 ", line):
             base = NICKNAME.rstrip("_")
             if len(self._nick) < len(base) + 3:
@@ -1096,8 +1017,6 @@ class IRCBot:
             log.warning(f"Nick in use — trying {self._nick!r}")
             return
 
-        # 005 = RPL_ISUPPORT — parse CHANMODES and PREFIX for accurate
-        # MODE argument tracking.
         if re.match(r":\S+ 005 ", line):
             cm = re.search(r"CHANMODES=(\S+)", line)
             if cm:
@@ -1107,11 +1026,7 @@ class IRCBot:
             if pm:
                 self._prefix_modes, _ = parse_isupport_prefix(pm.group(1))
                 log.debug(f"ISUPPORT PREFIX modes: {self._prefix_modes}")
-            # Don't return — fall through so other 005 fields are logged.
 
-        # 473 = ERR_INVITEONLYCHAN — channel is +i and we have no invite.
-        # Ask ChanServ to re-invite us (works if bot's NickServ account has
-        # channel access). Format: :server 473 botnick #channel :Cannot join
         m = re.match(r":\S+ 473 \S+ (\S+)", line)
         if m:
             chan = m.group(1)
@@ -1120,8 +1035,6 @@ class IRCBot:
             self.send(f"PRIVMSG {svc} :INVITE {chan}")
             return
 
-        # 471/474/475 = Channel full / Banned / Bad key — log and remove from
-        # active_channels so we don't retry endlessly. User must re-invite.
         m = re.match(r":\S+ (471|474|475) \S+ (\S+)", line)
         if m:
             num, chan = m.group(1), m.group(2)
@@ -1132,8 +1045,6 @@ class IRCBot:
             self._store.channels_save(self.active_channels.snapshot())
             return
 
-        # 381 = RPL_YOUREOPER — OPER succeeded.
-        # Apply oper-only modes and server notice mask.
         if re.match(r":\S+ 381 ", line):
             log.info("OPER granted by server.")
             if OPER_MODES:
@@ -1144,14 +1055,10 @@ class IRCBot:
                 log.info(f"Snomask: MODE {self._nick} +s {OPER_SNOMASK}")
             return
 
-        # 491 = ERR_NOOPERHOST — OPER failed (wrong host/credentials).
         if re.match(r":\S+ 491 ", line):
             log.warning("OPER failed — wrong credentials or host not permitted.")
             return
 
-        # NickServ identification confirmation.
-        # Matches NOTICE from NickServ containing "identified" or "recognized",
-        # and numeric 900 (RPL_LOGGEDIN) sent by some services on IDENTIFY.
         if not self._ns_identified:
             if re.match(r":\S+ 900 ", line):
                 self._ns_identified = True
@@ -1165,9 +1072,7 @@ class IRCBot:
                 ):
                     self._ns_identified = True
                     log.info("NickServ: identified (NOTICE)")
-                    # Don't return — let other NOTICE handlers see it too
 
-        # 353 = RPL_NAMREPLY — parse channel operator prefixes from NAMES list.
         m = re.match(r":\S+ 353 \S+ [=*@] (\S+) :(.*)", line)
         if m:
             chan, names_str = m.group(1).lower(), m.group(2).strip()
@@ -1178,13 +1083,10 @@ class IRCBot:
                     ops.add(nick_clean.lower())
             return
 
-        # MODE — track chanop changes using ISUPPORT-aware parser.
         m = re.match(r":\S+ MODE (\S+) ([+-]\S+)(.*)", line)
         if m:
             chan = m.group(1)
-            if not chan.startswith(("#", "&", "+", "!")):
-                pass  # User mode, not channel mode — ignore
-            else:
+            if chan.startswith(("#", "&", "+", "!")):
                 mode_str = m.group(2)
                 args     = m.group(3).strip().split() if m.group(3).strip() else []
                 chan_l    = chan.lower()
@@ -1218,7 +1120,6 @@ class IRCBot:
             self._on_invite(m.group(1), m.group(2))
             return
 
-        # JOIN with optional extended-join fields (account, realname)
         m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)(?:\s+\S+)?", line)
         if m:
             nick, host, chan = m.group(1), m.group(2), m.group(3)
@@ -1264,7 +1165,6 @@ class IRCBot:
         m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
         if m:
             old_nick, host, new_nick = m.group(1), m.group(2), m.group(3)
-            # Track our own nick changes (NickServ ghost/reclaim, SVSNICK, etc.)
             if old_nick.lower() == self._nick.lower():
                 self._nick = new_nick
                 log.info(f"Own nick changed: {old_nick} -> {new_nick}")
@@ -1273,7 +1173,6 @@ class IRCBot:
                 self._authed.discard(old_nick)
                 self._authed.add(new_nick)
                 log.info(f"Auth migrated: {old_nick} -> {new_nick}")
-            # Migrate chanop status to new nick
             old_l, new_l = old_nick.lower(), new_nick.lower()
             for ops in self._chanops.values():
                 if old_l in ops:
@@ -1313,7 +1212,139 @@ class IRCBot:
             log_arg = "[REDACTED]" if cmd in ("auth", "deauth") else arg
             log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{host} "
                      f"{'(PM)' if is_pm else 'in ' + reply_to}")
-            self.dispatch(nick, reply_to, cmd, arg, is_pm)
+            self._dispatch(nick, reply_to, cmd, arg, is_pm)
+
+    # ── Main loop ────────────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Main entry point.  Call with asyncio.run() or as a task."""
+        self._loop = asyncio.get_running_loop()
+        self._stop = asyncio.Event()
+
+        # Signal handlers (Unix only).
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                self._loop.add_signal_handler(
+                    sig, lambda s=sig: self._on_signal(s))
+            except NotImplementedError:
+                pass  # Windows
+
+        self.autoload_modules()
+        log.info(f"Desired caps: {', '.join(sorted(DESIRED_CAPS))}")
+
+        # Initial connect with backoff.
+        attempt = 0
+        while True:
+            try:
+                await self._connect()
+                break
+            except Exception as e:
+                delay = _backoff(attempt)
+                log.error(f"Connect failed: {e} — retry in {delay:.0f}s")
+                await asyncio.sleep(delay)
+                attempt += 1
+
+        identified = False
+        registered = False
+
+        while not self._stop.is_set():
+            try:
+                if not registered:
+                    if SERVER_PW:
+                        self.send(f"PASS {SERVER_PW}", priority=0)
+                    self.send("CAP LS 302", priority=0)
+                    self._cap_busy = True
+                    self.send(f"NICK {self._nick}", priority=0)
+                    self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
+                    registered = True
+
+                # Read one line at a time.
+                try:
+                    raw = await asyncio.wait_for(
+                        self._reader.readline(), timeout=300)
+                except asyncio.TimeoutError:
+                    # No data in 300s — connection is probably dead.
+                    raise ConnectionResetError("Read timeout (300s)")
+
+                if not raw:
+                    raise ConnectionResetError("Server closed connection")
+
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line:
+                    continue
+
+                # Redact auth passwords from debug log.
+                if re.search(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", line, re.IGNORECASE):
+                    log.debug(f"<< {line.split(':',2)[0]}:*** AUTH [REDACTED] ***")
+                else:
+                    log.debug(f"<< {line}")
+
+                self._process(line)
+
+                if not identified and re.match(r":\S+ (376|422) ", line):
+                    if self._cap_busy:
+                        self.send("CAP END", priority=0)
+                        self._cap_busy = False
+                    if USER_MODES:
+                        self.send(f"MODE {self._nick} {USER_MODES}")
+                        log.info(f"User modes: MODE {self._nick} {USER_MODES}")
+                    if NS_PW and not self._ns_identified:
+                        self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
+                    if OPER_N and OPER_PW:
+                        self.send(f"OPER {OPER_N} {OPER_PW}")
+                    # Start keepalive and deferred rejoin as async tasks.
+                    ka_task = asyncio.create_task(
+                        self._keepalive(), name="keepalive")
+                    self._tasks.append(ka_task)
+                    rejoin_task = asyncio.create_task(
+                        self._deferred_rejoin(), name="rejoin")
+                    self._tasks.append(rejoin_task)
+                    identified = True
+
+            except (ConnectionResetError, ConnectionAbortedError,
+                    BrokenPipeError, ssl.SSLError, OSError) as e:
+                if self._stop.is_set():
+                    break
+
+                # Cancel background tasks.
+                for task in self._tasks:
+                    task.cancel()
+                self._tasks.clear()
+                if self._sender:
+                    await self._sender.stop()
+
+                if self._authed:
+                    log.info(f"Cleared {len(self._authed)} admin session(s) on disconnect.")
+                    self._authed.clear()
+                identified, registered = False, False
+
+                # Reconnect with backoff.
+                attempt = 0
+                while not self._stop.is_set():
+                    delay = _backoff(attempt)
+                    log.warning(f"Lost connection: {e} — reconnect in {delay:.0f}s")
+                    await asyncio.sleep(delay)
+                    try:
+                        await self._connect()
+                        break
+                    except Exception as ce:
+                        log.error(f"Reconnect failed: {ce}")
+                        attempt += 1
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.error(f"Unexpected error in main loop: {e}", exc_info=True)
+                await asyncio.sleep(5)
+
+        # Clean exit.
+        await self.graceful_shutdown()
+
+    def _on_signal(self, signum: int) -> None:
+        log.info(f"Received signal {signum}, shutting down.")
+        self._quit_msg = "QUIT :Caught signal, shutting down"
+        if self._stop:
+            self._stop.set()
 
 
 # ── Interactive console ──────────────────────────────────────────────
@@ -1328,11 +1359,12 @@ _CONSOLE_HELP = """\
   quit                      alias for shutdown"""
 
 
-def _run_console(bot: IRCBot) -> None:
-    """Stdin command loop.  Runs in a daemon thread; exits when stdin closes."""
+async def _run_console(bot: IRCBot) -> None:
+    """Async console: reads stdin in a thread, processes commands."""
     while True:
         try:
-            line = input("> ").strip()
+            line = await asyncio.to_thread(input, "> ")
+            line = line.strip()
         except (EOFError, KeyboardInterrupt):
             break
         if not line:
@@ -1419,35 +1451,42 @@ def _run_console(bot: IRCBot) -> None:
         elif cmd in ("shutdown", "quit"):
             reason = " ".join(args) if args else "Console shutdown"
             log.info(f"Console shutdown: {reason}")
-            bot.graceful_shutdown(f"QUIT :{reason}")
+            bot.request_shutdown(reason)
+            break
 
         else:
             print(f"Unknown command: {cmd!r} — type 'help' for commands.")
 
 
-if __name__ == "__main__":
-    import signal
+# ── Entry point ──────────────────────────────────────────────────────
+
+async def _main() -> None:
     bot = IRCBot()
 
-    def _shutdown(signum: int, frame: Any) -> None:
-        log.info(f"Received signal {signum}, shutting down.")
-        bot.graceful_shutdown("QUIT :Caught signal, shutting down")
-
-    signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGINT, _shutdown)
+    tasks: list[asyncio.Task] = []
 
     if not _args.no_console and sys.stdin.isatty():
-        threading.Thread(target=_run_console, args=(bot,),
-                         daemon=True, name="console").start()
+        tasks.append(asyncio.create_task(_run_console(bot), name="console"))
         log.info("Interactive console enabled (type 'help' for commands)")
 
-    while True:
+    tasks.append(asyncio.create_task(bot.run(), name="bot"))
+
+    # Wait for the bot task to finish (shutdown or crash).
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
         try:
-            bot.run()
-        except KeyboardInterrupt:
-            _shutdown(2, None)
-        except SystemExit:
-            raise  # Let graceful_shutdown's sys.exit propagate
-        except Exception as e:
-            log.error(f"Crash: {e} — restart in 30s")
-            time.sleep(30)
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    if bot._restart_flag:
+        log.info("Executing restart via os.execv ...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        pass

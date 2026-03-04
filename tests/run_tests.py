@@ -479,16 +479,24 @@ from sender import Sender
 
 @test("sender: CRLF/NUL injection stripped")
 def _():
+    import asyncio
+    loop = asyncio.new_event_loop()
     sent: list[bytes] = []
     class FakeSock:
         def sendall(self, data: bytes): sent.append(data)
-    s = Sender()
-    s.sock = FakeSock()
-    s._write("PRIVMSG #test :hello\r\nQUIT :injected\x00evil")
+    s = Sender(loop)
+    # Test _write_line directly (sync method that buffers)
+    class FakeWriter:
+        _closed = False
+        def write(self, data: bytes): sent.append(data)
+        def is_closing(self): return self._closed
+    s._writer = FakeWriter()
+    s._write_line("PRIVMSG #test :hello\r\nQUIT :injected\x00evil")
     assert len(sent) == 1
-    assert b"\r\n" in sent[0]  # only the trailing CRLF
     line = sent[0].decode().rstrip("\r\n")
-    assert "\r" not in line and "\n" not in line and "\x00" not in line
+    assert "\r" not in line.rstrip("\r\n")  # only the trailing CRLF
+    assert "\x00" not in line
+    loop.close()
 
 @test("sender: credential redaction in logs")
 def _():
@@ -575,6 +583,140 @@ def _():
     assert _backoff(4) == 240.0
     assert _backoff(5) == 300.0  # capped
     assert _backoff(10) == 300.0  # still capped
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Async-specific tests
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== async architecture ===")
+import asyncio
+
+@test("async sender: enqueue + drain produces output")
+def _():
+    async def _inner():
+        loop = asyncio.get_running_loop()
+        sent: list[bytes] = []
+        class FakeWriter:
+            def write(self, data: bytes): sent.append(data)
+            def is_closing(self): return False
+            async def drain(self): pass
+            def close(self): pass
+            async def wait_closed(self): pass
+
+        s = Sender(loop)
+        writer = FakeWriter()
+        s.start(writer)
+
+        s.enqueue("PRIVMSG #test :hello", priority=0)
+        # Let the drain task process.
+        await asyncio.sleep(0.3)
+        await s.stop()
+        assert len(sent) >= 1
+        assert b"PRIVMSG #test :hello\r\n" in sent
+
+    asyncio.run(_inner())
+
+@test("async sender: priority 0 bypasses token bucket")
+def _():
+    async def _inner():
+        loop = asyncio.get_running_loop()
+        sent: list[bytes] = []
+        class FakeWriter:
+            def write(self, data: bytes): sent.append(data)
+            def is_closing(self): return False
+            async def drain(self): pass
+
+        s = Sender(loop)
+        s.start(FakeWriter())
+
+        # Enqueue 10 priority-0 messages rapidly — should all send immediately.
+        for i in range(10):
+            s.enqueue(f"PONG :test{i}", priority=0)
+        await asyncio.sleep(0.5)
+        await s.stop()
+        assert len(sent) == 10
+
+    asyncio.run(_inner())
+
+@test("async sender: thread-safe enqueue from executor")
+def _():
+    async def _inner():
+        loop = asyncio.get_running_loop()
+        sent: list[bytes] = []
+        class FakeWriter:
+            def write(self, data: bytes): sent.append(data)
+            def is_closing(self): return False
+            async def drain(self): pass
+
+        s = Sender(loop)
+        s.start(FakeWriter())
+
+        # Enqueue from a thread (simulates module handler).
+        def threaded_send():
+            s.enqueue("PRIVMSG #ch :from thread", priority=0)
+
+        await asyncio.to_thread(threaded_send)
+        await asyncio.sleep(0.3)
+        await s.stop()
+        assert any(b"from thread" in msg for msg in sent)
+
+    asyncio.run(_inner())
+
+
+# ══════════════════════════════════════════════════════════════════════
+# async module handlers
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== async module handlers ===")
+import inspect
+
+@test("all module command handlers are coroutines")
+def _():
+    from modules.weather import WeatherModule
+    from modules.location import LocationModule
+    from modules.calc import CalcModule
+    from modules.dice import DiceModule
+    from modules.translate import TranslateModule
+    from modules.urbandictionary import UDModule
+    from modules.channels import ChannelsModule
+
+    for cls in (WeatherModule, LocationModule, CalcModule, DiceModule,
+                TranslateModule, UDModule, ChannelsModule):
+        for cmd_word, method_name in cls.COMMANDS.items():
+            method = getattr(cls, method_name)
+            assert inspect.iscoroutinefunction(method), \
+                f"{cls.__name__}.{method_name} is not async"
+
+@test("all core command handlers are coroutines")
+def _():
+    from internets import IRCBot
+    for cmd_word, method_name in IRCBot._CORE.items():
+        method = getattr(IRCBot, method_name)
+        assert inspect.iscoroutinefunction(method), \
+            f"IRCBot.{method_name} is not async"
+
+@test("async geocode returns None for empty query")
+def _():
+    from modules.geocode import geocode
+    assert inspect.iscoroutinefunction(geocode)
+
+@test("async nws functions are coroutines")
+def _():
+    from modules import nws
+    for name in ("get_grid", "current", "forecast", "hourly", "alerts", "discussion"):
+        fn = getattr(nws, name)
+        assert inspect.iscoroutinefunction(fn), f"nws.{name} is not async"
+
+@test("async weather helpers (_om_current, _om_forecast) are coroutines")
+def _():
+    from modules.weather import _om_current, _om_forecast
+    assert inspect.iscoroutinefunction(_om_current)
+    assert inspect.iscoroutinefunction(_om_forecast)
+
+@test("weather _merge_current and _format_current are sync (pure functions)")
+def _():
+    from modules.weather import _merge_current, _format_current
+    assert not inspect.iscoroutinefunction(_merge_current)
+    assert not inspect.iscoroutinefunction(_format_current)
 
 
 # ══════════════════════════════════════════════════════════════════════

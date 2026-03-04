@@ -5,9 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [1.2.0] — 2026-03-04
 
-Quality and standards pass. Type annotations across the entire codebase, shipping
-test suite, SASL support, exponential reconnect backoff, user pruning, and
-thread-safe channel tracking.
+Full async conversion and quality pass.  The entire bot now runs on a single
+asyncio event loop — no more spawning threads for every command.  All module
+handlers are coroutines.  Blocking I/O (HTTP, disk, password hashing) runs
+via `asyncio.to_thread()` inside the handler, keeping the event loop free.
+
+### Architecture
+
+- **asyncio event loop** replaces all daemon threads for the connection
+  lifecycle, command dispatch, keepalive, send queue, console, and deferred
+  channel rejoin.
+
+- **Sender** is now an async drain loop over `asyncio.PriorityQueue` +
+  `StreamWriter.drain()`.  Token-bucket rate limiting uses `asyncio.sleep`.
+  Thread-safe `enqueue()` uses `loop.call_soon_threadsafe()` so module
+  handlers can call `bot.send()` / `bot.privmsg()` from any context.
+
+- **Command dispatch** creates `asyncio.Task` per command.  Handlers are
+  awaited directly — no `asyncio.to_thread()` wrapper.  Only the actual
+  blocking operations (HTTP, password hashing) use the thread pool.
+
+- **Console** uses `asyncio.to_thread(input)` for non-blocking stdin reads,
+  with the console task running alongside the main bot task via
+  `asyncio.wait(return_when=FIRST_COMPLETED)`.
+
+- **Signal handling** uses `loop.add_signal_handler()` instead of the
+  `signal` module, properly integrating with the event loop.
 
 ### Added
 
@@ -19,39 +42,45 @@ thread-safe channel tracking.
 
 - **Exponential reconnect backoff** — Reconnect delays now follow exponential
   backoff: 15s, 30s, 60s, 120s, 240s, capped at 5 minutes. Resets on successful
-  connection. Replaces the fixed 15s/30s delays that hammered the server during
-  extended outages.
+  connection.
 
-- **Thread-safe `ChannelSet`** — `active_channels` is now a proper thread-safe
-  container with a lock, replacing the bare `set` with `set()` snapshot hacks.
-  Supports `add`, `discard`, `__contains__`, `snapshot`, iteration, `__len__`,
-  and `__bool__` — all thread-safe.
+- **Thread-safe `ChannelSet`** — `active_channels` is a proper thread-safe
+  container (still uses `threading.Lock` because `enqueue()` may be called from
+  thread pool executors).
 
 - **User pruning** — User tracking entries older than 90 days (configurable via
   `user_max_age_days` in `config.ini`) are automatically pruned during store
-  flushes. Prevents unbounded `users.json` growth on busy networks.
+  flushes.
 
-- **Standalone test suite** — 64 tests in `tests/run_tests.py` covering protocol
-  parsing (ISUPPORT, MODE, NAMES, SASL), store (CRUD, flush, atomic writes,
-  pruning), calculator (arithmetic, sandboxing, DoS guards), dice, weather data
-  merging and formatting, unit conversions, sender injection prevention, password
-  hashing, ChannelSet, and exponential backoff. No external dependencies — runs
-  with `python tests/run_tests.py`. Also compatible with pytest.
+- **Standalone test suite** — 73 tests in `tests/run_tests.py` covering protocol
+  parsing, store, calculator, dice, weather merging/formatting, units, sender
+  injection prevention, password hashing, ChannelSet, backoff, async sender
+  (drain, priority bypass, thread-safe enqueue), and async handler verification
+  (all module and core handlers confirmed as coroutines).
 
 - **`protocol.py` extraction** — Pure protocol helpers (ISUPPORT parsing, MODE
-  parsing, NAMES parsing, SASL payload encoding, tag stripping) extracted into a
-  separate module. No bot state, no I/O — fully unit-testable.
+  parsing, NAMES parsing, SASL payload encoding, tag stripping) in a separate
+  module with no bot state or I/O.
 
 ### Changed
 
-- **Type annotations everywhere** — All files now use `from __future__ import
-  annotations` and PEP 604 union syntax (`str | None` instead of
-  `Optional[str]`). Every public function, method, and class attribute has type
-  annotations. Module `setup()` functions and `BotModule` subclasses are typed.
+- **All command handlers are now coroutines** — Every module handler and every
+  core command (auth, help, load, shutdown, etc.) is `async def`.  HTTP calls
+  use `await asyncio.to_thread(requests.get, ...)` inside the handler.
+  Password verification uses `await asyncio.to_thread(verify_password, ...)`.
+  Pure computation (calc, dice, help text) runs directly in the event loop.
 
-- **README updated** — Architecture section reflects `protocol.py` and `tests/`.
-  SASL support, exponential backoff, user pruning, testing instructions, and
-  credential redaction for AUTHENTICATE documented. Module example uses type hints.
+- **Channels module cleanup is an asyncio task** — The verification timeout
+  garbage collector is now `asyncio.create_task(_cleanup_loop())` instead of a
+  `threading.Thread`.  Created during `on_load()`, cancelled on `on_unload()`.
+
+- **Type annotations everywhere** — All files use `from __future__ import
+  annotations` with PEP 604 union syntax.  Every public function, method, and
+  class attribute is annotated.
+
+- **README updated** — Architecture section reflects async design, protocol.py,
+  tests.  Module example uses async handlers.  SASL, backoff, pruning, testing
+  documented.
 
 ## [1.1.0] — 2026-03-02
 

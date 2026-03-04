@@ -10,13 +10,22 @@ class BotModule:
     """
     Base class for all bot modules.
 
-    Subclasses define COMMANDS as a dict mapping command words to method names,
-    implement those methods with the signature (self, nick, reply_to, arg),
-    and override help_lines() to describe them.
+    Subclasses define COMMANDS as a dict mapping command words to async method
+    names.  All command handlers are coroutines::
 
-    on_load / on_unload are optional hooks called by the module loader.
-    on_raw(line) is called for every incoming IRC line (after tag stripping)
-    and lets modules react to server numerics, NOTICEs, etc.
+        async def cmd_weather(self, nick: str, reply_to: str, arg: str | None) -> None:
+            ...
+
+    For blocking I/O (HTTP via requests, disk, CPU-heavy work), use::
+
+        result = await asyncio.to_thread(requests.get, url, ...)
+
+    Sync hooks:
+        on_load()    — called after module is registered (event loop thread)
+        on_unload()  — called before module is removed
+        on_raw(line) — called for every incoming IRC line (must be fast, sync)
+
+    Override help_lines() to describe commands for .help output.
     """
 
     COMMANDS: dict[str, str] = {}

@@ -18,12 +18,12 @@ class LocationModule(BotModule):
     def on_load(self) -> None:
         self._ua: str = self.bot.cfg["weather"]["user_agent"]
 
-    def cmd_regloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_regloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}regloc <zip or city name>")
             return
-        geo = geocode(arg, self._ua)
+        geo = await geocode(arg, self._ua)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{arg}'")
             return
@@ -32,17 +32,17 @@ class LocationModule(BotModule):
         self.bot.privmsg(reply_to, f"{nick}: location set to {display}")
         log.info(f"regloc {nick} -> {arg!r} ({display})")
 
-    def cmd_myloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_myloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         raw = self.bot.loc_get(nick)
         if raw:
-            geo     = geocode(raw, self._ua)
+            geo     = await geocode(raw, self._ua)
             display = geo[2] if geo else raw
             self.bot.privmsg(reply_to, f"{nick}: saved location is {display} ({raw!r})")
         else:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: no location saved — use {p}regloc <zip or city>")
 
-    def cmd_delloc(self, nick: str, reply_to: str, arg: str | None) -> None:
+    async def cmd_delloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.loc_del(nick):
             self.bot.privmsg(reply_to, f"{nick}: saved location removed.")
         else:
