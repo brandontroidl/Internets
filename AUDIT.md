@@ -1,6 +1,6 @@
 # Security & Stability Audit
 
-**Reviewer:** brandon
+**Reviewer:** Brandon Troidl
 **Date:** 2026-03-02
 **Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `config.ini`, and all modules in `modules/`.
 
