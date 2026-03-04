@@ -355,6 +355,42 @@ See `AUDIT.md` for detailed forensic writeups of each finding.
   nested expressions could blow the stack. Inputs and depth are now capped.
   See AUDIT.md BUG-015.
 
+- **TLS 1.0/1.1 blocked** — SSL context now enforces `TLSv1_2` as the minimum
+  version, preventing downgrade attacks to deprecated protocols.
+  See AUDIT.md SEC-009.
+
+- **Log injection prevented** — IRC content with embedded `\r\n` could forge log
+  entries. A custom `_SafeFormatter` now strips all CR/LF/NUL from log messages
+  before they reach any handler. See AUDIT.md SEC-007.
+
+- **Error info disclosure fixed** — Raw Python exception details were sent back
+  to IRC users in module load errors and unhandled command crashes. Now sends
+  generic "see log for details" messages. See AUDIT.md SEC-008.
+
+- **PRIVMSG/NOTICE target validation** — Empty or space-containing targets in
+  `privmsg()` and `notice()` are now rejected, preventing protocol parameter
+  injection within a single IRC line. See AUDIT.md BUG-027.
+
+- **Symlink traversal in module loader blocked** — Symlinks in the modules
+  directory pointing outside it could load arbitrary Python files. The loader
+  now `resolve()`s paths and verifies they remain under `MODULES_DIR`.
+  See AUDIT.md BUG-028.
+
+- **IRC 512-byte line limit enforced** — Sender now truncates outgoing lines to
+  510 bytes (plus `\r\n`) with UTF-8-safe boundary detection.
+  See AUDIT.md BUG-026.
+
+- **Concurrent task cap** — `_dispatch` now limits active command tasks to 50,
+  preventing resource exhaustion from coordinated slow-command flooding.
+  See AUDIT.md BUG-030.
+
+- **Command argument length cap** — Arguments exceeding 400 characters are
+  rejected before reaching any handler, preventing oversized input attacks.
+  See AUDIT.md BUG-031.
+
+- **Config file permission warning** — Startup now warns if `config.ini` is
+  world-readable, since it contains credentials. See AUDIT.md BUG-029.
+
 ### Fixed (post-audit)
 
 - **Channels not rejoined after reboot** — Invite-only (`+i`) channels silently

@@ -155,6 +155,16 @@ LOG_DEBUG   = _args.debug_file or cfg["logging"].get("debug_file", "").strip()
 LOG_FMT     = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
 
+class _SafeFormatter(logging.Formatter):
+    """Formatter that strips CR/LF/NUL from log messages to prevent log injection."""
+
+    _CONTROL_RE = re.compile(r"[\r\n\x00]")
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.msg = self._CONTROL_RE.sub("", str(record.msg))
+        return super().format(record)
+
+
 class _DebugFilter(logging.Filter):
     """
     Attached to main-log and console handlers.  Passes a record if:
@@ -208,7 +218,7 @@ def _setup_logging() -> _DebugFilter:
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
 
-    fmt  = logging.Formatter(LOG_FMT)
+    fmt  = _SafeFormatter(LOG_FMT)
     filt = _DebugFilter(getattr(logging, LOG_LEVEL, logging.INFO))
 
     fh = logging.handlers.RotatingFileHandler(
@@ -269,6 +279,14 @@ def _validate_hash() -> None:
 
 _validate_hash()
 
+# BUG-029: Warn if config file is world-readable (contains credentials).
+try:
+    _cfg_stat = os.stat("config.ini")
+    if _cfg_stat.st_mode & 0o004:
+        log.warning("config.ini is world-readable — consider: chmod 640 config.ini")
+except OSError:
+    pass
+
 _MODE_VALID = re.compile(r"^[a-zA-Z+\- ]*$")
 for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
                      ("oper_snomask", OPER_SNOMASK)]:
@@ -286,6 +304,9 @@ for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
 
 class IRCBot:
     _MAX_BODY = 400
+    _MAX_TASKS = 50       # BUG-030: cap concurrent command tasks
+    _MAX_ARG_LEN = 400    # BUG-031: cap command argument length
+    _MAX_LINE_LEN = 450   # BUG-026: max outgoing line body (sender enforces)
 
     _CORE: dict[str, str] = {
         "help":      "cmd_help",
@@ -356,10 +377,16 @@ class IRCBot:
             self._sender.enqueue(msg, priority)
 
     def privmsg(self, target: str, msg: str) -> None:
+        if " " in target or not target:
+            log.warning(f"privmsg: invalid target {target!r}")
+            return
         for chunk in self._split_msg(msg):
             self.send(f"PRIVMSG {target} :{chunk}")
 
     def notice(self, target: str, msg: str) -> None:
+        if " " in target or not target:
+            log.warning(f"notice: invalid target {target!r}")
+            return
         for chunk in self._split_msg(msg):
             self.send(f"NOTICE {target} :{chunk}")
 
@@ -412,6 +439,11 @@ class IRCBot:
             path = MODULES_DIR / f"{name}.py"
             if not path.exists():
                 return False, f"'{path}' not found."
+            real = path.resolve()
+            mod_root = MODULES_DIR.resolve()
+            if not str(real).startswith(str(mod_root) + os.sep) and real.parent != mod_root:
+                log.warning(f"Module {name!r} resolves outside modules dir: {real}")
+                return False, f"'{name}' blocked — path escapes modules directory."
             try:
                 spec = importlib.util.spec_from_file_location(f"modules.{name}", path)
                 mod  = importlib.util.module_from_spec(spec)
@@ -430,7 +462,7 @@ class IRCBot:
                 return True, f"'{name}' loaded ({len(inst.COMMANDS)} commands)."
             except Exception as e:
                 log.error(f"Load '{name}': {e}")
-                return False, f"Error loading '{name}': {e}"
+                return False, f"Error loading '{name}' — see log for details."
 
     def unload_module(self, name: str) -> tuple[bool, str]:
         with self._mod_lock:
@@ -445,7 +477,7 @@ class IRCBot:
                 return True, f"'{name}' unloaded."
             except Exception as e:
                 log.error(f"Unload '{name}': {e}")
-                return False, f"Error unloading '{name}': {e}"
+                return False, f"Error unloading '{name}' — see log for details."
 
     def reload_module(self, name: str) -> tuple[bool, str]:
         ok, msg = self.unload_module(name)
@@ -810,6 +842,19 @@ class IRCBot:
             log.debug(f"Flood drop: {cmd!r} from {nick}")
             return
 
+        # BUG-031: Cap argument length to prevent oversized input DoS.
+        if arg and len(arg) > self._MAX_ARG_LEN:
+            self.notice(nick, f"{nick}: input too long (max {self._MAX_ARG_LEN} chars).")
+            return
+
+        # BUG-030: Cap concurrent command tasks.
+        active_cmd_tasks = sum(1 for t in self._tasks
+                               if not t.done() and (t.get_name() or "").startswith("cmd-"))
+        if active_cmd_tasks >= self._MAX_TASKS:
+            self.notice(nick, f"{nick}: bot is busy — try again shortly.")
+            log.warning(f"Task cap reached ({self._MAX_TASKS}), dropped {cmd!r} from {nick}")
+            return
+
         handler = None
         if cmd in self._CORE:
             handler = getattr(self, self._CORE[cmd])
@@ -835,6 +880,7 @@ class IRCBot:
             await handler(nick, reply_to, arg)
         except Exception as e:
             log.error(f"Command {cmd!r} from {nick} crashed: {e}", exc_info=True)
+            self.notice(nick, f"{nick}: internal error processing '{cmd}' — see log for details.")
 
     # ── Connection ───────────────────────────────────────────────────
 
@@ -849,6 +895,7 @@ class IRCBot:
         ssl_ctx: ssl.SSLContext | None = None
         if use_ssl:
             ssl_ctx = ssl.create_default_context()
+            ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             if not verify:
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode    = ssl.CERT_NONE

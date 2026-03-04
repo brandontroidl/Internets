@@ -691,6 +691,121 @@ The channels module's `on_load()` used `asyncio.get_event_loop()` to create the 
 
 ---
 
+## Sixth Pass — DevSecOps Hardening (March 4 2026)
+
+**Auditor:** Brandon Troidl  
+**Scope:** Protocol compliance, input validation, DoS resistance, information disclosure, TLS configuration, log injection.
+
+---
+
+### SEC-007: Log Injection via Unsanitized IRC Content
+
+**Severity:** Medium  
+**File:** `internets.py` (logging setup)  
+**Status:** Fixed
+
+IRC messages containing embedded `\r\n` sequences could be written directly into log files, enabling log injection attacks that forge log entries. An attacker sending `innocent\r\n2026-03-04 [INFO] internets: Admin auth granted: hacker` would create a fake audit trail.
+
+**Resolution:** Added `_SafeFormatter` — a custom `logging.Formatter` subclass that strips all CR, LF, and NUL characters from log messages before formatting. Applied globally to all handlers during `_setup_logging()`.
+
+---
+
+### SEC-008: Error Information Disclosure to IRC
+
+**Severity:** Medium  
+**Files:** `internets.py` (`_run_cmd`, `load_module`, `unload_module`)  
+**Status:** Fixed
+
+Raw Python exception messages were sent back to IRC users in two ways: (1) module load/unload errors returned `f"Error loading '{name}': {e}"` which could expose file paths, class names, or import errors; (2) unhandled exceptions in command handlers were logged but gave no user feedback, or worse, module handlers might propagate tracebacks in error replies.
+
+**Resolution:** `_run_cmd` now catches all exceptions and sends a generic `"internal error processing '<cmd>' — see log for details"` NOTICE. `load_module` and `unload_module` error messages now say `"see log for details"` instead of including the raw exception string. Full details remain in the log for administrators.
+
+---
+
+### SEC-009: TLS 1.0/1.1 Not Blocked
+
+**Severity:** High  
+**File:** `internets.py` (`_connect`)  
+**Status:** Fixed
+
+The SSL context used `ssl.create_default_context()` without setting a minimum TLS version. While modern servers typically negotiate TLS 1.2+, a downgrade attack or misconfigured server could result in connecting over deprecated TLS 1.0 or 1.1, which have known cryptographic weaknesses.
+
+**Resolution:** Added `ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2` immediately after context creation, blocking any connection attempt below TLS 1.2.
+
+---
+
+### BUG-026: IRC 512-Byte Line Limit Not Enforced
+
+**Severity:** Medium  
+**File:** `sender.py` (`_write_line`)  
+**Status:** Fixed
+
+RFC 2812 §2.3 limits IRC messages to 512 bytes including the trailing `\r\n`. The sender had no line length enforcement — long PRIVMSG lines (e.g. weather output with many fields) could exceed 512 bytes, causing the server to silently truncate or drop the message. Truncation mid-UTF-8 sequence would also produce mojibake on the receiving end.
+
+**Resolution:** `_write_line` now encodes the message to UTF-8, checks if the length exceeds 510 bytes (512 minus `\r\n`), and truncates with UTF-8-safe boundary detection (backs up past incomplete multi-byte sequences). Added `_MAX_IRC_LINE = 512` class constant.
+
+---
+
+### BUG-027: PRIVMSG/NOTICE Target Not Validated
+
+**Severity:** Medium  
+**File:** `internets.py` (`privmsg`, `notice`)  
+**Status:** Fixed
+
+Neither `privmsg()` nor `notice()` validated the target parameter. A crafted target containing a space (e.g. `"#chan :injected PRIVMSG"`) could inject additional IRC protocol parameters. While the CRLF injection fix in the sender (SEC-003) prevents full command injection, space-based parameter injection within a single line was still possible.
+
+**Resolution:** Both `privmsg()` and `notice()` now reject empty targets and targets containing spaces, logging a warning and returning without sending.
+
+---
+
+### BUG-028: Module Loader Follows Symlinks Outside `MODULES_DIR`
+
+**Severity:** Medium  
+**File:** `internets.py` (`load_module`)  
+**Status:** Fixed
+
+While module names were validated against `^[a-z][a-z0-9_]*$` (SEC-002), the loader did not check whether the resolved path remained within the modules directory. A symlink `modules/evil.py -> /etc/passwd` (or any other file) would pass the name regex and be loaded. On a shared host, an attacker with write access to the modules directory could create such a symlink.
+
+**Resolution:** After checking `path.exists()`, the loader now resolves the real path via `path.resolve()` and verifies it starts with `MODULES_DIR.resolve()`. If the resolved path escapes the modules directory, the load is blocked with a log warning.
+
+---
+
+### BUG-029: Config File World-Readable Warning
+
+**Severity:** Low  
+**File:** `internets.py` (startup)  
+**Status:** Fixed
+
+`config.ini` contains server passwords, NickServ passwords, OPER credentials, and the admin password hash. On a multi-user system, the default file creation mask (`umask 022`) leaves the file world-readable (`-rw-r--r--`). There was no warning about this.
+
+**Resolution:** At startup, the bot now `stat()`s `config.ini` and logs a WARNING if the world-read bit (`0o004`) is set, suggesting `chmod 640 config.ini`.
+
+---
+
+### BUG-030: Unbounded Concurrent Command Tasks (DoS)
+
+**Severity:** High  
+**File:** `internets.py` (`_dispatch`)  
+**Status:** Fixed
+
+Every incoming command created a new `asyncio.Task` with no upper bound. An attacker sending hundreds of slow commands (e.g. `.weather` lookups to slow APIs) could exhaust memory and event loop resources. The flood limiter only caps one command per 3 seconds per nick, but many nicks (or a botnet) could overwhelm the bot.
+
+**Resolution:** Added `_MAX_TASKS = 50` class constant. `_dispatch` now counts active command tasks (those whose name starts with `"cmd-"`) and rejects new commands with a NOTICE when the cap is reached. The cap is generous enough for normal usage but prevents resource exhaustion.
+
+---
+
+### BUG-031: No Input Length Cap on Command Arguments
+
+**Severity:** Medium  
+**File:** `internets.py` (`_dispatch`)  
+**Status:** Fixed
+
+Command arguments had no length limit. A user could send `.cc <10KB expression>` or `.weather <enormous string>`, which would be passed to the handler, geocoder, or AST parser at full size. While individual handlers have some limits (calc caps nesting depth, factorial caps at 170), the raw argument was unbounded.
+
+**Resolution:** Added `_MAX_ARG_LEN = 400` class constant. `_dispatch` rejects arguments exceeding this limit with a NOTICE before any handler is invoked. The limit is generous for all normal commands (longest typical input is a full address or multi-word search term).
+
+---
+
 ## Summary
 
 | Category | Count | Status |
@@ -698,11 +813,11 @@ The channels module's `on_load()` used `asyncio.get_event_loop()` to create the 
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
 | High bugs (all passes) | 8 | All fixed |
-| High security (second pass) | 2 | All fixed |
-| Medium issues (all passes) | 8 | All fixed |
-| Low issues | 4 | All fixed |
+| High security (second/sixth pass) | 4 | All fixed |
+| Medium issues (all passes) | 14 | All fixed |
+| Low issues | 5 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
 | Architecture & features (third/fourth pass) | 8 | All implemented |
 | Cleanup | 1 | Fixed |
-| **Total** | **52** | **All resolved** |
+| **Total** | **61** | **All resolved** |

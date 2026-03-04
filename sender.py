@@ -61,10 +61,21 @@ class Sender:
         "PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ", "AUTHENTICATE ",
     )
 
+    # Maximum IRC line length including \r\n (RFC 2812 §2.3).
+    _MAX_IRC_LINE = 512
+
     def _write_line(self, msg: str) -> None:
         """Sanitize, log, and buffer a single IRC line.  NOT async — just buffers."""
         # Strip embedded CR/LF/NUL to prevent protocol injection.
         msg = msg.replace("\r", "").replace("\n", "").replace("\x00", "")
+        # BUG-026: Enforce 512-byte IRC line limit (including \r\n).
+        encoded = msg.encode("utf-8", errors="replace")
+        if len(encoded) > self._MAX_IRC_LINE - 2:  # reserve 2 for \r\n
+            encoded = encoded[:self._MAX_IRC_LINE - 2]
+            # Avoid splitting a multi-byte UTF-8 char.
+            while encoded and (encoded[-1] & 0xC0) == 0x80:
+                encoded = encoded[:-1]
+            msg = encoded.decode("utf-8", errors="replace")
         # Redact credentials from logs.
         log_msg = msg
         for prefix in self._REDACT_OUT:

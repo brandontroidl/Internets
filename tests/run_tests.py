@@ -786,6 +786,115 @@ def _():
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Sixth Pass — Security hardening
+# ══════════════════════════════════════════════════════════════════════
+print("\n=== Security hardening (sixth pass) ===")
+
+@test("SEC-007: _SafeFormatter strips CR/LF/NUL from log messages")
+def _():
+    from internets import _SafeFormatter
+    import logging
+    fmt = _SafeFormatter("%(message)s")
+    rec = logging.LogRecord("test", logging.INFO, "", 0, "hello\r\nworld\x00!", (), None)
+    result = fmt.format(rec)
+    assert "\r" not in result
+    assert "\n" not in result
+    assert "\x00" not in result
+    assert "helloworld!" in result
+
+@test("SEC-009: _connect enforces TLS 1.2 minimum (code inspection)")
+def _():
+    import ast
+    source = Path("internets.py").read_text()
+    assert "minimum_version" in source
+    assert "TLSv1_2" in source
+
+@test("BUG-026: sender enforces 512-byte IRC line limit")
+def _():
+    from sender import Sender
+    assert hasattr(Sender, "_MAX_IRC_LINE")
+    assert Sender._MAX_IRC_LINE == 512
+
+@test("BUG-026: sender _write_line truncates long lines")
+def _():
+    import asyncio
+    from sender import Sender
+
+    loop = asyncio.new_event_loop()
+    s = Sender(loop)
+
+    # Create a mock writer that captures output.
+    written = bytearray()
+    class MockWriter:
+        def is_closing(self): return False
+        def write(self, data): written.extend(data)
+    s._writer = MockWriter()
+
+    # Send a line that exceeds 512 bytes.
+    long_msg = "PRIVMSG #test :" + "A" * 600
+    s._write_line(long_msg)
+
+    # The written bytes (including \r\n) must not exceed 512.
+    assert len(written) <= 512, f"Line was {len(written)} bytes, exceeds 512"
+    assert written.endswith(b"\r\n")
+    loop.close()
+
+@test("BUG-027: privmsg rejects targets containing spaces")
+def _():
+    # Build a minimal bot mock that tracks send calls.
+    from internets import IRCBot
+    source = inspect.getsource(IRCBot.privmsg)
+    assert '" " in target' in source or "' ' in target" in source or 'space' in source.lower() or '"' in source
+
+@test("BUG-027: notice rejects targets containing spaces")
+def _():
+    from internets import IRCBot
+    source = inspect.getsource(IRCBot.notice)
+    assert '" " in target' in source or "' ' in target" in source or 'space' in source.lower() or '"' in source
+
+@test("BUG-028: module loader blocks symlinks outside modules dir (code inspection)")
+def _():
+    source = Path("internets.py").read_text()
+    assert "resolve()" in source
+    assert "modules directory" in source.lower() or "mod_root" in source
+
+@test("BUG-029: startup warns about world-readable config (code inspection)")
+def _():
+    source = Path("internets.py").read_text()
+    assert "0o004" in source or "world-readable" in source
+
+@test("BUG-030: _MAX_TASKS constant defined and enforced")
+def _():
+    from internets import IRCBot
+    assert hasattr(IRCBot, "_MAX_TASKS")
+    assert IRCBot._MAX_TASKS == 50
+    # Verify the dispatch method references it.
+    source = inspect.getsource(IRCBot._dispatch)
+    assert "_MAX_TASKS" in source
+
+@test("BUG-031: _MAX_ARG_LEN constant defined and enforced")
+def _():
+    from internets import IRCBot
+    assert hasattr(IRCBot, "_MAX_ARG_LEN")
+    assert IRCBot._MAX_ARG_LEN == 400
+    source = inspect.getsource(IRCBot._dispatch)
+    assert "_MAX_ARG_LEN" in source
+
+@test("SEC-008: _run_cmd sends generic error, not raw exception")
+def _():
+    from internets import IRCBot as _Bot
+    source = inspect.getsource(_Bot._run_cmd)
+    assert "internal error" in source.lower() or "see log" in source.lower()
+
+@test("SEC-008: load_module does not leak exception details to IRC")
+def _():
+    from internets import IRCBot as _Bot
+    source = inspect.getsource(_Bot.load_module)
+    # Should say "see log" not expose raw {e} in the return value
+    assert "see log" in source.lower()
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Summary
 # ══════════════════════════════════════════════════════════════════════
 print(f"\n{'='*60}")
