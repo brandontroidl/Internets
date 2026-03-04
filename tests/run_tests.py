@@ -584,6 +584,72 @@ def _():
     assert _backoff(5) == 300.0  # capped
     assert _backoff(10) == 300.0  # still capped
 
+@test("admin auth: case-insensitive")
+def _():
+    from internets import IRCBot
+    bot = IRCBot()
+    # Simulate adding an admin (lowercase normalized)
+    bot._authed.add("admin")
+    assert bot.is_admin("Admin")   # different case
+    assert bot.is_admin("ADMIN")   # all caps
+    assert bot.is_admin("admin")   # exact
+    assert not bot.is_admin("other")
+
+@test("PRIVMSG regex captures full user@host as hostmask")
+def _():
+    import re
+    line = ":Nick!ident@some.host.name PRIVMSG #channel :hello world"
+    m = re.match(r":([^!]+)!(\S+) PRIVMSG (\S+) :(.*)", line)
+    assert m is not None
+    nick, hostmask, target, text = m.groups()
+    assert nick == "Nick"
+    assert hostmask == "ident@some.host.name"  # full user@host, not just host
+    assert target == "#channel"
+    assert text == "hello world"
+
+@test("JOIN regex captures full user@host as hostmask")
+def _():
+    import re
+    line = ":Nick!ident@host.example.com JOIN #channel"
+    m = re.match(r":([^!]+)!(\S+) JOIN :?(\S+)(?:\s+\S+)?", line)
+    assert m is not None
+    assert m.group(1) == "Nick"
+    assert m.group(2) == "ident@host.example.com"
+    assert m.group(3) == "#channel"
+
+@test("NICK regex captures full user@host as hostmask")
+def _():
+    import re
+    line = ":OldNick!ident@host.example.com NICK :NewNick"
+    m = re.match(r":([^!]+)!(\S+) NICK :?(\S+)", line)
+    assert m is not None
+    assert m.group(1) == "OldNick"
+    assert m.group(2) == "ident@host.example.com"
+    assert m.group(3) == "NewNick"
+
+@test("JOIN error handler matches 403, 405, 476 in addition to 471/474/475")
+def _():
+    import re
+    pattern = re.compile(r":\S+ (403|405|471|474|475|476) \S+ (\S+)")
+    for num, chan in [("403", "#nosuch"), ("405", "#toomany"), ("476", "#bad*mask"),
+                      ("471", "#full"), ("474", "#banned"), ("475", "#badkey")]:
+        line = f":server {num} MyBot {chan} :error text"
+        m = pattern.match(line)
+        assert m is not None, f"pattern should match {num}"
+        assert m.group(1) == num
+        assert m.group(2) == chan
+
+@test("task done_callback: safe when task already removed from list")
+def _():
+    # Simulates the lambda guard: task not in list should not raise
+    tasks = [1, 2, 3]
+    cb = lambda t: t in tasks and tasks.remove(t)
+    cb(2)           # normal removal
+    assert 2 not in tasks
+    cb(2)           # already removed — should NOT raise ValueError
+    cb(99)          # never existed — should NOT raise ValueError
+    assert tasks == [1, 3]
+
 
 # ══════════════════════════════════════════════════════════════════════
 # Async-specific tests

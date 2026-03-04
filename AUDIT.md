@@ -1,7 +1,7 @@
 # Security & Stability Audit
 
 **Auditor:** Brandon Troidl
-**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review)
+**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review, correctness pass)
 **Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `config.ini`, and all modules in `modules/`.
 
 All findings have been resolved. See `CHANGELOG.md` for the release-oriented summary of changes.
@@ -617,6 +617,80 @@ User tracking entries older than `user_max_age_days` (default 90, configurable i
 
 ---
 
+## Fifth Pass — Correctness & Edge Cases (2026-03-04)
+
+### BUG-020: Admin Auth is Case-Sensitive
+
+**Severity:** Medium
+**File:** `internets.py` (`_authed`, `is_admin`)
+**Status:** Fixed
+
+`is_admin()` checks `nick in self._authed`, but IRC nicks are case-insensitive per RFC 2812. If the server echoes a nick with different casing than what was used during authentication, admin status silently fails. This also affects `cmd_deauth` and the NICK migration handler.
+
+**Resolution:** All `_authed` operations (`add`, `discard`, `in`) now normalize to `nick.lower()`. `is_admin()` checks `nick.lower() in self._authed`.
+
+---
+
+### BUG-021: Hostmask Capture Loses `user@` Portion
+
+**Severity:** Medium
+**File:** `internets.py` (JOIN, NICK, PRIVMSG regexes)
+**Status:** Fixed
+
+The regex pattern `![^@]+@(\S+)` captures only the hostname after `@`, discarding the ident/username. The stored `hostmask` field in `users.json` contains just the hostname (e.g. `some.host`), but the CHGHOST handler correctly stores `user@host` (e.g. `ident@some.host`). The `.users` command output shows `nick!hostname` instead of the expected `nick!user@hostname`.
+
+**Resolution:** Changed the capturing group in JOIN, NICK, and PRIVMSG regexes from `![^@]+@(\S+)` to `!(\S+)`, capturing the full `user@host` string. All three regexes now produce the same format as the CHGHOST handler.
+
+---
+
+### BUG-022: Premature `active_channels.add` Before JOIN Confirmation
+
+**Severity:** Medium
+**File:** `internets.py` (`_on_invite`, `_deferred_rejoin`)
+**Status:** Fixed
+
+Both `_on_invite` and `_deferred_rejoin` added channels to `active_channels` and saved to disk immediately after sending `JOIN`, before the server confirmed the join. If the server rejected the `JOIN` (invite-only, banned, full, etc.), phantom channel entries persisted in `active_channels` and `channels.json`. The error handlers for 471/474/475 could clean up some cases, but the premature add was conceptually wrong — `_on_join` already handles both add and save when the server echoes the JOIN back.
+
+**Resolution:** Removed `active_channels.add()` and `channels_save()` from `_on_invite` and `_deferred_rejoin`. The server-confirmed `_on_join` callback is now the sole point where channels enter the active set and are saved.
+
+---
+
+### BUG-023: Missing JOIN Error Handlers for 403, 405, 476
+
+**Severity:** Low
+**File:** `internets.py` (`_process`)
+**Status:** Fixed
+
+The bot handled 473 (ERR_INVITEONLYCHAN), 471 (ERR_CHANNELISFULL), 474 (ERR_BANNEDFROMCHAN), and 475 (ERR_BADCHANNELKEY), but not 403 (ERR_NOSUCHCHANNEL), 405 (ERR_TOOMANYCHANNELS), or 476 (ERR_BADCHANMASK). If a saved channel was deleted from the network or the channel mask was malformed, the bot would silently fail to join with no cleanup.
+
+**Resolution:** Added 403, 405, and 476 to the existing error handler. All six numerics now log a warning and remove the channel from `active_channels` and saved channels.
+
+---
+
+### BUG-024: Task Done Callback Crashes After `_tasks.clear()`
+
+**Severity:** Medium
+**File:** `internets.py` (`_dispatch`)
+**Status:** Fixed
+
+During reconnect, the main loop cancels all tasks and calls `self._tasks.clear()`. When cancelled tasks subsequently complete and their `done_callback` fires, `self._tasks.remove(task)` raises `ValueError` because the task was already removed by `clear()`. This could crash the event loop's callback handling.
+
+**Resolution:** Changed the done callback from `self._tasks.remove` to a lambda that checks `t in self._tasks` before removing.
+
+---
+
+### BUG-025: `channels.py` Uses Deprecated `asyncio.get_event_loop()`
+
+**Severity:** Low
+**File:** `modules/channels.py` (`on_load`)
+**Status:** Fixed
+
+The channels module's `on_load()` used `asyncio.get_event_loop()` to create the cleanup task. This API is deprecated since Python 3.10 and emits `DeprecationWarning` in some configurations. Since `on_load()` is always called from within a running event loop (via `autoload_modules()` in `run()`), `asyncio.get_running_loop()` is the correct modern API.
+
+**Resolution:** Replaced with `asyncio.get_running_loop()`.
+
+---
+
 ## Summary
 
 | Category | Count | Status |
@@ -625,10 +699,10 @@ User tracking entries older than `user_max_age_days` (default 90, configurable i
 | Critical security (second pass) | 3 | All fixed |
 | High bugs (all passes) | 8 | All fixed |
 | High security (second pass) | 2 | All fixed |
-| Medium issues (all passes) | 4 | All fixed |
-| Low issues | 2 | All fixed |
+| Medium issues (all passes) | 8 | All fixed |
+| Low issues | 4 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
 | Architecture & features (third/fourth pass) | 8 | All implemented |
 | Cleanup | 1 | Fixed |
-| **Total** | **46** | **All resolved** |
+| **Total** | **52** | **All resolved** |

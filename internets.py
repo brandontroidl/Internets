@@ -391,7 +391,7 @@ class IRCBot:
 
     # ── Accessors (sync, called from module threads) ─────────────────
 
-    def is_admin(self, nick: str) -> bool:       return nick in self._authed
+    def is_admin(self, nick: str) -> bool:       return nick.lower() in self._authed
     def is_chanop(self, channel: str, nick: str) -> bool:
         return nick.lower() in self._chanops.get(channel.lower(), set())
     def flood_limited(self, nick: str) -> bool:  return self._rate.flood_check(nick, self.is_admin(nick))
@@ -497,7 +497,7 @@ class IRCBot:
             return
         if ok:
             self._auth_fails.pop(k, None)
-            self._authed.add(nick)
+            self._authed.add(nick.lower())
             self.preply(nick, reply_to, f"{nick}: authenticated.")
             log.info(f"Auth granted: {nick}")
         else:
@@ -506,8 +506,8 @@ class IRCBot:
             log.warning(f"Failed auth: {nick} ({fails + 1}/{self._AUTH_MAX_FAILS})")
 
     async def cmd_deauth(self, nick: str, reply_to: str, arg: str | None) -> None:
-        if nick in self._authed:
-            self._authed.discard(nick)
+        if nick.lower() in self._authed:
+            self._authed.discard(nick.lower())
             self.preply(nick, reply_to, f"{nick}: session ended.")
         else:
             self.preply(nick, reply_to, f"{nick}: not authenticated.")
@@ -826,7 +826,7 @@ class IRCBot:
                 name=f"cmd-{cmd}",
             )
             self._tasks.append(task)
-            task.add_done_callback(self._tasks.remove)
+            task.add_done_callback(lambda t: t in self._tasks and self._tasks.remove(t))
 
     async def _run_cmd(self, handler: Any, nick: str, reply_to: str,
                        arg: str | None, cmd: str) -> None:
@@ -896,16 +896,13 @@ class IRCBot:
             return
         for ch in saved:
             self.send(f"JOIN {ch}")
-            self.active_channels.add(ch.lower())
-            log.info(f"Rejoined {ch}")
+            log.info(f"Rejoining {ch}")
 
     # ── Channel state ────────────────────────────────────────────────
 
     def _on_invite(self, nick: str, channel: str) -> None:
         log.info(f"Invited to {channel} by {nick}")
         self.send(f"JOIN {channel}")
-        self.active_channels.add(channel.lower())
-        self._store.channels_save(self.active_channels.snapshot())
 
     def _on_join(self, channel: str) -> None:
         self.active_channels.add(channel.lower())
@@ -1035,10 +1032,12 @@ class IRCBot:
             self.send(f"PRIVMSG {svc} :INVITE {chan}")
             return
 
-        m = re.match(r":\S+ (471|474|475) \S+ (\S+)", line)
+        m = re.match(r":\S+ (403|405|471|474|475|476) \S+ (\S+)", line)
         if m:
             num, chan = m.group(1), m.group(2)
-            reasons  = {"471": "channel full", "474": "banned", "475": "bad key"}
+            reasons  = {"403": "no such channel", "405": "too many channels",
+                        "471": "channel full", "474": "banned",
+                        "475": "bad key", "476": "bad channel mask"}
             log.warning(f"Cannot join {chan} ({reasons.get(num, num)}) — "
                         f"removing from saved channels")
             self.active_channels.discard(chan.lower())
@@ -1120,13 +1119,13 @@ class IRCBot:
             self._on_invite(m.group(1), m.group(2))
             return
 
-        m = re.match(r":([^!]+)![^@]+@(\S+) JOIN :?(\S+)(?:\s+\S+)?", line)
+        m = re.match(r":([^!]+)!(\S+) JOIN :?(\S+)(?:\s+\S+)?", line)
         if m:
-            nick, host, chan = m.group(1), m.group(2), m.group(3)
+            nick, hostmask, chan = m.group(1), m.group(2), m.group(3)
             if nick.lower() == self._nick.lower():
                 self._on_join(chan)
             else:
-                self._store.user_join(chan, nick, host)
+                self._store.user_join(chan, nick, hostmask)
             return
 
         m = re.match(r":([^!]+)![^@]+@\S+ PART :?(\S+)", line)
@@ -1162,16 +1161,16 @@ class IRCBot:
                 ops.discard(nick_l)
             return
 
-        m = re.match(r":([^!]+)![^@]+@(\S+) NICK :?(\S+)", line)
+        m = re.match(r":([^!]+)!(\S+) NICK :?(\S+)", line)
         if m:
-            old_nick, host, new_nick = m.group(1), m.group(2), m.group(3)
+            old_nick, hostmask, new_nick = m.group(1), m.group(2), m.group(3)
             if old_nick.lower() == self._nick.lower():
                 self._nick = new_nick
                 log.info(f"Own nick changed: {old_nick} -> {new_nick}")
-            self._store.user_rename(old_nick, new_nick, host)
-            if old_nick in self._authed:
-                self._authed.discard(old_nick)
-                self._authed.add(new_nick)
+            self._store.user_rename(old_nick, new_nick, hostmask)
+            if old_nick.lower() in self._authed:
+                self._authed.discard(old_nick.lower())
+                self._authed.add(new_nick.lower())
                 log.info(f"Auth migrated: {old_nick} -> {new_nick}")
             old_l, new_l = old_nick.lower(), new_nick.lower()
             for ops in self._chanops.values():
@@ -1180,17 +1179,17 @@ class IRCBot:
                     ops.add(new_l)
             return
 
-        m = re.match(r":([^!]+)![^@]+@(\S+) PRIVMSG (\S+) :(.*)", line)
+        m = re.match(r":([^!]+)!(\S+) PRIVMSG (\S+) :(.*)", line)
         if not m:
             return
 
-        nick, host, target, text = m.groups()
+        nick, hostmask, target, text = m.groups()
         text     = text.strip()
         is_pm    = target.lower() == self._nick.lower()
         reply_to = nick if is_pm else target
 
         if not is_pm and target.lower() in self.active_channels:
-            self._store.user_join(target, nick, host)
+            self._store.user_join(target, nick, hostmask)
 
         with self._mod_lock:
             all_cmds = set(self._CORE) | set(self._commands)
@@ -1210,7 +1209,7 @@ class IRCBot:
 
         if cmd and cmd in all_cmds:
             log_arg = "[REDACTED]" if cmd in ("auth", "deauth") else arg
-            log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{host} "
+            log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{hostmask} "
                      f"{'(PM)' if is_pm else 'in ' + reply_to}")
             self._dispatch(nick, reply_to, cmd, arg, is_pm)
 

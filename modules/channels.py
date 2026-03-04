@@ -56,7 +56,7 @@ class ChannelsModule(BotModule):
         import threading
         self._lock = threading.Lock()
         # Start the async cleanup task.
-        self._cleanup_task = asyncio.get_event_loop().create_task(
+        self._cleanup_task = asyncio.get_running_loop().create_task(
             self._cleanup_loop(), name="chan-verify-gc")
         log.info(f"Services nick for ownership checks: {self._services}")
 

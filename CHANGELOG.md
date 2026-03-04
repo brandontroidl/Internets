@@ -52,7 +52,7 @@ via `asyncio.to_thread()` inside the handler, keeping the event loop free.
   `user_max_age_days` in `config.ini`) are automatically pruned during store
   flushes.
 
-- **Standalone test suite** — 73 tests in `tests/run_tests.py` covering protocol
+- **Standalone test suite** — 79 tests in `tests/run_tests.py` covering protocol
   parsing, store, calculator, dice, weather merging/formatting, units, sender
   injection prevention, password hashing, ChannelSet, backoff, async sender
   (drain, priority bypass, thread-safe enqueue), and async handler verification
@@ -81,6 +81,43 @@ via `asyncio.to_thread()` inside the handler, keeping the event loop free.
 - **README updated** — Architecture section reflects async design, protocol.py,
   tests.  Module example uses async handlers.  SASL, backoff, pruning, testing
   documented.
+
+### Fixed
+
+- **Admin auth case-insensitive** — `_authed` now normalizes nicks to lowercase,
+  matching IRC's case-insensitive nick semantics per RFC 2812. Previously, a
+  case mismatch between auth and subsequent commands could silently drop admin
+  status.
+
+- **Hostmask capture now includes `user@` portion** — JOIN, NICK, and PRIVMSG
+  regexes captured only the hostname after `@`, losing the ident/username. The
+  `.users` display showed `nick!hostname` instead of `nick!user@hostname`, and
+  `users.json` entries were inconsistent with the CHGHOST handler (which
+  correctly stored `user@host`). All three regexes now capture the full
+  `user@host` string.
+
+- **Premature `active_channels.add` in `_on_invite` and `_deferred_rejoin`** —
+  Both methods added channels to the active set and saved to disk before the
+  server confirmed the JOIN. If the server rejected the JOIN, phantom entries
+  persisted. Removed the premature adds; `_on_join` (triggered by the server's
+  JOIN echo) now handles both add and save.
+
+- **Missing JOIN error handlers for 403/405/476** — ERR_NOSUCHCHANNEL (403),
+  ERR_TOOMANYCHANNELS (405), and ERR_BADCHANMASK (476) were unhandled, leaving
+  phantom channels in `active_channels` and `channels.json`. Now handled
+  alongside the existing 471/474/475 handlers.
+
+- **Task done_callback safe after `_tasks.clear()`** — During reconnect, all
+  tasks are cancelled and the list cleared. When cancelled tasks subsequently
+  completed, their done callback called `list.remove()` on the empty list,
+  raising `ValueError`. The callback now guards with an `in` check first.
+
+- **`channels.py` uses `asyncio.get_running_loop()`** — Replaced deprecated
+  `asyncio.get_event_loop()` call in `on_load()`.
+
+- **Test suite expanded** — 6 new tests covering admin case-insensitivity,
+  hostmask regex capture, JOIN error numerics, NICK regex, and done_callback
+  safety. Total: 79 tests.
 
 ## [1.1.0] — 2026-03-03
 
