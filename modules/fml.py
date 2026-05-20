@@ -10,17 +10,32 @@ from .base import BotModule
 
 log = logging.getLogger("internets.fml")
 
-# Match FML article text from the HTML page
-_FML_RE = re.compile(
-    r'<a[^>]*class="[^"]*article-link[^"]*"[^>]*>.*?<p[^>]*class="[^"]*article-contents[^"]*"[^>]*>(.*?)</p>',
+# Match an FML article's BODY anchor on the random page.  The site
+# moved to Tailwind in 2024-2025 and now renders each article with TWO
+# links to the same /article/<slug>_<id>.html URL:
+#
+#   1. A bare category-title anchor like
+#      ``<a href="/article/..._<id>.html">Magic underwear</a>``
+#      (no class attribute, short curated tag-line)
+#   2. The body anchor:
+#      ``<a href=".._<id>.html" class="block text-blue-500 dark:text-white my-4 [spicy-hidden]">
+#         Today, I ... FML
+#       </a>``
+#
+# Anchoring the regex on the ``block text-blue-500`` class signature
+# (always present on the body link, absent from the title link) ensures
+# we capture the full quote, not the category tag-line.
+_FML_ARTICLE = re.compile(
+    r'<a\s+href="/article/[^"]*?_(\d+)\.html"\s+'
+    r'class="[^"]*block text-blue-500[^"]*"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
-_FML_ID_RE = re.compile(r'/article/(\d+)')
-_TAG_RE = re.compile(r'<[^>]+>')
+_TAG_RE   = re.compile(r'<[^>]+>')
+_WS_RE    = re.compile(r'\s+')
 
 
 def _strip_tags(s: str) -> str:
-    return _TAG_RE.sub("", html.unescape(s)).strip()
+    return _WS_RE.sub(" ", _TAG_RE.sub("", html.unescape(s))).strip()
 
 
 def _lookup_sync(ua: str) -> str:
@@ -35,17 +50,14 @@ def _lookup_sync(ua: str) -> str:
             timeout=15,
         )
         r.raise_for_status()
-        matches = _FML_RE.findall(r.text)
+        matches = _FML_ARTICLE.findall(r.text)
         if not matches:
             return "could not parse FML page — site layout may have changed"
 
-        text = _strip_tags(matches[0])
+        qid, raw_text = matches[0]
+        text = _strip_tags(raw_text)
         if len(text) > 400:
             text = text[:397] + "..."
-
-        # Try to extract the quote ID from the page
-        id_match = _FML_ID_RE.search(r.text)
-        qid = id_match.group(1) if id_match else "?"
 
         return f"[fml #{qid}] {text}"
     except Exception as e:
