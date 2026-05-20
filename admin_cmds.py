@@ -177,36 +177,102 @@ class AdminCommandsMixin:
     # ── Info ─────────────────────────────────────────────────────────
 
     async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Display available commands.  Admin commands visible only when authed."""
+        """Compact command index; `.help <cmd>` or `.help <module>` for details."""
         p = CMD_PREFIX
-        lines = [
-            f"── {self._nick} v{__version__} ──────────────────────────────────────────",
-            f"  {p}help  {p}modules  {p}version  {p}auth <pw>",
-        ]
-        if self.is_admin(nick):
-            lines += [
-                f"  {p}deauth  {p}load/unload/reload <mod>  {p}reloadall",
-                f"  {p}restart  {p}rehash  {p}mode  {p}snomask      [admin]",
-                f"  {p}shutdown [reason]  / {p}die [reason]           [admin]",
-                f"  {p}loglevel [LEVEL | <logger> LEVEL]              [admin]",
-                f"  {p}debug [on|off|<subsystem> [off]]               [admin]",
-            ]
-        lines.append("────────────────────────────────────────────────────────────")
+        admin = self.is_admin(nick)
         with self._mod_lock:
             module_items = list(self._modules.items())
+
+        if arg:
+            target = arg.strip().split()[0].lower()
+            if target.startswith(p):
+                target = target[len(p):]
+            for name, inst in module_items:
+                if not inst.is_configured() and not admin:
+                    continue
+                cmds = {k.lower(): k for k in getattr(inst, "COMMANDS", {})}
+                if target in cmds:
+                    cmd = cmds[target]
+                    hl = inst.help_lines(p)
+                    match_prefix = f"{p}{cmd}"
+                    matched = [
+                        ln for ln in hl
+                        if ln.lstrip().split(None, 1)[0:1] == [match_prefix]
+                        or ln.lstrip().startswith(f"{match_prefix}/")
+                        or ln.lstrip().startswith(f"{match_prefix} ")
+                    ]
+                    if not matched:
+                        matched = hl
+                    for ln in matched:
+                        self.preply(nick, reply_to, ln)
+                    return
+            for name, inst in module_items:
+                if name.lower() == target:
+                    if not inst.is_configured() and not admin:
+                        break
+                    hl = inst.help_lines(p)
+                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
+                    for ln in hl:
+                        self.preply(nick, reply_to, ln)
+                    return
+            self.preply(nick, reply_to,
+                f"no command '{target}' loaded — try {p}help")
+            return
+
+        lines = [
+            f"── {self._nick} v{__version__} ──── "
+            f"use {p}help <cmd> for details ────",
+            f"  {p}help  {p}modules  {p}version  {p}auth <pw>",
+        ]
+        if admin:
+            lines.append(
+                f"  [admin] {p}deauth  {p}load/unload/reload <mod>  "
+                f"{p}reloadall  {p}restart  {p}rehash"
+            )
+            lines.append(
+                f"  [admin] {p}mode  {p}snomask  {p}shutdown  {p}die  "
+                f"{p}loglevel  {p}debug"
+            )
+
         hidden: list[str] = []
+        mod_entries: list[tuple[str, str]] = []
         for name, inst in module_items:
-            # Skip modules that loaded but aren't usable (no API key etc.).
-            # Keeps `.help` compact and avoids advertising commands that
-            # will just say "not configured" if invoked.
             if not inst.is_configured():
                 hidden.append(name)
                 continue
-            hl = inst.help_lines(p)
-            if hl:
-                lines.append(f"  [{name}]")
-                lines.extend(hl)
-        if hidden and self.is_admin(nick):
+            cmds_map = getattr(inst, "COMMANDS", {})
+            if not cmds_map:
+                continue
+            by_method: dict[str, str] = {}
+            for cmd, method in cmds_map.items():
+                cur = by_method.get(method)
+                if cur is None or len(cmd) > len(cur):
+                    by_method[method] = cmd
+            canonical = sorted(by_method.values())
+            mod_entries.append((name, " ".join(canonical)))
+
+        WIDTH = 78
+        INDENT = "  "
+        cur_line = ""
+        for name, cmd_str in mod_entries:
+            label = f"\x02[{name}]\x02 {cmd_str}"
+            visible_label_len = len(label) - 4  # two \x02 pairs
+            if not cur_line:
+                cur_line = INDENT + label
+                cur_visible = len(INDENT) + visible_label_len
+                continue
+            sep = "  "
+            if cur_visible + len(sep) + visible_label_len <= WIDTH:
+                cur_line += sep + label
+                cur_visible += len(sep) + visible_label_len
+            else:
+                lines.append(cur_line)
+                cur_line = INDENT + label
+                cur_visible = len(INDENT) + visible_label_len
+        if cur_line:
+            lines.append(cur_line)
+
+        if hidden and admin:
             lines.append(f"  (hidden, no key: {', '.join(sorted(hidden))})")
         lines.append(f"  In PM the '{p}' prefix is optional.")
         for line in lines:
