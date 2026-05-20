@@ -240,6 +240,23 @@ class AdminCommandsMixin:
                         f"  (hidden, no key: {', '.join(sorted(hidden))})")
                 return
 
+            # Module lookup FIRST so `.help weather` (which matches both
+            # the module name and the .weather command) shows the whole
+            # module roster rather than collapsing to a single line.  If
+            # the user wants just one command's help, they can use an
+            # alias or a more specific name (e.g. `.help w`, `.help aqi`).
+            #
+            # ── .help <module> — show that module's full help_lines ─────
+            for name, inst in module_items:
+                if name.lower() == target:
+                    if not inst.is_configured() and not admin:
+                        break
+                    hl = inst.help_lines(p)
+                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
+                    for ln in hl:
+                        self.preply(nick, reply_to, ln)
+                    return
+
             # ── .help <cmd> — find module owning <cmd>; show its line ───
             for name, inst in module_items:
                 if not inst.is_configured() and not admin:
@@ -258,17 +275,6 @@ class AdminCommandsMixin:
                     if not matched:
                         matched = hl
                     for ln in matched:
-                        self.preply(nick, reply_to, ln)
-                    return
-
-            # ── .help <module> — show that module's full help_lines ─────
-            for name, inst in module_items:
-                if name.lower() == target:
-                    if not inst.is_configured() and not admin:
-                        break
-                    hl = inst.help_lines(p)
-                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
-                    for ln in hl:
                         self.preply(nick, reply_to, ln)
                     return
 
