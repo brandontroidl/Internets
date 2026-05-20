@@ -230,7 +230,7 @@ class AdminCommandsMixin:
                 f"{p}reloadall  {p}restart  {p}rehash"
             )
             lines.append(
-                f"  [admin] {p}mode  {p}snomask  {p}shutdown  {p}die  "
+                f"  [admin] {p}mode  {p}snomask  {p}raw  {p}shutdown  {p}die  "
                 f"{p}loglevel  {p}debug"
             )
 
@@ -432,6 +432,25 @@ class AdminCommandsMixin:
         self.preply(nick, reply_to, f"MODE {self._nick} +s {mask}")
         log.info(f"Snomask set by {nick}: {mask}")
         self._audit(nick, "snomask", mask)
+
+    async def cmd_raw(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Inject a raw IRC protocol line.  ADMIN ONLY.  Audit-logged."""
+        if not self._require_admin(nick, reply_to): return
+        if not arg or not arg.strip():
+            self.preply(nick, reply_to,
+                f"usage: {CMD_PREFIX}raw <IRC line>  e.g. {CMD_PREFIX}raw WHOIS alice")
+            return
+        line = arg.strip()
+        if any(c in line for c in ("\r", "\n", "\x00")):
+            self.preply(nick, reply_to, f"{nick}: line contains CR/LF/NUL — rejected.")
+            return
+        if len(line.encode("utf-8", errors="replace")) > 510:
+            self.preply(nick, reply_to, f"{nick}: line exceeds 510 bytes — rejected.")
+            return
+        self.send(line)
+        self.preply(nick, reply_to, f">> {line}")
+        log.info(f"Raw line sent by {nick}: {line!r}")
+        self._audit(nick, "raw", line)
 
     # ── Logging ──────────────────────────────────────────────────────
 

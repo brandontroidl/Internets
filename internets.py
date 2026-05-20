@@ -197,7 +197,7 @@ class IRCBot(AdminCommandsMixin):
         "load": "cmd_load", "unload": "cmd_unload",
         "reload": "cmd_reload", "reloadall": "cmd_reloadall",
         "restart": "cmd_restart", "rehash": "cmd_rehash",
-        "mode": "cmd_mode", "snomask": "cmd_snomask",
+        "mode": "cmd_mode", "snomask": "cmd_snomask", "raw": "cmd_raw",
         "shutdown": "cmd_shutdown", "die": "cmd_shutdown",
         "loglevel": "cmd_loglevel", "debug": "cmd_debug",
     }
