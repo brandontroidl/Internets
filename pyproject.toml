@@ -29,40 +29,46 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat :: Internet Relay Chat",
 ]
+# Version policy: lower bounds are minimums that fix a known CVE or
+# provide an API we depend on.  No upper bounds — pip always installs
+# the newest compatible release.  CI covers Linux / macOS / Windows
+# across Python 3.10 → 3.14, so any future-breaking upstream release
+# surfaces in the next push and gets pinned around then.
 dependencies = [
-    "requests>=2.31.0,<3",
+    "requests>=2.31.0",
 ]
 
 [project.optional-dependencies]
-async = ["aiohttp>=3.9.0,<4"]
-bcrypt = ["bcrypt>=4.0.0,<5"]
-argon2 = ["argon2-cffi>=23.1.0,<24"]
-weatherkit = ["PyJWT>=2.0.0,<3", "cryptography>=41.0.0,<44"]
+async = ["aiohttp>=3.9.0"]
+bcrypt = ["bcrypt>=4.0.0"]
+argon2 = ["argon2-cffi>=23.1.0"]
+weatherkit = ["PyJWT>=2.0.0", "cryptography>=41.0.0"]
 # OS-native keyring backend for the secret store (macOS Keychain,
 # Linux Secret Service / kwallet, Windows Credential Manager).  Without
-# this the store falls back to a 0600 gitignored secrets.ini.
-keyring = ["keyring>=24.0.0,<26"]
+# this the store falls back to a 0600 gitignored secrets.ini.  On BSD
+# / headless Linux without D-Bus the file backend takes over silently.
+keyring = ["keyring>=24.0.0"]
 # Hardened XML parser used by modules/qdb.py to block billion-laughs DoS
 # (stdlib ElementTree only blocks XXE).  Falls back to stdlib with a
 # WARNING at module load if absent.
-xml = ["defusedxml>=0.7,<1"]
+xml = ["defusedxml>=0.7"]
 all = [
-    "aiohttp>=3.9.0,<4",
-    "bcrypt>=4.0.0,<5",
-    "argon2-cffi>=23.1.0,<24",
-    "PyJWT>=2.0.0,<3",
-    "cryptography>=41.0.0,<44",
-    "keyring>=24.0.0,<26",
-    "defusedxml>=0.7,<1",
+    "aiohttp>=3.9.0",
+    "bcrypt>=4.0.0",
+    "argon2-cffi>=23.1.0",
+    "PyJWT>=2.0.0",
+    "cryptography>=41.0.0",
+    "keyring>=24.0.0",
+    "defusedxml>=0.7",
 ]
 dev = [
-    "pytest>=7.0,<9",
-    "pytest-asyncio>=0.21,<1",
-    "pytest-cov>=4.0,<7",
-    "coverage>=7.0,<8",
-    "bandit[sarif]>=1.7,<2",
-    "pip-audit>=2.7,<3",
-    "build>=1.0,<2",
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "coverage>=7.0",
+    "bandit[sarif]>=1.7",
+    "pip-audit>=2.7",
+    "build>=1.0",
 ]
 
 [project.urls]
