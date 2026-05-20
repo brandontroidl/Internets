@@ -247,10 +247,15 @@ class AdminCommandsMixin:
             cmds_map = getattr(inst, "COMMANDS", {})
             if not cmds_map:
                 continue
+            # Canonical alias = the FIRST one listed in the module's
+            # COMMANDS dict (Python 3.7+ preserves insertion order).  The
+            # module author placed it first for a reason — it's the
+            # documented/preferred name (e.g. `.gecko` not `.coingecko`,
+            # `.poke` not `.pokemon`).  We previously picked the longest,
+            # which was just wrong.
             by_method: dict[str, str] = {}
             for cmd, method in cmds_map.items():
-                cur = by_method.get(method)
-                if cur is None or len(cmd) > len(cur):
+                if method not in by_method:
                     by_method[method] = cmd
             canonical = sorted(by_method.values())
             mod_entries.append((name, " ".join(canonical)))
