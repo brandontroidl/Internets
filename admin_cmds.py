@@ -177,16 +177,70 @@ class AdminCommandsMixin:
     # ── Info ─────────────────────────────────────────────────────────
 
     async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Compact command index; `.help <cmd>` or `.help <module>` for details."""
+        """Compact help.  `.help <module>` / `.help <cmd>` for details, `.help all` for the full grid."""
         p = CMD_PREFIX
         admin = self.is_admin(nick)
         with self._mod_lock:
             module_items = list(self._modules.items())
 
+        # Partition modules once — used by every branch below.
+        configured: list[str] = []
+        hidden:     list[str] = []
+        for name, inst in module_items:
+            if not getattr(inst, "COMMANDS", {}):
+                continue
+            (configured if inst.is_configured() else hidden).append(name)
+
         if arg:
             target = arg.strip().split()[0].lower()
             if target.startswith(p):
                 target = target[len(p):]
+
+            # ── .help all — full alphabetical grid of every command ─────
+            if target == "all":
+                all_cmds: list[str] = ["help", "modules", "version", "auth"]
+                for name, inst in module_items:
+                    if not inst.is_configured() and not admin:
+                        continue
+                    cmds_map = getattr(inst, "COMMANDS", {})
+                    by_method: dict[str, str] = {}
+                    for cmd, method in cmds_map.items():
+                        if method not in by_method:
+                            by_method[method] = cmd
+                    all_cmds.extend(by_method.values())
+                self.preply(nick, reply_to,
+                    f"── Internets v{__version__} — all commands ──")
+                for row in _help_grid(sorted(set(all_cmds))):
+                    self.preply(nick, reply_to, f"  {row}")
+                if admin and hidden:
+                    self.preply(nick, reply_to,
+                        f"  (hidden, no key: {', '.join(sorted(hidden))})")
+                return
+
+            # ── .help admin — admin-only command grid ───────────────────
+            if target == "admin":
+                if not admin:
+                    self.preply(nick, reply_to,
+                        f"no command 'admin' loaded — try {p}help")
+                    return
+                adm = sorted([
+                    "deauth", "load", "unload", "reload", "reloadall",
+                    "restart", "rehash",
+                    "mode", "snomask", "raw", "nick", "say", "act",
+                    "shutdown", "loglevel", "debug",
+                    "uptime", "stats", "audit", "fingerprint",
+                    "shadow-ban", "shadow-unban", "shadow-list",
+                ])
+                self.preply(nick, reply_to,
+                    f"── Internets v{__version__} — admin commands ──")
+                for row in _help_grid(adm):
+                    self.preply(nick, reply_to, f"  {row}")
+                if hidden:
+                    self.preply(nick, reply_to,
+                        f"  (hidden, no key: {', '.join(sorted(hidden))})")
+                return
+
+            # ── .help <cmd> — find module owning <cmd>; show its line ───
             for name, inst in module_items:
                 if not inst.is_configured() and not admin:
                     continue
@@ -206,6 +260,8 @@ class AdminCommandsMixin:
                     for ln in matched:
                         self.preply(nick, reply_to, ln)
                     return
+
+            # ── .help <module> — show that module's full help_lines ─────
             for name, inst in module_items:
                 if name.lower() == target:
                     if not inst.is_configured() and not admin:
@@ -215,81 +271,25 @@ class AdminCommandsMixin:
                     for ln in hl:
                         self.preply(nick, reply_to, ln)
                     return
+
             self.preply(nick, reply_to,
                 f"no command '{target}' loaded — try {p}help")
             return
 
-        # IRC server /HELP-style two-block layout: decorative banner,
-        # centred title, separator, 4-column grid of UPPERCASE commands,
-        # then (for admins only) a second banner block with admin-only
-        # commands.  Layout intentionally mimics ProvisionIRCd / classic
-        # ircd-hybrid /HELP output.
-
-        # Collect every PUBLIC command name: core public (help, modules,
-        # version, auth) + the canonical alias of every loaded module
-        # whose ``is_configured()`` is True (admins see un-configured ones
-        # too, since they may be hot-loading a key in).
-        public: list[str] = ["help", "modules", "version", "auth"]
-        hidden: list[str] = []
-        for name, inst in module_items:
-            cmds_map = getattr(inst, "COMMANDS", {})
-            if not cmds_map:
-                continue
-            if not inst.is_configured() and not admin:
-                hidden.append(name)
-                continue
-            if not inst.is_configured():
-                hidden.append(name)
-            # Canonical alias = FIRST entry in the module's COMMANDS dict.
-            by_method: dict[str, str] = {}
-            for cmd, method in cmds_map.items():
-                if method not in by_method:
-                    by_method[method] = cmd
-            public.extend(by_method.values())
-
-        # Admin-only commands — listed flat (not module-grouped).
-        admin_cmds_list: list[str] = []
-        if admin:
-            admin_cmds_list = [
-                "deauth", "load", "unload", "reload", "reloadall",
-                "restart", "rehash",
-                "mode", "snomask", "raw", "nick", "say", "act",
-                "shutdown", "loglevel", "debug",
-                "uptime", "stats", "audit", "fingerprint",
-                "shadow-ban", "shadow-unban", "shadow-list",
-            ]
-
-        BANNER = "§~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~§"
-        TITLE  = f"~~~~~~~~~ Internets v{__version__} Help ~~~~~~~~~"
-        ADMIN_TITLE = f"~~~~~~~~~ Internets v{__version__} Help (admin) ~~~~~~~~~"
-
-        out: list[str] = []
-        # ── public block ──────────────────────────────────────────────
-        out.append(f"* {BANNER}")
-        out.append(f"* {TITLE}")
-        out.append(f"* {BANNER}")
-        out.append("* -")
-        for row in _help_grid(sorted(set(public))):
-            out.append(f"* {row}")
-        out.append("* -")
-        out.append(f"* Use {p}help <command> for more information, if available.")
-
-        # ── admin block (only if authed) ──────────────────────────────
-        if admin and admin_cmds_list:
-            out.append("* -")
-            out.append("* -")
-            out.append(f"* {BANNER}")
-            out.append(f"* {ADMIN_TITLE}")
-            out.append(f"* {BANNER}")
-            out.append("* -")
-            for row in _help_grid(sorted(set(admin_cmds_list))):
-                out.append(f"* {row}")
-            if hidden:
-                out.append("* -")
-                out.append(f"* (hidden, no key: {', '.join(sorted(set(hidden)))})")
-
-        for line in out:
+        # ── Default: compact module list (progressive disclosure) ──────
+        # Hidden (un-configured) modules show in the list for admins so
+        # they know what's available to enable; non-admins don't see them.
+        visible = sorted(configured + (hidden if admin else []))
+        self.preply(nick, reply_to,
+            f"── Internets v{__version__} ──")
+        for line in _wrap_list(visible, "  Modules: ", 74):
             self.preply(nick, reply_to, line)
+        self.preply(nick, reply_to,
+            f"  {p}help <module> lists its commands.  {p}help <cmd> shows details.")
+        if admin:
+            hidden_note = f" ({len(hidden)} hidden, no key)" if hidden else ""
+            self.preply(nick, reply_to,
+                f"  (admin) {p}help admin for ops commands.  {p}help all for the full grid{hidden_note}.")
 
     async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Display bot version and repository URL."""
@@ -851,6 +851,31 @@ class AdminCommandsMixin:
 
 
 # ── Module-level helpers used by .help / .uptime / .stats / .audit / .fingerprint ──
+
+def _wrap_list(items: list[str], lead: str, width: int = 74) -> list[str]:
+    """Render ``items`` as a space-separated list with hanging indent.
+
+    The first line is prefixed with ``lead`` (e.g. ``"  Modules: "``);
+    continuation lines align under the text that follows the lead.
+    Wraps when the next item would exceed ``width`` visible chars.
+    Used by the no-arg ``.help`` to keep the module roster compact.
+    """
+    if not items:
+        return [lead.rstrip()]
+    indent = " " * len(lead)
+    rows: list[str] = []
+    cur = lead
+    for item in items:
+        sep = "" if cur in (lead, indent) else " "
+        if len(cur) + len(sep) + len(item) > width and cur not in (lead, indent):
+            rows.append(cur)
+            cur = indent + item
+        else:
+            cur += sep + item
+    if cur.strip():
+        rows.append(cur)
+    return rows
+
 
 def _help_grid(items: list[str], cols: int = 4, col_w: int = 14) -> list[str]:
     """Render ``items`` as an IRC /HELP-style grid of UPPERCASE labels.
