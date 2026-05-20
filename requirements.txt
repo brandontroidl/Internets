@@ -20,7 +20,7 @@ aiohttp>=3.9.0,<4
 
 # Argon2id — recommended admin password hasher (memory-hard, GPU-resistant).
 # Required for `password_hash = argon2$...` in config.local.ini [admin].
-argon2-cffi>=23.1.0,<24
+argon2-cffi>=23.1.0,<26
 
 # bcrypt — alternative admin password hasher.
 # Required for `password_hash = bcrypt$...` in config.local.ini [admin].
