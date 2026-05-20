@@ -10,19 +10,24 @@ from .base import BotModule
 
 log = logging.getLogger("internets.fml")
 
-# Match an FML article on the random page.  The site moved to Tailwind
-# in 2024-2025 — the old ``article-link``/``article-contents`` classes
-# are gone.  Each article is now an ``<a>`` whose href points at the
-# article HTML page, with the quote text as the anchor's inner text:
+# Match an FML article's BODY anchor on the random page.  The site
+# moved to Tailwind in 2024-2025 and now renders each article with TWO
+# links to the same /article/<slug>_<id>.html URL:
 #
-#   <a href="/article/<slug>_<id>.html" class="block text-blue-500 ...">
-#       Today, I ...  FML
-#   </a>
+#   1. A bare category-title anchor like
+#      ``<a href="/article/..._<id>.html">Magic underwear</a>``
+#      (no class attribute, short curated tag-line)
+#   2. The body anchor:
+#      ``<a href=".._<id>.html" class="block text-blue-500 dark:text-white my-4 [spicy-hidden]">
+#         Today, I ... FML
+#       </a>``
 #
-# We capture (id, text) in one match.  Falls back gracefully if the
-# markup changes again.
+# Anchoring the regex on the ``block text-blue-500`` class signature
+# (always present on the body link, absent from the title link) ensures
+# we capture the full quote, not the category tag-line.
 _FML_ARTICLE = re.compile(
-    r'<a\s+href="/article/[^"]*?_(\d+)\.html"[^>]*>(.*?)</a>',
+    r'<a\s+href="/article/[^"]*?_(\d+)\.html"\s+'
+    r'class="[^"]*block text-blue-500[^"]*"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
 _TAG_RE   = re.compile(r'<[^>]+>')
