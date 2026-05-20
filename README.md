@@ -1,8 +1,8 @@
 # Internets
 
-**v2.5.0** — Per-provider flags, scientific-accuracy ranking, keyring-backed secrets (2026-05-19)
+**v2.6.0** — Progressive-disclosure help, audit / fingerprint / shadow-ban admin tools, +24 entertainment / dev / live-data modules (2026-05-20)
 
-A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
+A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups — plus stateful IRC-native tools (seen, tell, remind, notes), API-driven entertainment modules (PokéAPI, MTG, D&D, ISS tracker, xkcd, APOD, recipes, cocktails, HN, Reddit, …), pure-local dev utilities, and a full admin toolkit. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
 
 Weather queries are served by a capability-based dispatcher across **14 providers**, ranked by the scientific accuracy of the underlying numerical models. The default chain leads with NWS (US gov NDFD + HRRR + WaveWatch III, no key), Meteomatics (ECMWF/ICON/GFS blend), Apple WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model + CAMS + ERA5, no key), and Visual Crossing (ERA5), then AccuWeather, OpenWeatherMap, WeatherBit, WeatherAPI, Pirate Weather, Stormglass (marine), Tomorrow.io, World Weather Online, and Weatherstack. Each provider is a sub-module package with one file per API endpoint. The dispatcher auto-discovers capabilities, applies the static accuracy rank first, then live health (success rate, latency, rate limits), and routes each request accordingly. Force any active provider with a per-command flag — e.g. `.w -aw 67127`, `.w -vc Tokyo`, `.f -nws`.
 
@@ -244,27 +244,27 @@ Admin session (via PM):
 <Internets> 'weather' unloaded. 'weather' loaded (19 commands).
 
 <alice> .version
-<Internets> Internets 2.5.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
+<Internets> Internets 2.6.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
 ```
 
 CLI startup:
 
 ```
 $ python internets.py --version
-Internets 2.5.0
+Internets 2.6.0
 
 $ python internets.py
-2026-05-19 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
-2026-05-19 14:00:01 [INFO] internets.modules: Loaded weather (['weather', 'w', 'forecast', 'f', ...])
+2026-05-20 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
+2026-05-20 14:00:01 [INFO] internets.modules: Loaded weather (['weather', 'w', 'forecast', 'f', ...])
 ...
-2026-05-19 14:00:02 [INFO] internets.conn: Connecting irc.example.org:6697 (SSL)
-2026-05-19 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
-2026-05-19 14:00:03 [INFO] internets.conn: Joined #mychannel
+2026-05-20 14:00:02 [INFO] internets.conn: Connecting irc.example.org:6697 (SSL)
+2026-05-20 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
+2026-05-20 14:00:03 [INFO] internets.conn: Joined #mychannel
 > status
-  version  = 2.5.0
+  version  = 2.6.0
   nick     = Internets
   channels = #mychannel
-  modules  = bofh, calc, channels, dice, dictionary, fml, idlerpg, imdb, ipinfo, lastfm, location, qdb, search, steam, stocks, translate, twitch, urbandictionary, urls, weather, youtube
+  modules  = advice, apod, bofh, bored, calc, catfact, channels, chuck, cocktail, cowsay, crypto, dadjoke, devutils, dice, dictionary, dnd, fact, fml, fx, games, hn, httpcode, idlerpg, imdb, ipinfo, iss, lastfm, location, mtg, notes, numberfact, poke, qdb, qr, recipe, reddit, remind, search, seen, spacex, steam, stocks, tell, translate, twitch, urbandictionary, urls, weather, xkcd, youtube
   admins   = (none)
 >
 ```
