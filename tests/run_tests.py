@@ -1028,12 +1028,16 @@ def _():
     assert "\x00" not in result
     assert "helloworld!" in result
 
-@test("SEC-009: _connect enforces TLS 1.2 minimum (code inspection)")
+@test("SEC-009: _connect enforces TLS 1.3 minimum (code inspection)")
 def _():
-    import ast
     source = Path("internets.py").read_text(encoding="utf-8")
     assert "minimum_version" in source
+    # TLS 1.3 is the default minimum; TLS 1.2 must remain mentioned as
+    # the only opt-in downgrade path (INTERNETS_ALLOW_TLS12) so we know
+    # it isn't silently accepted.
+    assert "TLSv1_3" in source
     assert "TLSv1_2" in source
+    assert "INTERNETS_ALLOW_TLS12" in source
 
 @test("BUG-026: sender enforces 512-byte IRC line limit")
 def _():

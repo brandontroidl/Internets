@@ -324,6 +324,14 @@ class IRCBot(AdminCommandsMixin):
     def rate_limited(self, nick: str) -> bool:
         return self._rate.api_check(nick)
 
+    def channel_limited(self, channel: str) -> bool:
+        """True if *channel* has hit the cross-user burst threshold.
+
+        Sits on top of per-nick flood/api limiters: catches coordinated
+        floods where many distinct nicks each send 1 command/sec.
+        """
+        return self._rate.channel_check(channel)
+
     def loc_get(self, nick: str) -> str | None: return self._store.loc_get(nick)
     def loc_set(self, nick: str, raw: str) -> None: self._store.loc_set(nick, raw)
     def loc_del(self, nick: str) -> bool: return self._store.loc_del(nick)
@@ -474,6 +482,14 @@ class IRCBot(AdminCommandsMixin):
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM."); return
         if self.flood_limited(nick):
             self.notice(nick, f"{nick}: slow down ({FLOOD_CD}s cooldown)"); return
+        # Channel-wide gate — catches coordinated floods across nicks
+        # that the per-nick limit can't see.  Silent log only; we don't
+        # want to spam the channel telling users it's throttled.
+        if not is_pm and self.channel_limited(reply_to):
+            _LOG_DISPATCH.warning(
+                "event=channel_throttled channel=%s nick=%s cmd=%s",
+                reply_to, nick, cmd)
+            return
         if arg and len(arg) > self._MAX_ARG_LEN:
             self.notice(nick, f"{nick}: input too long (max {self._MAX_ARG_LEN} chars)."); return
         # O(1) cap check via counter instead of O(n) scan over self._tasks.
@@ -529,16 +545,49 @@ class IRCBot(AdminCommandsMixin):
 
     # ── Connection ───────────────────────────────────────────────────
 
+    def _tls_or_refuse(self, cred_name: str) -> bool:
+        """Gate every outbound credential on TLS being active.
+
+        Returns True iff the live IRC connection is TLS-protected.  On
+        a plaintext connection we log CRITICAL and return False — the
+        caller suppresses the credential send.  Prevents the foot-gun
+        of leaking NickServ/SASL/server/oper passwords on a
+        misconfigured connection.
+        """
+        if getattr(self, "_tls_active", False):
+            return True
+        log.critical(
+            "event=plaintext_cred_refused cred=%s — refusing to send %s "
+            "over a non-TLS connection.  Set ssl=true in config.ini[irc] "
+            "or unset the credential.",
+            cred_name, cred_name)
+        return False
+
     async def _connect(self) -> None:
         use_ssl = cfg["irc"].getboolean("ssl", fallback=True)
         verify  = cfg["irc"].getboolean("ssl_verify", fallback=True)
+        # Record TLS state for credential-send guards (see _tls_or_refuse).
+        self._tls_active = use_ssl
         _LOG_CONN.info(
             "event=connect_begin host=%s port=%d ssl=%s verify=%s",
             SERVER, PORT, use_ssl, verify if use_ssl else "n/a")
         ssl_ctx: ssl.SSLContext | None = None
         if use_ssl:
             ssl_ctx = ssl.create_default_context()
-            ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            # TLS 1.3-only.  Closes the entire TLS 1.2 cipher-suite
+            # surface (CBC modes, RSA key exchange, weak MAC algorithms,
+            # renegotiation tricks).  Modern IRCds (UnrealIRCd 6+,
+            # InspIRCd 4+, Charybdis, Solanum) all speak TLS 1.3.
+            # If you must talk to a TLS-1.2-only IRCd, set
+            # INTERNETS_ALLOW_TLS12=1 in the environment.
+            if os.environ.get("INTERNETS_ALLOW_TLS12") == "1":
+                ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+                log.warning(
+                    "event=tls_minimum_downgraded value=TLSv1.2 — "
+                    "INTERNETS_ALLOW_TLS12 is set; weak ciphersuites are "
+                    "back on the table for this connection.")
+            else:
+                ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
             if not verify:
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -644,7 +693,9 @@ class IRCBot(AdminCommandsMixin):
                 if sub == "ACK":
                     self._caps = set(params.split()); log.info(f"Caps ACK: {self._caps}")
                 else: log.info(f"Caps NAK: {params}")
-                if "sasl" in self._caps and NS_PW and not self._sasl_in_progress:
+                if ("sasl" in self._caps and NS_PW
+                        and not self._sasl_in_progress
+                        and self._tls_or_refuse("sasl_password")):
                     self._sasl_in_progress = True
                     self.send("AUTHENTICATE PLAIN", priority=0); log.info("Starting SASL PLAIN authentication")
                 else: self.send("CAP END", priority=0); self._cap_busy = False
@@ -886,7 +937,8 @@ class IRCBot(AdminCommandsMixin):
         while not self._stop.is_set():
             try:
                 if not registered:
-                    if SERVER_PW: self.send(f"PASS {SERVER_PW}", priority=0)
+                    if SERVER_PW and self._tls_or_refuse("server_password"):
+                        self.send(f"PASS {SERVER_PW}", priority=0)
                     self.send("CAP LS 302", priority=0); self._cap_busy = True
                     self.send(f"NICK {self._nick}", priority=0)
                     self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
@@ -917,8 +969,11 @@ class IRCBot(AdminCommandsMixin):
                     if USER_MODES:
                         self.send(f"MODE {self._nick} {USER_MODES}")
                         log.info(f"User modes: MODE {self._nick} {USER_MODES}")
-                    if NS_PW and not self._ns_identified: self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
-                    if OPER_N and OPER_PW: self.send(f"OPER {OPER_N} {OPER_PW}")
+                    if (NS_PW and not self._ns_identified
+                            and self._tls_or_refuse("nickserv_password")):
+                        self.send(f"PRIVMSG NickServ :IDENTIFY {NS_PW}")
+                    if OPER_N and OPER_PW and self._tls_or_refuse("oper_password"):
+                        self.send(f"OPER {OPER_N} {OPER_PW}")
                     self._tasks.append(asyncio.create_task(self._keepalive(), name="keepalive"))
                     self._tasks.append(asyncio.create_task(self._deferred_rejoin(), name="rejoin"))
                     identified = True
@@ -1118,6 +1173,24 @@ def _entry() -> None:
     records OUR PID, preserved across execv) would block the new image
     from re-acquiring.
     """
+    # Drop-root guard (POSIX).  Running an IRC bot as root needlessly
+    # expands the blast radius of any compromise — a code-exec bug
+    # would suddenly own the whole box instead of an unprivileged
+    # account.  Refuse unless explicitly overridden via env var.
+    # Windows has no euid; skip there.  Containers running as root
+    # should also opt in explicitly via INTERNETS_ALLOW_ROOT=1.
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        if os.environ.get("INTERNETS_ALLOW_ROOT") != "1":
+            log.critical(
+                "event=refused_root_start euid=0 — refusing to start as root.  "
+                "Run under an unprivileged account, OR set "
+                "INTERNETS_ALLOW_ROOT=1 if you have a specific reason "
+                "(e.g. binding port <1024 on a host without capabilities).")
+            sys.exit(1)
+        log.warning(
+            "event=root_start_allowed INTERNETS_ALLOW_ROOT=1 — running as root "
+            "is permitted by env override; consider switching to setcap "
+            "CAP_NET_BIND_SERVICE instead.")
     lock_path = Path("./internets.pid").resolve()
     try:
         with ProcessLock(lock_path) as lock:
