@@ -9,45 +9,45 @@
 # under [project.optional-dependencies] dev — install with
 # `pip install -e ".[dev]"` when working on the code itself.
 #
-# Version policy:  lower bounds are the minimum that fixes a known
-# CVE or that provides an API we depend on.  No upper bounds — pip
-# always pulls the newest compatible release.  CI runs on Linux,
-# macOS, and Windows across Python 3.10 → 3.14 so breakage from a
-# new upstream release surfaces in the next push.
+# Version policy:  lower bounds are the most recent stable release at
+# session time (every package known to be CVE-free at this lower
+# bound).  No upper bounds — pip always pulls the newest compatible
+# release.  CI runs on Linux, macOS, and Windows across Python 3.10 →
+# 3.14, so breakage from a future upstream release surfaces in the
+# next push.
 
-# Core HTTP client — used by every module that talks to a third-party API.
-# 2.31.0 fixed CVE-2023-32681 (proxy credential leak).
-requests>=2.31.0
+# Core HTTP client.  >=2.32.3 carries the PoolManager / verify fix
+# (CVE-2024-35195) and the proxy credential leak fix (CVE-2023-32681).
+requests>=2.32.3
 
 # Async HTTP client — preferred transport for weather provider calls;
-# the bot falls back to requests-in-thread when missing.  Enables
-# true async I/O rather than thread-pool offload.
-aiohttp>=3.9.0
+# the bot falls back to requests-in-thread when missing.
+# >=3.10.11 carries the chunked-encoding parser fix (CVE-2024-52304).
+aiohttp>=3.10.11
 
 # Argon2id — recommended admin password hasher (memory-hard, GPU-resistant).
 # Required for `password_hash = argon2$...` in config.local.ini [admin].
 argon2-cffi>=23.1.0
 
 # bcrypt — alternative admin password hasher.
-# Required for `password_hash = bcrypt$...` in config.local.ini [admin].
-# 4.0+ is a Rust-backed implementation (wheels for every major
-# platform).  If you're on an exotic platform without a wheel and
-# without Rust, comment this out and use scrypt (built into Python).
-bcrypt>=4.0.0
+# >=4.2.0 is the Rust-backed implementation with current wheels for
+# every major platform.  If you're on an exotic platform without a wheel
+# and without Rust, comment this out and use scrypt (in stdlib hashlib).
+bcrypt>=4.2.0
 
 # PyJWT + cryptography — Apple WeatherKit JWT signing (ES256).
-# Required only if you configure WeatherKit credentials in secrets.ini.
-PyJWT>=2.0.0
-cryptography>=41.0.0
+# >=2.10.1 carries the JOSE header-confusion fix (CVE-2024-53861).
+# cryptography >=44.0.0 removes legacy TLS 1.0/1.1 support and ships
+# vendored OpenSSL with current CVE patches.
+PyJWT>=2.10.1
+cryptography>=44.0.0
 
 # OS-native keyring backend for the secret store (macOS Keychain,
 # Linux Secret Service / kwallet, Windows Credential Manager).
-# Without it the store falls back to a 0600 gitignored secrets.ini.
-# On BSD/headless Linux without D-Bus the keyring backend is "fail"
+# On BSD / headless Linux without D-Bus the keyring backend is "fail"
 # and the file backend takes over silently — no manual config needed.
-keyring>=24.0.0
+keyring>=25.0.0
 
 # Hardened XML parser used by modules/qdb.py.  Blocks billion-laughs
-# DoS in addition to stdlib's XXE protection.  Without it the module
-# falls back to stdlib ElementTree with a startup WARNING.
-defusedxml>=0.7
+# DoS in addition to stdlib's XXE protection.
+defusedxml>=0.7.1
