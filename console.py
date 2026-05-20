@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import threading
 from typing import TYPE_CHECKING
 
 from botlog import apply_debug, apply_loglevel, log_filter
@@ -54,8 +55,63 @@ def should_skip_console() -> bool:
         return True
 
 
+def _console_dispatch_loop(bot: IRCBot) -> None:
+    """Synchronous read+dispatch loop for the console.  Runs in a
+    daemon thread (see ``run_console``).
+
+    All commands we dispatch are thread-safe to call from outside the
+    asyncio loop:
+      * ``apply_debug`` / ``apply_loglevel`` — touch logger state
+        (RLock-guarded internally by the logging module).
+      * ``_print_status`` — reads bot fields through their dedicated
+        ``threading.Lock``-guarded accessors.
+      * ``bot.request_shutdown`` — already uses
+        ``loop.call_soon_threadsafe`` internally to set the stop event.
+
+    Exits on EOFError (Ctrl-D / closed stdin), KeyboardInterrupt
+    (Ctrl-C), ValueError (stdin closed mid-read), or "shutdown" / "quit".
+    """
+    while True:
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt, ValueError):
+            return
+        if not line:
+            continue
+        parts = line.split()
+        cmd, args = parts[0].lower(), parts[1:]
+        if cmd == "help":
+            print(_CONSOLE_HELP)
+        elif cmd == "debug":
+            apply_debug(args)
+        elif cmd == "loglevel":
+            if err := apply_loglevel(args):
+                print(err)
+        elif cmd == "status":
+            _print_status(bot)
+        elif cmd in ("shutdown", "quit"):
+            reason = " ".join(args) if args else "Console shutdown"
+            log.info(f"Console shutdown: {reason}")
+            bot.request_shutdown(reason)
+            return
+        else:
+            print(f"Unknown command: {cmd!r} — type 'help' for commands.")
+
+
 async def run_console(bot: IRCBot) -> None:
-    """Async console: reads stdin in a thread, processes commands."""
+    """Async wrapper: spawns the dispatch loop on a daemon thread and
+    awaits an Event the thread sets when it exits.
+
+    Why a daemon thread instead of ``asyncio.to_thread``: ``input()``
+    parks the calling thread on a blocking ``read(0)`` syscall that
+    nothing short of process death can interrupt.  If that thread
+    isn't ``daemon=True``, ``asyncio.run()``'s cleanup path will
+    ``loop.shutdown_default_executor()`` — which waits forever for
+    the input-blocked worker to return.  Net effect of the old design:
+    the whole process hung on the last shutdown log line until the
+    operator hit Ctrl-C.  A daemon thread dies with the process, so
+    cleanup completes and the bot exits cleanly.
+    """
     # Loud warning on entry — anyone reading the log sees that the
     # console is live and grants admin equivalence to stdin.
     log.warning(
@@ -65,38 +121,30 @@ async def run_console(bot: IRCBot) -> None:
         "Pass --no-console for daemon deployments.",
         __import__("os").getpid(),
     )
-    while True:
+    loop = asyncio.get_running_loop()
+    done = asyncio.Event()
+
+    def _wrap() -> None:
         try:
-            line = (await asyncio.to_thread(input, "> ")).strip()
-        except (EOFError, KeyboardInterrupt):
-            break
-        if not line:
-            continue
+            _console_dispatch_loop(bot)
+        except Exception as e:  # noqa: BLE001 — protect the loop
+            log.exception(f"console thread crashed: {e!r}")
+        finally:
+            # call_soon_threadsafe is safe even if the loop has already
+            # been closed (rare race during shutdown).
+            try:
+                loop.call_soon_threadsafe(done.set)
+            except RuntimeError:
+                pass
 
-        parts = line.split()
-        cmd, args = parts[0].lower(), parts[1:]
-
-        if cmd == "help":
-            print(_CONSOLE_HELP)
-
-        elif cmd == "debug":
-            apply_debug(args)
-
-        elif cmd == "loglevel":
-            if err := apply_loglevel(args):
-                print(err)
-
-        elif cmd == "status":
-            _print_status(bot)
-
-        elif cmd in ("shutdown", "quit"):
-            reason = " ".join(args) if args else "Console shutdown"
-            log.info(f"Console shutdown: {reason}")
-            bot.request_shutdown(reason)
-            break
-
-        else:
-            print(f"Unknown command: {cmd!r} — type 'help' for commands.")
+    t = threading.Thread(target=_wrap, daemon=True, name="console-input")
+    t.start()
+    try:
+        await done.wait()
+    except asyncio.CancelledError:
+        # _main cancelled us during shutdown; nothing to clean up since
+        # the dispatch thread is daemon=True.
+        raise
 
 
 def _print_status(bot: IRCBot) -> None:

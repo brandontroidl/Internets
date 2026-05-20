@@ -943,9 +943,38 @@ class IRCBot(AdminCommandsMixin):
                     self.send(f"NICK {self._nick}", priority=0)
                     self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
                     registered = True
+                # Race the readline against the shutdown event so the
+                # bot reacts to .shutdown / SIGINT immediately instead
+                # of sitting in readline for up to _READ_TIMEOUT seconds
+                # until the next server PING wakes it up.  Without this
+                # gate, request_shutdown() sets _stop but the loop
+                # doesn't notice for ~73s on a quiet network.
+                read_task = asyncio.create_task(
+                    asyncio.wait_for(
+                        self._reader.readline(),
+                        timeout=self._READ_TIMEOUT))
+                stop_task = asyncio.create_task(self._stop.wait())
                 try:
-                    raw = await asyncio.wait_for(
-                        self._reader.readline(), timeout=self._READ_TIMEOUT)
+                    done, pending = await asyncio.wait(
+                        {read_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    for t in (read_task, stop_task):
+                        if not t.done():
+                            t.cancel()
+                if self._stop.is_set():
+                    # Drain the cancelled read task quietly — it may
+                    # raise CancelledError or asyncio.TimeoutError.
+                    for t in (read_task,):
+                        try:
+                            await t
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
+                        except Exception:
+                            pass
+                    break
+                try:
+                    raw = read_task.result()
                 except asyncio.TimeoutError:
                     raise ConnectionResetError(
                         f"Read timeout ({self._READ_TIMEOUT}s)")
@@ -1058,11 +1087,12 @@ class IRCBot(AdminCommandsMixin):
         self.request_shutdown(f"Caught {name}, shutting down")
 
     def _on_sighup(self) -> None:
-        """SIGHUP: rehash config from disk without dropping the connection."""
+        """SIGHUP: rehash config (template + local overlay) from disk."""
         _LOG_SIGNAL.info("event=signal_received sig=SIGHUP action=rehash")
         try:
-            cfg.read(CONFIG_PATH)
-            _LOG_SIGNAL.info("event=rehash_ok path=%s", CONFIG_PATH)
+            from config import reload_config
+            files = reload_config()
+            _LOG_SIGNAL.info("event=rehash_ok files=%s", files)
         except Exception as e:
             _LOG_SIGNAL.error("event=rehash_failed err=%s", e)
             return
@@ -1123,10 +1153,28 @@ async def _main(lock: ProcessLock | None = None) -> None:
             except (asyncio.CancelledError, Exception): pass
         pending.discard(bot_task)
     # Cancel any other still-pending tasks (e.g. the console).
+    #
+    # The console is the tricky one: it's blocked in
+    # ``asyncio.to_thread(input, "> ")`` which parks a ThreadPoolExecutor
+    # worker on a blocking ``read(0)`` syscall.  Cancelling the asyncio
+    # task flips it to cancelled but does NOT interrupt the syscall —
+    # ``asyncio.run()``'s subsequent ``loop.shutdown_default_executor()``
+    # then waits forever for the thread to return, and the whole process
+    # hangs on the last log line.  Closing stdin makes the blocking read
+    # raise OSError / return empty, which unblocks ``input()`` (it raises
+    # EOFError, which ``run_console`` already catches), the thread
+    # returns, and the executor shuts down cleanly.
+    if pending:
+        try:
+            sys.stdin.close()
+        except Exception:
+            pass
     for task in pending:
         task.cancel()
-        try: await task
-        except (asyncio.CancelledError, Exception): pass
+        try:
+            await asyncio.wait_for(task, timeout=3.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
     # Final logging-handler flush before potential execv().
     for h in logging.getLogger("internets").handlers:
         try: h.flush()

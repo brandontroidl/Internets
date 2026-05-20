@@ -162,8 +162,15 @@ if cli_args.debug is not None:
 # ── Startup validation ───────────────────────────────────────────────
 
 def get_hash() -> str:
-    """Re-read config.ini and return the current password_hash."""
-    cfg.read(CONFIG_PATH)
+    """Re-read the layered config and return the current password_hash.
+
+    Uses ``config.reload_config()`` so BOTH config.ini and
+    config.local.ini are re-read in the right order — re-reading
+    config.ini alone would clobber the value merged in from
+    config.local.ini with the template's empty placeholder.
+    """
+    from config import reload_config
+    reload_config()
     return cfg["admin"].get("password_hash", "").strip()
 
 
