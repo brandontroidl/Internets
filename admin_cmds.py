@@ -177,16 +177,87 @@ class AdminCommandsMixin:
     # ── Info ─────────────────────────────────────────────────────────
 
     async def cmd_help(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Compact command index; `.help <cmd>` or `.help <module>` for details."""
+        """Compact help.  `.help <module>` / `.help <cmd>` for details, `.help all` for the full grid."""
         p = CMD_PREFIX
         admin = self.is_admin(nick)
         with self._mod_lock:
             module_items = list(self._modules.items())
 
+        # Partition modules once — used by every branch below.
+        configured: list[str] = []
+        hidden:     list[str] = []
+        for name, inst in module_items:
+            if not getattr(inst, "COMMANDS", {}):
+                continue
+            (configured if inst.is_configured() else hidden).append(name)
+
         if arg:
             target = arg.strip().split()[0].lower()
             if target.startswith(p):
                 target = target[len(p):]
+
+            # ── .help all — full alphabetical grid of every command ─────
+            if target == "all":
+                all_cmds: list[str] = ["help", "modules", "version", "auth"]
+                for name, inst in module_items:
+                    if not inst.is_configured() and not admin:
+                        continue
+                    cmds_map = getattr(inst, "COMMANDS", {})
+                    by_method: dict[str, str] = {}
+                    for cmd, method in cmds_map.items():
+                        if method not in by_method:
+                            by_method[method] = cmd
+                    all_cmds.extend(by_method.values())
+                self.preply(nick, reply_to,
+                    f"── Internets v{__version__} — all commands ──")
+                for row in _help_grid(sorted(set(all_cmds))):
+                    self.preply(nick, reply_to, f"  {row}")
+                if admin and hidden:
+                    self.preply(nick, reply_to,
+                        f"  (hidden, no key: {', '.join(sorted(hidden))})")
+                return
+
+            # ── .help admin — admin-only command grid ───────────────────
+            if target == "admin":
+                if not admin:
+                    self.preply(nick, reply_to,
+                        f"no command 'admin' loaded — try {p}help")
+                    return
+                adm = sorted([
+                    "deauth", "load", "unload", "reload", "reloadall",
+                    "restart", "rehash",
+                    "mode", "snomask", "raw", "nick", "say", "act",
+                    "shutdown", "loglevel", "debug",
+                    "uptime", "stats", "audit", "fingerprint",
+                    "shadow-ban", "shadow-unban", "shadow-list",
+                ])
+                self.preply(nick, reply_to,
+                    f"── Internets v{__version__} — admin commands ──")
+                for row in _help_grid(adm):
+                    self.preply(nick, reply_to, f"  {row}")
+                if hidden:
+                    self.preply(nick, reply_to,
+                        f"  (hidden, no key: {', '.join(sorted(hidden))})")
+                return
+
+            # Module lookup FIRST so `.help weather` (which matches both
+            # the module name and the .weather command) shows the whole
+            # module roster rather than collapsing to a single line.  If
+            # the user wants just one command's help, they can use an
+            # alias or a more specific name (e.g. `.help w`, `.help aqi`).
+            #
+            # ── .help <module> — show that module's full help_lines ─────
+            for name, inst in module_items:
+                if name.lower() == target:
+                    if not inst.is_configured() and not admin:
+                        break
+                    hl = inst.help_lines(p)
+                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
+                    for ln in hl:
+                        self.preply(nick, reply_to, ln)
+                    return
+
+            # ── .help <cmd> — find module owning <cmd>; show its line ───
             for name, inst in module_items:
                 if not inst.is_configured() and not admin:
                     continue
@@ -206,81 +277,25 @@ class AdminCommandsMixin:
                     for ln in matched:
                         self.preply(nick, reply_to, ln)
                     return
-            for name, inst in module_items:
-                if name.lower() == target:
-                    if not inst.is_configured() and not admin:
-                        break
-                    hl = inst.help_lines(p)
-                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
-                    for ln in hl:
-                        self.preply(nick, reply_to, ln)
-                    return
+
             self.preply(nick, reply_to,
                 f"no command '{target}' loaded — try {p}help")
             return
 
-        lines = [
-            f"── {self._nick} v{__version__} ──── "
-            f"use {p}help <cmd> for details ────",
-            f"  {p}help  {p}modules  {p}version  {p}auth <pw>",
-        ]
-        if admin:
-            lines.append(
-                f"  [admin] {p}deauth  {p}load/unload/reload <mod>  "
-                f"{p}reloadall  {p}restart  {p}rehash"
-            )
-            lines.append(
-                f"  [admin] {p}mode  {p}snomask  {p}raw  {p}nick  {p}say  {p}act  "
-                f"{p}shutdown  {p}die  {p}loglevel  {p}debug"
-            )
-            lines.append(
-                f"  [admin] {p}uptime  {p}stats  {p}audit  {p}fingerprint  "
-                f"{p}shadow-ban  {p}shadow-unban  {p}shadow-list"
-            )
-
-        hidden: list[str] = []
-        mod_entries: list[tuple[str, str]] = []
-        for name, inst in module_items:
-            if not inst.is_configured():
-                hidden.append(name)
-                continue
-            cmds_map = getattr(inst, "COMMANDS", {})
-            if not cmds_map:
-                continue
-            by_method: dict[str, str] = {}
-            for cmd, method in cmds_map.items():
-                cur = by_method.get(method)
-                if cur is None or len(cmd) > len(cur):
-                    by_method[method] = cmd
-            canonical = sorted(by_method.values())
-            mod_entries.append((name, " ".join(canonical)))
-
-        WIDTH = 78
-        INDENT = "  "
-        cur_line = ""
-        for name, cmd_str in mod_entries:
-            label = f"\x02[{name}]\x02 {cmd_str}"
-            visible_label_len = len(label) - 4  # two \x02 pairs
-            if not cur_line:
-                cur_line = INDENT + label
-                cur_visible = len(INDENT) + visible_label_len
-                continue
-            sep = "  "
-            if cur_visible + len(sep) + visible_label_len <= WIDTH:
-                cur_line += sep + label
-                cur_visible += len(sep) + visible_label_len
-            else:
-                lines.append(cur_line)
-                cur_line = INDENT + label
-                cur_visible = len(INDENT) + visible_label_len
-        if cur_line:
-            lines.append(cur_line)
-
-        if hidden and admin:
-            lines.append(f"  (hidden, no key: {', '.join(sorted(hidden))})")
-        lines.append(f"  In PM the '{p}' prefix is optional.")
-        for line in lines:
+        # ── Default: compact module list (progressive disclosure) ──────
+        # Hidden (un-configured) modules show in the list for admins so
+        # they know what's available to enable; non-admins don't see them.
+        visible = sorted(configured + (hidden if admin else []))
+        self.preply(nick, reply_to,
+            f"── Internets v{__version__} ──")
+        for line in _wrap_list(visible, "  Modules: ", 74):
             self.preply(nick, reply_to, line)
+        self.preply(nick, reply_to,
+            f"  {p}help <module> lists its commands.  {p}help <cmd> shows details.")
+        if admin:
+            hidden_note = f" ({len(hidden)} hidden, no key)" if hidden else ""
+            self.preply(nick, reply_to,
+                f"  (admin) {p}help admin for ops commands.  {p}help all for the full grid{hidden_note}.")
 
     async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Display bot version and repository URL."""
@@ -841,7 +856,54 @@ class AdminCommandsMixin:
         self.request_shutdown(reason)
 
 
-# ── Module-level helpers used by .uptime / .stats / .audit / .fingerprint ──
+# ── Module-level helpers used by .help / .uptime / .stats / .audit / .fingerprint ──
+
+def _wrap_list(items: list[str], lead: str, width: int = 74) -> list[str]:
+    """Render ``items`` as a space-separated list with hanging indent.
+
+    The first line is prefixed with ``lead`` (e.g. ``"  Modules: "``);
+    continuation lines align under the text that follows the lead.
+    Wraps when the next item would exceed ``width`` visible chars.
+    Used by the no-arg ``.help`` to keep the module roster compact.
+    """
+    if not items:
+        return [lead.rstrip()]
+    indent = " " * len(lead)
+    rows: list[str] = []
+    cur = lead
+    for item in items:
+        sep = "" if cur in (lead, indent) else " "
+        if len(cur) + len(sep) + len(item) > width and cur not in (lead, indent):
+            rows.append(cur)
+            cur = indent + item
+        else:
+            cur += sep + item
+    if cur.strip():
+        rows.append(cur)
+    return rows
+
+
+def _help_grid(items: list[str], cols: int = 4, col_w: int = 14) -> list[str]:
+    """Render ``items`` as an IRC /HELP-style grid of UPPERCASE labels.
+
+    Layout: left-to-right, top-to-bottom, ``cols`` columns of ``col_w``
+    chars each (right-padded with spaces; the last column on a line is
+    not padded so trailing whitespace doesn't waste bytes).
+    Returns a list of rendered rows, one per output line.
+    """
+    if not items:
+        return []
+    rows: list[str] = []
+    upper = [s.upper() for s in items]
+    for i in range(0, len(upper), cols):
+        chunk = upper[i:i + cols]
+        parts = [c.ljust(col_w) for c in chunk[:-1]]
+        parts.append(chunk[-1])
+        rows.append("".join(parts))
+    return rows
+
+
+
 
 def _humanize_delta(seconds: float) -> str:
     """Render a non-negative time delta as a compact human string."""
