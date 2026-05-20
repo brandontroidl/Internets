@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from botlog import apply_debug, apply_loglevel, log_filter
@@ -25,6 +26,34 @@ from config import __version__
 
 if TYPE_CHECKING:
     from internets import IRCBot
+
+
+class _DaemonInputExecutor(ThreadPoolExecutor):
+    """ThreadPoolExecutor whose worker threads are ``daemon=True``.
+
+    Why this exists: ``input()`` does a blocking ``read(0)`` that no
+    sane signal short of process death can interrupt.  If the input
+    runs on the default executor (as ``asyncio.to_thread`` would do),
+    a ``.shutdown`` or SIGINT will reach ``asyncio.run()``'s loop
+    cleanup, which calls ``loop.shutdown_default_executor()`` — and
+    that waits forever for the input-blocked worker to return.  The
+    whole process hangs on its last log line.
+
+    Putting the input on a daemon-thread executor sidesteps this:
+    daemon threads die with the process, the cleanup path doesn't
+    block, and the bot exits as soon as the asyncio loop is done.
+    """
+
+    def _adjust_thread_count(self) -> None:  # pragma: no cover (stdlib internals)
+        before = set(self._threads)
+        super()._adjust_thread_count()
+        for t in self._threads - before:
+            t.daemon = True
+
+
+# One worker is enough; the console only runs a single input() at a time.
+_INPUT_EXECUTOR = _DaemonInputExecutor(
+    max_workers=1, thread_name_prefix="console-input")
 
 _CONSOLE_HELP = """\
   debug [on|off]            global debug toggle
@@ -65,10 +94,18 @@ async def run_console(bot: IRCBot) -> None:
         "Pass --no-console for daemon deployments.",
         __import__("os").getpid(),
     )
+    loop = asyncio.get_running_loop()
     while True:
         try:
-            line = (await asyncio.to_thread(input, "> ")).strip()
-        except (EOFError, KeyboardInterrupt):
+            # Route through our daemon-thread executor instead of
+            # ``asyncio.to_thread`` (which uses the default executor) so
+            # a hung input() doesn't keep the process alive after the
+            # bot loop exits.
+            line = (await loop.run_in_executor(
+                _INPUT_EXECUTOR, input, "> ")).strip()
+        except (EOFError, KeyboardInterrupt, ValueError):
+            # ValueError covers "I/O operation on closed file" if
+            # ``_main`` closed stdin to unblock us from the bot side.
             break
         if not line:
             continue

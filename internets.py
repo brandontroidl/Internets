@@ -1153,10 +1153,28 @@ async def _main(lock: ProcessLock | None = None) -> None:
             except (asyncio.CancelledError, Exception): pass
         pending.discard(bot_task)
     # Cancel any other still-pending tasks (e.g. the console).
+    #
+    # The console is the tricky one: it's blocked in
+    # ``asyncio.to_thread(input, "> ")`` which parks a ThreadPoolExecutor
+    # worker on a blocking ``read(0)`` syscall.  Cancelling the asyncio
+    # task flips it to cancelled but does NOT interrupt the syscall —
+    # ``asyncio.run()``'s subsequent ``loop.shutdown_default_executor()``
+    # then waits forever for the thread to return, and the whole process
+    # hangs on the last log line.  Closing stdin makes the blocking read
+    # raise OSError / return empty, which unblocks ``input()`` (it raises
+    # EOFError, which ``run_console`` already catches), the thread
+    # returns, and the executor shuts down cleanly.
+    if pending:
+        try:
+            sys.stdin.close()
+        except Exception:
+            pass
     for task in pending:
         task.cancel()
-        try: await task
-        except (asyncio.CancelledError, Exception): pass
+        try:
+            await asyncio.wait_for(task, timeout=3.0)
+        except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            pass
     # Final logging-handler flush before potential execv().
     for h in logging.getLogger("internets").handlers:
         try: h.flush()
