@@ -156,9 +156,18 @@ def _fetch_sync(query: str, cache: dict[str, str], ua: str) -> str:
 
 
 class CryptoModule(BotModule):
-    """`.crypto <symbol-or-name>` — spot price from CoinGecko (no key)."""
+    """`.gecko <symbol-or-name>` — spot price from CoinGecko (no key).
 
-    COMMANDS: dict[str, str] = {"crypto": "cmd_crypto"}
+    The shorter aliases `.gecko` / `.cg` are used so this module can
+    coexist with the keyed ``stocks.crypto`` command (which routes via
+    Finnhub/Alphavantage/Twelvedata and requires those API keys).
+    """
+
+    COMMANDS: dict[str, str] = {
+        "gecko": "cmd_crypto",
+        "coingecko": "cmd_crypto",
+        "cg": "cmd_crypto",
+    }
 
     def on_load(self) -> None:
         from .base import cred
@@ -175,7 +184,7 @@ class CryptoModule(BotModule):
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]
-            self.bot.privmsg(reply_to, f"{nick}: {p}crypto <symbol-or-name>  e.g. {p}crypto btc")
+            self.bot.privmsg(reply_to, f"{nick}: {p}gecko <symbol-or-name>  e.g. {p}gecko btc")
             return
         query = arg.strip().split()[0]
         text = await asyncio.to_thread(_fetch_sync, query, self._cache, self._ua)
@@ -183,7 +192,7 @@ class CryptoModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}crypto <symbol-or-name>  Crypto spot price + 24h change (coingecko)",
+            f"  {prefix}gecko / .cg <symbol>     Crypto spot price + 24h change via CoinGecko",
         ]
 
 
