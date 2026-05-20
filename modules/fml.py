@@ -10,17 +10,27 @@ from .base import BotModule
 
 log = logging.getLogger("internets.fml")
 
-# Match FML article text from the HTML page
-_FML_RE = re.compile(
-    r'<a[^>]*class="[^"]*article-link[^"]*"[^>]*>.*?<p[^>]*class="[^"]*article-contents[^"]*"[^>]*>(.*?)</p>',
+# Match an FML article on the random page.  The site moved to Tailwind
+# in 2024-2025 — the old ``article-link``/``article-contents`` classes
+# are gone.  Each article is now an ``<a>`` whose href points at the
+# article HTML page, with the quote text as the anchor's inner text:
+#
+#   <a href="/article/<slug>_<id>.html" class="block text-blue-500 ...">
+#       Today, I ...  FML
+#   </a>
+#
+# We capture (id, text) in one match.  Falls back gracefully if the
+# markup changes again.
+_FML_ARTICLE = re.compile(
+    r'<a\s+href="/article/[^"]*?_(\d+)\.html"[^>]*>(.*?)</a>',
     re.DOTALL,
 )
-_FML_ID_RE = re.compile(r'/article/(\d+)')
-_TAG_RE = re.compile(r'<[^>]+>')
+_TAG_RE   = re.compile(r'<[^>]+>')
+_WS_RE    = re.compile(r'\s+')
 
 
 def _strip_tags(s: str) -> str:
-    return _TAG_RE.sub("", html.unescape(s)).strip()
+    return _WS_RE.sub(" ", _TAG_RE.sub("", html.unescape(s))).strip()
 
 
 def _lookup_sync(ua: str) -> str:
@@ -35,17 +45,14 @@ def _lookup_sync(ua: str) -> str:
             timeout=15,
         )
         r.raise_for_status()
-        matches = _FML_RE.findall(r.text)
+        matches = _FML_ARTICLE.findall(r.text)
         if not matches:
             return "could not parse FML page — site layout may have changed"
 
-        text = _strip_tags(matches[0])
+        qid, raw_text = matches[0]
+        text = _strip_tags(raw_text)
         if len(text) > 400:
             text = text[:397] + "..."
-
-        # Try to extract the quote ID from the page
-        id_match = _FML_ID_RE.search(r.text)
-        qid = id_match.group(1) if id_match else "?"
 
         return f"[fml #{qid}] {text}"
     except Exception as e:
