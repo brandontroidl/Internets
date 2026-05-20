@@ -6,19 +6,17 @@ from .base import BotModule
 
 log = logging.getLogger("internets.privacy")
 
-# Special key prefix used to record per-nick opt-out flags inside
-# ``locations.json``.  The locations store is a flat ``dict[str, str]``
-# keyed by lowercased nick; until ``store.Store`` grows a real opt-out
-# column (tracked as a follow-up for the Robustness agent) we squat on a
-# reserved key namespace that real nicknames cannot collide with — IRC
-# RFC 2812 forbids ``:`` and leading digits/``__`` in nicks on every
-# server software in common use.
-_OPTOUT_KEY_PREFIX = "__optout__:"
+# Legacy opt-out key prefix.  Earlier versions of this module squatted
+# on a reserved key inside ``locations.json`` (``__optout__:<nick>``)
+# because ``store.Store`` lacked an opt-out column.  The column now
+# exists (``store.set_opt_out``/``store.is_opted_out``) and that is the
+# source of truth.  We keep the legacy prefix only to migrate it forward
+# on next access; never write to it.
+_LEGACY_OPTOUT_KEY_PREFIX = "__optout__:"
 
 
-def _optout_key(nick: str) -> str:
-    """Return the locations-store key that records an opt-out flag for *nick*."""
-    return f"{_OPTOUT_KEY_PREFIX}{nick.lower()}"
+def _legacy_optout_key(nick: str) -> str:
+    return f"{_LEGACY_OPTOUT_KEY_PREFIX}{nick.lower()}"
 
 
 class PrivacyModule(BotModule):
@@ -30,12 +28,12 @@ class PrivacyModule(BotModule):
       dataset the bot owns (saved location + per-channel tracking entries).
     * ``.privacy`` — transparency: privately lists everything the bot has
       stored about the invoking nick, including their own hostmask.
-    * ``.optout`` / ``.optin`` — toggle a per-nick opt-out flag.  See the
-      comment on ``_OPTOUT_KEY_PREFIX`` for why the flag is stashed inside
-      ``locations.json`` for now; the Robustness agent is expected to add
-      a first-class column in ``store.Store`` and update consumers (notably
-      ``modules/location.py``) so that opt-out propagates into user
-      tracking and any future logging.
+    * ``.optout`` / ``.optin`` — toggle a per-nick opt-out flag stored as
+      a real column on every user-tracking record (``store.set_opt_out``).
+      Cross-user lookups in ``modules/weather.py`` (``-n <nick>``) honour
+      the flag; ``modules/location.py``'s self-only commands intentionally
+      do not.  Any legacy flag stored under the old ``__optout__:`` key
+      scheme is migrated forward on first access.
 
     All commands are PM-only — leaking another user's saved location or
     hostmask into a public channel would itself be a privacy regression.
@@ -66,9 +64,42 @@ class PrivacyModule(BotModule):
         )
         return False
 
+    def _store_is_opted_out(self, nick: str) -> bool:
+        """Read the canonical opt-out flag from ``store.Store``."""
+        store = getattr(self.bot, "_store", None)
+        fn = getattr(store, "is_opted_out", None)
+        return bool(fn(nick)) if callable(fn) else False
+
+    def _store_set_opt_out(self, nick: str, value: bool) -> bool:
+        """Write the canonical opt-out flag; returns True iff the store accepted it."""
+        store = getattr(self.bot, "_store", None)
+        fn = getattr(store, "set_opt_out", None)
+        if not callable(fn):
+            return False
+        fn(nick, bool(value))
+        return True
+
     def _is_opted_out(self, nick: str) -> bool:
-        """Return True if *nick* currently has the opt-out flag set."""
-        return self.bot.loc_get(_optout_key(nick)) is not None
+        """Return True if *nick* is opted out.
+
+        Reads the canonical store column first, then falls back to the
+        legacy ``__optout__:<nick>`` key.  If the legacy flag exists but
+        the canonical column does not, migrate the value forward and
+        clean up the legacy entry — so the answer becomes stable on next
+        access.
+        """
+        if self._store_is_opted_out(nick):
+            return True
+        legacy_set = self.bot.loc_get(_legacy_optout_key(nick)) is not None
+        if legacy_set:
+            # One-shot migration: move legacy → canonical, drop legacy.
+            if self._store_set_opt_out(nick, True):
+                self.bot.loc_del(_legacy_optout_key(nick))
+                log.info(f"opt-out migrated {nick} (legacy → store)")
+                return True
+            # Canonical store unavailable for some reason — honour legacy.
+            return True
+        return False
 
     def _own_hostmask(self, nick: str) -> str | None:
         """Best-effort lookup of the invoker's own current hostmask.
@@ -101,10 +132,12 @@ class PrivacyModule(BotModule):
         if self.bot.loc_del(nick):
             deleted.append("saved location")
 
-        # 2. Opt-out flag — remove so the opt-in/opt-out cycle stays
-        #    truthful after a purge.  Don't surface this in the user
-        #    confirmation; it's bookkeeping, not user data per se.
-        self.bot.loc_del(_optout_key(nick))
+        # 2. Opt-out flag — clear both the canonical column and any
+        #    legacy key so the opt-in/opt-out cycle stays truthful after
+        #    a purge.  Not surfaced in the user confirmation: it's
+        #    bookkeeping, not user data per se.
+        self._store_set_opt_out(nick, False)
+        self.bot.loc_del(_legacy_optout_key(nick))
 
         # 3. Channel-tracking entries.  We snapshot the channels we care
         #    about *before* mutating, so we can tell the user exactly
@@ -214,24 +247,26 @@ class PrivacyModule(BotModule):
                  f"channels={len(rows)})")
 
     async def cmd_optout(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Record a per-nick opt-out flag.
+        """Record a per-nick opt-out flag in the canonical store column.
 
-        Limitation: until ``store.Store`` exposes a first-class opt-out
-        column, the flag lives under a reserved key in ``locations.json``
-        (``__optout__:<nick>``).  Modules that should honour the flag
-        (notably ``modules/location.py``) won't read it until the
-        Robustness agent threads the new column through — this is
-        documented as a follow-up in PRIVACY.md.
+        Cross-user lookups (e.g. ``.w -n <you>``) refuse once the flag is
+        set; the user's own commands (``.regloc``, ``.myloc``, ``.w``
+        without ``-n``) continue to work because they act on first-party
+        data only.
         """
         if self._is_opted_out(nick):
             self.bot.notice(nick, f"{nick}: already opted out.")
             return
-        self.bot.loc_set(_optout_key(nick), "1")
+        if not self._store_set_opt_out(nick, True):
+            self.bot.notice(nick, f"{nick}: opt-out is unavailable — see admin.")
+            log.warning(f"optout {nick}: store unavailable")
+            return
+        # Belt-and-braces: drop any stale legacy key.
+        self.bot.loc_del(_legacy_optout_key(nick))
         self.bot.notice(
             nick,
-            f"{nick}: opted out. Note: full propagation lands once the "
-            "store schema gains a real opt-out column; for now run "
-            ".forgetme to erase existing records.",
+            f"{nick}: opted out. Other users can no longer look up your "
+            f"saved location.  Run .forgetme to also erase existing records.",
         )
         log.info(f"optout {nick}")
 
@@ -240,7 +275,8 @@ class PrivacyModule(BotModule):
         if not self._is_opted_out(nick):
             self.bot.notice(nick, f"{nick}: you weren't opted out.")
             return
-        self.bot.loc_del(_optout_key(nick))
+        self._store_set_opt_out(nick, False)
+        self.bot.loc_del(_legacy_optout_key(nick))
         self.bot.notice(nick, f"{nick}: opted back in.")
         log.info(f"optin {nick}")
 
