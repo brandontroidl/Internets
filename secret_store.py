@@ -1,4 +1,4 @@
-"""Tiered secret store — keyring > env var > secrets.ini.
+"""Tiered secret store — keyring > env var > config.ini[secrets].
 
 Outbound credentials (NickServ password, SASL password, server password,
 oper password, weather API keys, etc.) MUST be reversible — the bot has
@@ -10,13 +10,17 @@ Lookup order for ``get(name)``:
     2. OS keyring entry under service ``internets-irc``, user=<name>,
        via the optional ``keyring`` library.  Encrypted by the OS
        (macOS Keychain, Linux Secret Service/kwallet, Windows CredMan).
-    3. ``secrets.ini`` ``[secrets]`` section, file mode strictly 0o600.
+    3. ``config.ini`` ``[secrets]`` section, file mode strictly 0o600.
     4. Empty string default.
 
 The keyring backend is the most secure: the secret never lives on disk
-in plaintext and is unlocked per user session.  The secrets.ini fallback
+in plaintext and is unlocked per user session.  The config.ini fallback
 exists for headless servers without a session keyring; ``perms_ok()``
 fails closed if the file is group- or world-readable.
+
+config.ini is gitignored — it holds both the non-secret settings and
+the ``[secrets]`` section.  ``config.ini.example`` is the committed
+credential-free template.
 
 CLI::
 
@@ -24,8 +28,9 @@ CLI::
     python -m secret_store set <name> [--value <v>] [--backend keyring|file]
     python -m secret_store get <name>
     python -m secret_store delete <name> [--backend keyring|file|all]
-    python -m secret_store migrate           # scrub plaintext from config.ini
+    python -m secret_store migrate           # scrub plaintext from non-[secrets] sections
     python -m secret_store list              # show which keys are stored where
+    python -m secret_store init              # bootstrap config.ini from config.ini.example
 """
 
 from __future__ import annotations
@@ -43,7 +48,10 @@ log = logging.getLogger("internets.secrets")
 
 SERVICE = "internets-irc"
 ENV_PREFIX = "INTERNETS_"
-SECRETS_FILE = Path("secrets.ini").resolve()
+# The file the [secrets] section lives in.  config.ini is gitignored;
+# config.ini.example is the committed credential-free template.
+SECRETS_FILE = Path("config.ini").resolve()
+SECRETS_EXAMPLE = Path("config.ini.example").resolve()
 
 # Canonical secret names — every key the bot considers sensitive.
 # Used by migrate / list / status.  Adding a key here makes it part of
@@ -165,7 +173,7 @@ def keyring_available() -> bool:
 
     Rejects Fail / Plaintext / Null / Memory backends explicitly —
     accepting any of those would silently downgrade secret storage
-    to "no encryption", which is worse than the 0600 secrets.ini
+    to "no encryption", which is worse than the 0600 config.ini
     fallback (which is at least file-perm protected).
     """
     kr = _keyring()
