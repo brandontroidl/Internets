@@ -37,7 +37,7 @@ dependencies = [
 async = ["aiohttp>=3.9.0,<4"]
 bcrypt = ["bcrypt>=4.0.0,<5"]
 argon2 = ["argon2-cffi>=23.1.0,<24"]
-weatherkit = ["PyJWT>=2.0.0,<3", "cryptography>=41.0.0,<44"]
+weatherkit = ["PyJWT>=2.0.0,<3", "cryptography>=41.0.0,<49"]
 # OS-native keyring backend for the secret store (macOS Keychain,
 # Linux Secret Service / kwallet, Windows Credential Manager).  Without
 # this the store falls back to a 0600 gitignored secrets.ini.
@@ -51,7 +51,7 @@ all = [
     "bcrypt>=4.0.0,<5",
     "argon2-cffi>=23.1.0,<24",
     "PyJWT>=2.0.0,<3",
-    "cryptography>=41.0.0,<44",
+    "cryptography>=41.0.0,<49",
     "keyring>=24.0.0,<26",
     "defusedxml>=0.7,<1",
 ]
