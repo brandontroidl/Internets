@@ -298,10 +298,14 @@ class AdminCommandsMixin:
         self.request_shutdown("Restarting ...")
 
     async def cmd_rehash(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Reload config.ini and clear admin sessions.  Admin only."""
+        """Reload config + config.local overlay and clear admin sessions.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         try:
-            cfg.read(CONFIG_PATH)
+            # reload_config() re-reads BOTH config.ini AND config.local.ini.
+            # Re-reading the template alone would clobber the overlay's
+            # password_hash with its empty placeholder.
+            from config import reload_config
+            reload_config()
         except Exception as e:
             log.error(f"Rehash config read failed: {e}")
             self.preply(nick, reply_to, f"{nick}: failed to read config — see log for details.")

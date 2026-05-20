@@ -38,9 +38,27 @@ CONFIG_PATH = str(Path("config.ini").resolve())
 # Load committed template first, then overlay personal overrides if
 # present.  config.local.ini is gitignored; secrets stay in secret_store.
 _LOCAL_CONFIG = Path("config.local.ini").resolve()
-read_files = cfg.read(CONFIG_PATH)
-if _LOCAL_CONFIG.exists():
-    read_files += cfg.read(str(_LOCAL_CONFIG))
+
+
+def reload_config() -> list[str]:
+    """Re-read BOTH config.ini and config.local.ini into the live cfg.
+
+    configparser's ``read()`` only overrides keys that exist in the
+    file being re-read.  Re-reading config.ini alone (which carries
+    empty placeholders for password_hash, default_location, etc.)
+    silently clobbers values that were only set in config.local.ini.
+    Every reload path — startup, SIGHUP, cmd_rehash, get_hash —
+    must go through here so the overlay stays intact.
+
+    Returns the list of files actually read (for caller logging).
+    """
+    files = cfg.read(CONFIG_PATH)
+    if _LOCAL_CONFIG.exists():
+        files += cfg.read(str(_LOCAL_CONFIG))
+    return files
+
+
+read_files = reload_config()
 
 # ── IRC settings ─────────────────────────────────────────────────────
 

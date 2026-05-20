@@ -1058,11 +1058,12 @@ class IRCBot(AdminCommandsMixin):
         self.request_shutdown(f"Caught {name}, shutting down")
 
     def _on_sighup(self) -> None:
-        """SIGHUP: rehash config from disk without dropping the connection."""
+        """SIGHUP: rehash config (template + local overlay) from disk."""
         _LOG_SIGNAL.info("event=signal_received sig=SIGHUP action=rehash")
         try:
-            cfg.read(CONFIG_PATH)
-            _LOG_SIGNAL.info("event=rehash_ok path=%s", CONFIG_PATH)
+            from config import reload_config
+            files = reload_config()
+            _LOG_SIGNAL.info("event=rehash_ok files=%s", files)
         except Exception as e:
             _LOG_SIGNAL.error("event=rehash_failed err=%s", e)
             return

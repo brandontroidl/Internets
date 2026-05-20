@@ -1174,17 +1174,23 @@ def _():
     from config import CONFIG_PATH
     assert os.path.isabs(CONFIG_PATH)
 
-@test("SEC-017: get_hash and cmd_rehash use CONFIG_PATH")
+@test("SEC-017: get_hash and cmd_rehash go through reload_config()")
 def _():
-    # get_hash in botlog.py should reference CONFIG_PATH
+    # Both must use config.reload_config() so config.local.ini is re-read
+    # alongside config.ini — re-reading only config.ini would clobber
+    # the overlay's values (e.g. password_hash) with the template's empty
+    # placeholders.  See the comment on config.reload_config().
     bl_src = Path("botlog.py").read_text(encoding="utf-8")
-    assert "cfg.read(CONFIG_PATH)" in bl_src
-    # cmd_rehash in admin_cmds.py should also reference CONFIG_PATH
+    assert "from config import reload_config" in bl_src
+    assert "reload_config()" in bl_src
     ac_src = Path("admin_cmds.py").read_text(encoding="utf-8")
-    assert "cfg.read(CONFIG_PATH)" in ac_src
-    # Neither should hardcode "config.ini"
+    assert "from config import reload_config" in ac_src
+    assert "reload_config()" in ac_src
+    # Neither should hardcode "config.ini" or do the partial single-file re-read.
     assert 'cfg.read("config.ini")' not in bl_src
     assert 'cfg.read("config.ini")' not in ac_src
+    assert 'cfg.read(CONFIG_PATH)' not in bl_src
+    assert 'cfg.read(CONFIG_PATH)' not in ac_src
 
 @test("SEC-013: cmd_rehash does not leak exception text to IRC")
 def _():
