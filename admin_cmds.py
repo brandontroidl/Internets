@@ -219,72 +219,76 @@ class AdminCommandsMixin:
                 f"no command '{target}' loaded — try {p}help")
             return
 
-        lines = [
-            f"── {self._nick} v{__version__} ──── "
-            f"use {p}help <cmd> for details ────",
-            f"  {p}help  {p}modules  {p}version  {p}auth <pw>",
-        ]
-        if admin:
-            lines.append(
-                f"  [admin] {p}deauth  {p}load/unload/reload <mod>  "
-                f"{p}reloadall  {p}restart  {p}rehash"
-            )
-            lines.append(
-                f"  [admin] {p}mode  {p}snomask  {p}raw  {p}nick  {p}say  {p}act  "
-                f"{p}shutdown  {p}die  {p}loglevel  {p}debug"
-            )
-            lines.append(
-                f"  [admin] {p}uptime  {p}stats  {p}audit  {p}fingerprint  "
-                f"{p}shadow-ban  {p}shadow-unban  {p}shadow-list"
-            )
+        # IRC server /HELP-style two-block layout: decorative banner,
+        # centred title, separator, 4-column grid of UPPERCASE commands,
+        # then (for admins only) a second banner block with admin-only
+        # commands.  Layout intentionally mimics ProvisionIRCd / classic
+        # ircd-hybrid /HELP output.
 
+        # Collect every PUBLIC command name: core public (help, modules,
+        # version, auth) + the canonical alias of every loaded module
+        # whose ``is_configured()`` is True (admins see un-configured ones
+        # too, since they may be hot-loading a key in).
+        public: list[str] = ["help", "modules", "version", "auth"]
         hidden: list[str] = []
-        mod_entries: list[tuple[str, str]] = []
         for name, inst in module_items:
-            if not inst.is_configured():
-                hidden.append(name)
-                continue
             cmds_map = getattr(inst, "COMMANDS", {})
             if not cmds_map:
                 continue
-            # Canonical alias = the FIRST one listed in the module's
-            # COMMANDS dict (Python 3.7+ preserves insertion order).  The
-            # module author placed it first for a reason — it's the
-            # documented/preferred name (e.g. `.gecko` not `.coingecko`,
-            # `.poke` not `.pokemon`).  We previously picked the longest,
-            # which was just wrong.
+            if not inst.is_configured() and not admin:
+                hidden.append(name)
+                continue
+            if not inst.is_configured():
+                hidden.append(name)
+            # Canonical alias = FIRST entry in the module's COMMANDS dict.
             by_method: dict[str, str] = {}
             for cmd, method in cmds_map.items():
                 if method not in by_method:
                     by_method[method] = cmd
-            canonical = sorted(by_method.values())
-            mod_entries.append((name, " ".join(canonical)))
+            public.extend(by_method.values())
 
-        WIDTH = 78
-        INDENT = "  "
-        cur_line = ""
-        for name, cmd_str in mod_entries:
-            label = f"\x02[{name}]\x02 {cmd_str}"
-            visible_label_len = len(label) - 4  # two \x02 pairs
-            if not cur_line:
-                cur_line = INDENT + label
-                cur_visible = len(INDENT) + visible_label_len
-                continue
-            sep = "  "
-            if cur_visible + len(sep) + visible_label_len <= WIDTH:
-                cur_line += sep + label
-                cur_visible += len(sep) + visible_label_len
-            else:
-                lines.append(cur_line)
-                cur_line = INDENT + label
-                cur_visible = len(INDENT) + visible_label_len
-        if cur_line:
-            lines.append(cur_line)
+        # Admin-only commands — listed flat (not module-grouped).
+        admin_cmds_list: list[str] = []
+        if admin:
+            admin_cmds_list = [
+                "deauth", "load", "unload", "reload", "reloadall",
+                "restart", "rehash",
+                "mode", "snomask", "raw", "nick", "say", "act",
+                "shutdown", "loglevel", "debug",
+                "uptime", "stats", "audit", "fingerprint",
+                "shadow-ban", "shadow-unban", "shadow-list",
+            ]
 
-        if hidden and admin:
-            lines.append(f"  (hidden, no key: {', '.join(sorted(hidden))})")
-        lines.append(f"  In PM the '{p}' prefix is optional.")
-        for line in lines:
+        BANNER = "§~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~~¤§¤~§"
+        TITLE  = f"~~~~~~~~~ Internets v{__version__} Help ~~~~~~~~~"
+        ADMIN_TITLE = f"~~~~~~~~~ Internets v{__version__} Help (admin) ~~~~~~~~~"
+
+        out: list[str] = []
+        # ── public block ──────────────────────────────────────────────
+        out.append(f"* {BANNER}")
+        out.append(f"* {TITLE}")
+        out.append(f"* {BANNER}")
+        out.append("* -")
+        for row in _help_grid(sorted(set(public))):
+            out.append(f"* {row}")
+        out.append("* -")
+        out.append(f"* Use {p}help <command> for more information, if available.")
+
+        # ── admin block (only if authed) ──────────────────────────────
+        if admin and admin_cmds_list:
+            out.append("* -")
+            out.append("* -")
+            out.append(f"* {BANNER}")
+            out.append(f"* {ADMIN_TITLE}")
+            out.append(f"* {BANNER}")
+            out.append("* -")
+            for row in _help_grid(sorted(set(admin_cmds_list))):
+                out.append(f"* {row}")
+            if hidden:
+                out.append("* -")
+                out.append(f"* (hidden, no key: {', '.join(sorted(set(hidden)))})")
+
+        for line in out:
             self.preply(nick, reply_to, line)
 
     async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
@@ -846,7 +850,29 @@ class AdminCommandsMixin:
         self.request_shutdown(reason)
 
 
-# ── Module-level helpers used by .uptime / .stats / .audit / .fingerprint ──
+# ── Module-level helpers used by .help / .uptime / .stats / .audit / .fingerprint ──
+
+def _help_grid(items: list[str], cols: int = 4, col_w: int = 14) -> list[str]:
+    """Render ``items`` as an IRC /HELP-style grid of UPPERCASE labels.
+
+    Layout: left-to-right, top-to-bottom, ``cols`` columns of ``col_w``
+    chars each (right-padded with spaces; the last column on a line is
+    not padded so trailing whitespace doesn't waste bytes).
+    Returns a list of rendered rows, one per output line.
+    """
+    if not items:
+        return []
+    rows: list[str] = []
+    upper = [s.upper() for s in items]
+    for i in range(0, len(upper), cols):
+        chunk = upper[i:i + cols]
+        parts = [c.ljust(col_w) for c in chunk[:-1]]
+        parts.append(chunk[-1])
+        rows.append("".join(parts))
+    return rows
+
+
+
 
 def _humanize_delta(seconds: float) -> str:
     """Render a non-negative time delta as a compact human string."""
