@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and usage help
+    url: https://github.com/brandontroidl/Internets/discussions
+    about: >-
+      For configuration help, "how do I" questions, and general
+      discussion, please use GitHub Discussions instead of opening an
+      issue.
+  - name: Report a security vulnerability
+    url: https://github.com/brandontroidl/Internets/blob/main/SECURITY.md
+    about: >-
+      Do not file public issues for security problems. Follow the
+      private reporting process described in SECURITY.md.

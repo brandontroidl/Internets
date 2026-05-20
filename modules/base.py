@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from configparser import ConfigParser, Error as ConfigParserError
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -12,7 +13,13 @@ _PLACEHOLDER_MARKERS = (
 )
 
 
-def cred(cfg, secret_name: str, section: str, key: str, default: str = "") -> str:
+def cred(
+    cfg: ConfigParser,
+    secret_name: str,
+    section: str,
+    key: str,
+    default: str = "",
+) -> str:
     """Pull a credential or PII field — secret_store first, config fallback.
 
     For new installs the keys live exclusively in the secret store
@@ -31,10 +38,9 @@ def cred(cfg, secret_name: str, section: str, key: str, default: str = "") -> st
         pass
     try:
         raw = cfg.get(section, key, fallback=default).strip()
-    except Exception:
+    except (ConfigParserError, AttributeError):
         return default
-    low = raw.lower()
-    if any(m in low for m in _PLACEHOLDER_MARKERS):
+    if any(m in raw.lower() for m in _PLACEHOLDER_MARKERS):
         return default
     return raw
 

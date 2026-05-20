@@ -4,7 +4,13 @@ https://pirateweather.net/
 Free tier: 20,000 calls/month.  Current, forecast, hourly, alerts, minutely nowcast.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AlertsResult, AlertEntry,
+    NowcastResult, NowcastEntry,
+)
 from . import current, forecast, hourly, alerts, nowcast
 
 

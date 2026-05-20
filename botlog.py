@@ -21,21 +21,31 @@ from config import (
     LOG_LEVEL, LOG_FILE, LOG_MAX, LOG_BACKUPS, LOG_DEBUG, LOG_FMT,
     USER_MODES, OPER_MODES, OPER_SNOMASK,
 )
-from hashpw import verify_password  # noqa: F401 — re-exported for internets.py
 
 
 # ── Formatter and filter ─────────────────────────────────────────────
 
 class _SafeFormatter(logging.Formatter):
-    """Formatter that strips CR/LF/NUL from user-controlled log data.
+    """Formatter that strips control characters from user-controlled log data.
 
-    Sanitizes record.msg and record.args to prevent log injection via
+    Sanitizes ``record.msg`` and ``record.args`` to prevent log injection via
     format-string interpolation (e.g. ``log.info("cmd: %s", attacker_input)``).
     Works on a *copy* of the record so other handlers see the original.
-    Exception tracebacks (which naturally contain newlines) are preserved.
+    Exception tracebacks (which naturally contain newlines) are preserved
+    because they're rendered into ``record.exc_text`` further down the
+    formatting chain, not into ``msg``/``args``.
+
+    Strips:
+      * ASCII C0 controls (0x00–0x08, 0x0a–0x1f) — covers CR, LF, NUL,
+        tab is preserved (0x09) for readable structured output.
+      * ASCII DEL (0x7f).
+      * C1 controls (0x80–0x9f) — many terminals interpret these as
+        escape sequences (CSI etc.).
     """
 
-    _CONTROL_RE = re.compile(r"[\r\n\x00]")
+    # Keep 0x09 (TAB) since it's harmless in log files and useful in
+    # tracebacks; strip everything else in the C0 range, DEL, and C1.
+    _CONTROL_RE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
 
     def _clean(self, val: Any) -> Any:
         return self._CONTROL_RE.sub("", val) if isinstance(val, str) else val
@@ -157,14 +167,35 @@ def get_hash() -> str:
     return cfg["admin"].get("password_hash", "").strip()
 
 
+_VALID_HASH_PREFIXES = ("scrypt", "bcrypt", "argon2")
+
+
 def _validate_hash() -> None:
+    """Validate the admin password hash at startup.
+
+    Fail-closed via ``sys.exit(1)`` if the configured hash does not have
+    a recognised algorithm prefix.  This is intentional: an unrecognised
+    prefix means ``verify_password`` will raise ``ValueError`` on every
+    auth attempt, which silently disables admin commands.  Better to
+    refuse to start so the operator sees the problem immediately.
+    Empty hash is *not* fatal — the bot still runs with auth disabled
+    (intentional for first-run before the operator runs hashpw.py).
+    """
     h = get_hash()
     if not h:
         log.warning("No password_hash in config.ini — auth disabled. Run hashpw.py.")
         return
-    prefix = h.split("$")[0] if "$" in h else ""
-    if prefix not in ("scrypt", "bcrypt", "argon2"):
-        log.critical(f"Invalid password_hash prefix '{prefix}' — run hashpw.py and restart.")
+    # Tight prefix check: must split exactly on '$' and be one of the
+    # known algorithms.  Do NOT echo the prefix back if it's invalid —
+    # the hash is sensitive material, and a malformed prefix could
+    # contain arbitrary bytes from a corrupted config.
+    prefix = h.split("$", 1)[0] if "$" in h else ""
+    if prefix not in _VALID_HASH_PREFIXES:
+        log.critical(
+            "Invalid password_hash format in config.ini "
+            "(must start with one of: %s) — run hashpw.py and restart.",
+            ", ".join(_VALID_HASH_PREFIXES),
+        )
         sys.exit(1)
     log.info(f"Admin password hash loaded ({prefix}).")
 

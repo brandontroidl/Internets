@@ -4,7 +4,12 @@ Free tier: 10 requests/day. Best-in-class marine data.
 Wave height, swell, water temperature, tides.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult,
+    HourlyResult, HourlyEntry,
+    MarineResult,
+)
 from . import current, marine, hourly
 
 class StormglassProvider:

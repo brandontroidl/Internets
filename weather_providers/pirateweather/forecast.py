@@ -1,14 +1,15 @@
 """Pirate Weather — daily forecast."""
 from __future__ import annotations
 from datetime import datetime
-from .._http import get_json
 from ..base import WeatherResult, ForecastDay
-from ._codes import icon_to_desc
+# fix: key embedded in URL path leaks into HTTPError messages — use
+# safe_get_json wrapper which redacts the key before re-raising.
+from ._codes import icon_to_desc, safe_get_json
 
 _BASE = "https://api.pirateweather.net/forecast"
 
 async def fetch(key: str, lat: float, lon: float, location: str, days: int = 4) -> WeatherResult:
-    data = await get_json(f"{_BASE}/{key}/{lat},{lon}",
+    data = await safe_get_json(f"{_BASE}/{key}/{lat},{lon}", key,
                           params={"units": "si", "exclude": "minutely,hourly,alerts"})
     cur = data.get("currently", {})
     fc = []

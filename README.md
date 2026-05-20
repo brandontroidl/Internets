@@ -2,11 +2,11 @@
 
 **v2.5.0** — Per-provider flags, scientific-accuracy ranking, keyring-backed secrets (2026-05-19)
 
-A modular IRC bot and weather aggregation platform built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups. Designed around a plugin architecture with hot-reload so you never take it offline to ship changes.
+A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
 
-Weather queries are served by a capability-based dispatcher across **14 providers**, ranked by the scientific accuracy of the underlying numerical models. The default chain leads with NWS (US gov NDFD + HRRR + WaveWatch III, no key), Meteomatics (premium ECMWF/ICON blend), Apple WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model + CAMS + ERA5, no key), and Visual Crossing (ERA5), with AccuWeather, OpenWeatherMap, WeatherBit, WeatherAPI, Pirate Weather, Stormglass (marine), Tomorrow.io, World Weather Online, and Weatherstack as the long tail. Each provider is a sub-module package with one file per API endpoint. The dispatcher auto-discovers capabilities, applies the static accuracy ranking first, then live health (success rate, latency, rate limits), and routes each request accordingly. Users can force any active provider with a per-command flag (`.w -aw 67127`, `.w -visualcrossing`, `.f -nws`, etc.).
+Weather queries are served by a capability-based dispatcher across **14 providers**, ranked by the scientific accuracy of the underlying numerical models. The default chain leads with NWS (US gov NDFD + HRRR + WaveWatch III, no key), Meteomatics (ECMWF/ICON/GFS blend), Apple WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model + CAMS + ERA5, no key), and Visual Crossing (ERA5), then AccuWeather, OpenWeatherMap, WeatherBit, WeatherAPI, Pirate Weather, Stormglass (marine), Tomorrow.io, World Weather Online, and Weatherstack. Each provider is a sub-module package with one file per API endpoint. The dispatcher auto-discovers capabilities, applies the static accuracy rank first, then live health (success rate, latency, rate limits), and routes each request accordingly. Force any active provider with a per-command flag — e.g. `.w -aw 67127`, `.w -vc Tokyo`, `.f -nws`.
 
-Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact email) are stored via the OS keyring (preferred) or a gitignored 0600 `secrets.ini`. `config.ini` is committed as a credential-free template; personal non-secret preferences live in a gitignored `config.local.ini` overlay. See [Secret store](#secret-store) below.
+Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are read from the OS keyring (preferred) or a gitignored 0600 `secrets.ini`. `config.ini` is committed as a credential-free template; personal non-secret overrides live in a gitignored `config.local.ini` overlay. See `secrets.ini.example` for the full key list and [Security](#security) below for the lookup order.
 
 **Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
 **Python:** 3.10+  
@@ -35,16 +35,16 @@ weather_providers/
   meteomatics/        Meteomatics — username/password (ECMWF IFS / ICON / GFS blend)
   weatherkit/         Apple WeatherKit — Apple Developer Program (NWS + IBM TWC blend)
   openmeteo/          Open-Meteo — free, no key (ECMWF/ICON/GFS + CAMS AQ + ERA5)
-  visualcrossing/     Visual Crossing — key required (ECMWF + ERA5 reanalysis)
-  accuweather/        AccuWeather — key required (proprietary long-range)
-  openweathermap/     OpenWeatherMap — key required (GFS + ECMWF + CAMS AQ)
-  weatherbit/         WeatherBit — key required (GFS + station obs)
-  weatherapi/         WeatherAPI.com — key required (GFS-derived)
-  pirateweather/      Pirate Weather — key required (Dark Sky compat, HRRR + MRMS US nowcast)
-  stormglass/         Stormglass — key required (marine specialist, 7-model wave blend)
-  tomorrowio/         Tomorrow.io — key required (proprietary nowcasting focus)
-  worldweatheronline/ World Weather Online — key required (basic single-model)
-  weatherstack/       Weatherstack — key required (basic, plaintext HTTP, least preferred)
+  visualcrossing/     Visual Crossing — key (ECMWF + ERA5 reanalysis)
+  accuweather/        AccuWeather — key (proprietary long-range)
+  openweathermap/     OpenWeatherMap — key (GFS + ECMWF + CAMS AQ)
+  weatherbit/         WeatherBit — key (GFS + station obs)
+  weatherapi/         WeatherAPI.com — key (GFS-derived)
+  pirateweather/      Pirate Weather — key (Dark Sky compat; HRRR + MRMS for US nowcast)
+  stormglass/         Stormglass — key (marine specialist, 7-model wave blend)
+  tomorrowio/         Tomorrow.io — key (proprietary nowcasting)
+  worldweatheronline/ World Weather Online — key (basic single-model)
+  weatherstack/       Weatherstack — key (basic, plaintext HTTP — least preferred)
 
 modules/
   base.py             BotModule base class — the interface every plugin implements
@@ -88,7 +88,7 @@ The outbound path goes through `Sender`, an async drain loop over `asyncio.Prior
 
 **Two-tier rate limiting.** A global per-nick flood gate drops commands that arrive faster than `flood_cooldown` seconds. A separate API cooldown rate-limits expensive operations (geocoding + weather API calls). Authed admins bypass the flood gate but not the API cooldown. This is a deliberate split: we don't want a fast-typing admin to trigger provider rate limits, but we also don't want them locked out of `.reload` during an incident.
 
-**Multi-provider weather with capability-based dispatch.** Weather queries go through a Dispatcher that auto-discovers each provider's capabilities via `hasattr()` on method names (`get_weather`, `get_hourly`, `get_alerts`, etc.). For each request, the dispatcher builds a chain of providers that support the requested capability, scores them by health (success rate, latency, rate-limit errors), uses a static reliability ranking as a tie-breaker, and tries them in order until one succeeds. The provider priority is configured in `[weather_providers]` with `provider_priority`. Open-Meteo requires no key and is always available as the last-resort fallback. Each provider is a sub-module package with one file per API endpoint (e.g. `weather_providers/openmeteo/current.py`, `weather_providers/weatherapi/hourly.py`). All responses are normalized to shared dataclasses (`WeatherResult`, `HourlyResult`, `AlertsResult`, etc.) so the command module never touches raw API responses.
+**Multi-provider weather with capability-based dispatch.** Weather queries go through a Dispatcher that auto-discovers each provider's capabilities via `hasattr()` on method names (`get_weather`, `get_hourly`, `get_alerts`, etc.). For each request, the dispatcher builds a chain of providers that support the requested capability, sorts them by: (1) the static per-capability accuracy rank in `_dispatch.DEFAULT_RELIABILITY`, (2) live health (success rate, latency, rate-limit errors), (3) registration order from `provider_priority` in `[weather_providers]`. Each provider is a sub-module package with one file per API endpoint (e.g. `weather_providers/openmeteo/current.py`, `weather_providers/weatherapi/hourly.py`). All responses are normalized to shared dataclasses (`WeatherResult`, `HourlyResult`, `AlertsResult`, etc.) so the command module never touches raw API responses. NWS and Open-Meteo need no credentials; the other 12 providers register only when their keys are present in the secret store.
 
 **Response routing.** Regular output goes to the channel. Help text and admin command responses go as `NOTICE` to the requesting user (keeps help spam out of channels). Everything in PM stays as `PRIVMSG`. This is the `reply()` / `preply()` split.
 
@@ -121,6 +121,12 @@ For Apple WeatherKit support (requires Apple Developer Program membership):
 pip install PyJWT cryptography
 ```
 
+For OS-native encrypted-at-rest secret storage:
+
+```
+pip install keyring
+```
+
 Or install everything at once:
 
 ```
@@ -137,7 +143,7 @@ python hashpw.py --algo bcrypt
 python hashpw.py --algo argon2
 ```
 
-Paste the output into `config.ini` under `[admin] password_hash`. Plaintext passwords are rejected at startup.
+Paste the output into `config.local.ini` under `[admin] password_hash`. Plaintext passwords are rejected at startup.
 
 **Set up your config:**
 
@@ -165,14 +171,16 @@ $EDITOR config.local.ini           # set server, nickname, password_hash, etc.
 Useful commands:
 
 ```
-python -m secret_store status        # which backends are available
-python -m secret_store list          # which keys are set, and where
-python -m secret_store get <name>    # confirm a key is set (presence only)
-python -m secret_store get <name> --reveal   # print the value (off by default)
-python -m secret_store migrate       # upgrade from 2.4.0 — moves keys out of config.ini
+python -m secret_store status                # backends available
+python -m secret_store list                  # all known secrets + which backend holds each
+python -m secret_store get <name>            # non-revealing: prints "(set, N chars, backend=X)"
+python -m secret_store get <name> --reveal   # actually print the value
+python -m secret_store set <name>            # prompt for value, store in best available backend
+python -m secret_store delete <name>         # remove from all backends
+python -m secret_store migrate               # upgrade from 2.4.0 — move keys out of config.ini
 ```
 
-See [Secret store](#secret-store) below for the threat model and visibility guarantees.
+See [Security](#security) below for the threat model and visibility guarantees.
 
 **Run:**
 
@@ -224,10 +232,10 @@ The bot verifies ownership by checking the user's NickServ account against the c
 <Internets> alice: location set to Beverly Hills, CA
 
 <alice> .w
-<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ... :: [Open-Meteo] ::
+<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ... :: [NWS] ::
 
 <alice> .w -n bob
-<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ... :: [WeatherAPI] ::
+<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ... :: [NWS] ::
 
 <alice> .u yolo /2
 <Internets> [2/7] An acronym for "you only live once", used to justify doing ...
@@ -240,8 +248,8 @@ Admin session (via PM):
 <Internets> Authentication successful.
 
 <alice> .modules
-<Internets> Loaded: bofh, calc, channels, dice, dictionary, fml, idlerpg, imdb, ipinfo, lastfm, location, qdb, search, steam, stocks, translate, twitch, urbandictionary, urls, weather, youtube
-             Available: (none unloaded)
+<Internets> Loaded (21): bofh (2), calc (1), channels (3), dice (1), dictionary (2), fml (1), idlerpg (2), imdb (1), ipinfo (1), lastfm (1), location (3), qdb (1), search (4), steam (2), stocks (3), translate (1), twitch (2), urbandictionary (2), urls (3), weather (19), youtube (2)
+<Internets> Use .help to see commands grouped by module.
 
 <alice> .reload weather
 <Internets> 'weather' unloaded. 'weather' loaded (19 commands).
@@ -257,13 +265,12 @@ $ python internets.py --version
 Internets 2.5.0
 
 $ python internets.py
-2026-03-21 14:00:01 [INFO] internets: Internets v2.5.0 starting
-2026-03-21 14:00:01 [INFO] internets: Loaded calc (1 commands)
-2026-03-21 14:00:01 [INFO] internets: Loaded weather (19 commands)
+2026-05-19 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
+2026-05-19 14:00:01 [INFO] internets.modules: Loaded weather (['weather', 'w', 'forecast', 'f', ...])
 ...
-2026-03-21 14:00:02 [INFO] internets: Connected to irc.libera.chat:6697 (TLS)
-2026-03-21 14:00:03 [INFO] internets: SASL authentication successful
-2026-03-21 14:00:03 [INFO] internets: Joined #mychannel
+2026-05-19 14:00:02 [INFO] internets.conn: Connecting irc.example.org:6697 (SSL)
+2026-05-19 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
+2026-05-19 14:00:03 [INFO] internets.conn: Joined #mychannel
 > status
   version  = 2.5.0
   nick     = Internets
@@ -283,27 +290,19 @@ The bot reads `config.ini` at startup. Relevant sections:
 
 **`[admin]`** — Hashed password for admin authentication. Supports `scrypt$`, `bcrypt$`, and `argon2$` prefixes.
 
-**`[weather]`** — User-Agent string (required by geocoding services) and default unit system.
+**`[weather]`** — User-Agent template and default unit system. The actual contact identifier (URL or email) lives in `secrets.ini` as `weather_user_agent`.
 
-**`[weather_providers]`** — Provider priority order and API keys. `provider_priority` is a comma-separated list controlling the fallback order and tie-breaking. Open-Meteo requires no key. WeatherAPI.com, Tomorrow.io, OpenWeatherMap, Weatherstack, and AccuWeather require API keys. Meteomatics requires username + password. Apple WeatherKit requires four keys (`weatherkit_team_id`, `weatherkit_service_id`, `weatherkit_key_id`, `weatherkit_key_file`) plus the `PyJWT` and `cryptography` packages. Providers whose credentials are empty or missing are silently skipped. The dispatcher auto-discovers capabilities and scores providers by health — see `.providers` (admin) for live status.
+**`[weather_providers]`** — `provider_priority` is a comma-separated list controlling registration order and the final tie-breaker after the accuracy rank + live health scores. NWS and Open-Meteo need no credentials. Every other provider's key lives in `secrets.ini` (`weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key`, plus `meteomatics_username` / `meteomatics_password`, and four WeatherKit fields). Providers without credentials are silently skipped at startup; their per-command flag is hidden from `.help` and rejected by `-l`.
 
-**`[stocks]`** — API keys for stock and crypto price lookups. Three free-tier providers with automatic failover: Finnhub (`finnhub_key`, 60 calls/min), Alpha Vantage (`alphavantage_key`, 25 calls/day), Twelve Data (`twelvedata_key`, 800 calls/day). Configure at least one key to enable the module. Providers without keys are silently skipped.
+**`[stocks]`** — Multi-provider failover for `.stock` / `.crypto`. Keys (`finnhub_key`, `alphavantage_key`, `twelvedata_key`) live in `secrets.ini`. Configure at least one to enable the module.
 
-**`[imdb]`** — OMDb API key (`omdb_key`) for `.imdb` movie/TV lookups. Free tier: 1,000 calls/day. Sign up at https://www.omdbapi.com/apikey.aspx.
-
-**`[lastfm]`** — Last.fm API key (`lastfm_key`) for `.lastfm` user lookups. Free, unlimited. Sign up at https://www.last.fm/api/account/create.
-
-**`[youtube]`** — YouTube Data API v3 key (`youtube_key`) for `.yt` video search. Free tier: 10,000 units/day. Create credentials at https://console.cloud.google.com/apis/credentials.
-
-**`[steam]`** — Steam Web API key (`steam_key`) for `.steam` and `.regsteam`. Free. Sign up at https://steamcommunity.com/dev/apikey. `steamids_file` (default `steamids.json`) stores nick → Steam ID mappings.
-
-**`[twitch]`** — Twitch Helix API credentials (`twitch_client_id`, `twitch_client_secret`) for `.tw`. Free app registration at https://dev.twitch.tv/console/apps. OAuth tokens are managed automatically.
+**`[imdb]`** / **`[lastfm]`** / **`[youtube]`** / **`[steam]`** / **`[twitch]`** — Each module reads its credential(s) from `secrets.ini` via the secret store (`omdb_key`, `lastfm_key`, `youtube_key`, `steam_key`, `twitch_client_id` + `twitch_client_secret`). See `secrets.ini.example` for signup URLs and free-tier limits. `[steam]` keeps the non-secret `steamids_file` path (default `steamids.json`).
 
 **`[idlerpg]`** — `api_url` for the IdleRPG XML endpoint (default: Rizon's `http://idlerpg.rizon.net/xml.php`). No key required.
 
-**`[qdb]`** — `api_url` for a QDB-compatible XML endpoint. qdb.us is defunct; leave blank to disable or set to any working QDB instance. No key required.
+**`[qdb]`** — `api_url` for a QDB-compatible XML endpoint. qdb.us is defunct; leave blank to keep `.qdb` hidden, or set it to any working QDB-compatible endpoint. No key required.
 
-**`[search]`** — Optional `brave_key` for Brave Search API (2,000 queries/month free). Web search uses DuckDuckGo (free, no key) by default; Brave upgrades web search and enables image search.
+**`[search]`** — Web search defaults to DuckDuckGo (free, no key). Image search and an upgraded web tier need `brave_key` in `secrets.ini` (Brave Search API, 2,000 queries/month free).
 
 **`[logging]`** — Log level, output file, rotation, and optional debug file.  The
 main log is rotated at `max_bytes` (default 5 MB) keeping `backup_count` old
@@ -320,7 +319,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | Command | Description |
 |---------|-------------|
 | `.help` | Show available commands (admin commands visible only when authed) |
-| `.modules` | List loaded and available modules |
+| `.modules` | List loaded modules (with command counts) and unloaded ones available on disk |
 | `.weather` / `.w [-flag] [location]` | Current conditions — worldwide (multi-provider) |
 | `.forecast` / `.f [-flag] [location]` | Multi-day forecast — worldwide (multi-provider) |
 | `.hourly` / `.h [location]` | Hourly forecast — next 12 hours |
@@ -362,9 +361,11 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.part <#channel>` | Remove the bot — requires channel founder or admin |
 | `.users [#channel]` | Show known users in a channel |
 
-All weather commands accept city names, zip codes, raw `lat,lon` pairs, or `-n nick` to look up another user's registered location.
+All weather commands accept city names, zip codes, raw `lat,lon` pairs, or `-n nick` to look up another user's saved location.
 
 In PM, the `.` prefix is optional — `weather 10001` works the same as `.weather 10001`.
+
+`.help` skips modules whose `is_configured()` returns False (e.g. `imdb` without an `omdb_key`), so users only see commands they can actually run. `.modules` shows every loaded module and the unloaded ones available on disk.
 
 #### Weather provider flags
 
@@ -372,42 +373,43 @@ Every weather command accepts per-provider flags (anywhere in the line, before o
 
 | Flag | Provider | Notes |
 |------|---------|-------|
-| `-nws` | NWS (Weather.gov) | US only — gold standard for US forecasts and alerts |
-| `-mm` / `-meteomatics` | Meteomatics | Premium ECMWF/ICON/GFS blend (paid) |
+| `-nws` | NWS (Weather.gov) | US only — NDFD + HRRR + WaveWatch III |
+| `-mm` / `-meteomatics` | Meteomatics | ECMWF/ICON/GFS blend (paid) |
 | `-aw` / `-wk` / `-apple` / `-appleweather` / `-weatherkit` | Apple WeatherKit | NWS + IBM TWC blend |
-| `-om` / `-openmeteo` | Open-Meteo | Free, ECMWF/ICON/GFS multi-model; great for AQ + historical |
-| `-vc` / `-visualcrossing` | Visual Crossing | ERA5 reanalysis for historical |
+| `-om` / `-openmeteo` | Open-Meteo | Free; ECMWF/ICON/GFS + CAMS AQ + ERA5 |
+| `-vc` / `-visualcrossing` | Visual Crossing | ECMWF + ERA5 reanalysis |
 | `-acc` / `-accuweather` | AccuWeather | Proprietary long-range |
 | `-owm` / `-openweathermap` | OpenWeatherMap | GFS + ECMWF + CAMS AQ |
 | `-wb` / `-weatherbit` | WeatherBit | GFS + station obs |
 | `-wapi` / `-weatherapi` | WeatherAPI.com | GFS-derived |
-| `-pw` / `-pirate` / `-pirateweather` | Pirate Weather | Dark Sky compatible; best US nowcast (MRMS) |
+| `-pw` / `-pirate` / `-pirateweather` | Pirate Weather | Dark Sky compatible; HRRR + MRMS for US nowcast |
 | `-sg` / `-stormglass` | Stormglass | Marine specialist (7-model wave blend) |
-| `-tio` / `-tomorrow` / `-tomorrowio` | Tomorrow.io | Proprietary nowcasting focus |
+| `-tio` / `-tomorrow` / `-tomorrowio` | Tomorrow.io | Proprietary nowcasting |
 | `-wwo` / `-worldweatheronline` | World Weather Online | Basic single-model |
 | `-ws` / `-weatherstack` | Weatherstack | Basic; least preferred |
-| `-l` | (list mode) | Show active providers ranked by accuracy for that capability |
+| `-l` | (list mode) | List active providers ranked by accuracy for that capability |
 
 Examples:
 
 ```
 <alice> .w 67127 -aw
-<Internets> :: Wichita, KS, USA :: Conditions Mostly Clear :: Temperature 18.3°C / 64.9°F :: ... :: [Apple WeatherKit] ::
+<Internets> :: Wichita, KS, USA :: Conditions Mostly Clear :: Temperature 18.3C / 64.9F :: ... :: [Apple Weather] ::
 
-<alice> .w -visualcrossing Tokyo
+<alice> .w -vc Tokyo
 <Internets> :: Tokyo, Japan :: Conditions Light rain :: ... :: [Visual Crossing] ::
 
 <alice> .f -nws -n bob
-<Internets> :: Boston, MA, USA :: Today Partly Sunny 22°C / 12°C :: Tomorrow Sunny 25°C / 14°C :: ... :: [NWS] ::
+<Internets> :: Boston, MA, USA :: Today Partly Sunny 22C / 12C :: Tomorrow Sunny 25C / 14C :: ... :: [NWS] ::
 
 <alice> .marine -sg
 <Internets> :: Newport, RI, USA :: Waves 1.2m / 3.9ft (8s, ENE) :: Swell 0.8m / 2.6ft (10s, E) :: [Stormglass] ::
 
 <alice> .w -l
-<Internets> alice: current providers (most → least accurate): 1.nws (-nws), 2.meteomatics (-mm/-meteomatics), 3.weatherkit (-wk/-aw/-apple/-weatherkit/-appleweather), 4.openmeteo (-om/-openmeteo), ...
+<Internets> alice: current providers (most → least accurate): 1.nws [OK] (-nws), 2.openmeteo [OK] (-om/-openmeteo), 3.weatherapi [?] (-wapi/-weatherapi), ...
+<Internets> alice: legend  [OK]=auth ok, calls succeeding  [?]=loaded, untested  [X]=loaded but failing
 ```
 
-If you force a provider that's not configured (no API key in the secret store) or doesn't support the requested capability (e.g. `-ws` for marine), the bot says so and aborts — no silent fallback when you've made an explicit choice.
+If you force a provider that isn't active (no API key in the secret store) or doesn't support the requested capability (e.g. `-ws` for marine), the bot says so and aborts — no silent fallback when you've made an explicit choice.
 
 ### Admin Commands
 
@@ -570,20 +572,21 @@ WeatherKit is a built-in provider for Apple Developer Program members. It is not
 
 2. Go to Keys and create a new key with **WeatherKit** capability. Download the `.p8` private key file.
 
-3. Add to `config.ini`:
+3. Store the four values in `secrets.ini` (or via the keyring):
 
 ```ini
-[weather_providers]
-provider_priority = weatherkit, openmeteo
-weatherkit_team_id   = YOUR_TEAM_ID
+; secrets.ini, under [secrets]
+weatherkit_team_id    = YOUR_TEAM_ID
 weatherkit_service_id = com.example.weatherkit-client
-weatherkit_key_id    = YOUR_KEY_ID
-weatherkit_key_file  = /path/to/AuthKey_XXXXXXXX.p8
+weatherkit_key_id     = YOUR_KEY_ID
+weatherkit_key_file   = /path/to/AuthKey_XXXXXXXX.p8
 ```
 
-4. The bot authenticates using JWT/ES256 tokens signed with your private key. Tokens are cached and automatically refreshed before expiry. Apple requires displaying the source as "Apple Weather" — the bot handles this via the `[Apple Weather]` tag in output.
+The `weatherkit_key_file` field is a *path* to the `.p8` file, not its contents — keep the key file outside `secrets.ini`.
 
-If the `PyJWT`/`cryptography` packages are not installed or any of the four config values are missing, the WeatherKit provider is silently skipped and the next provider in the chain takes over.
+4. The bot signs JWT/ES256 tokens with the private key. Tokens are cached and refreshed before expiry. Apple requires the source to display as "Apple Weather" — the bot handles this via the `[Apple Weather]` tag in output.
+
+If `PyJWT` / `cryptography` are not installed or any of the four values are missing, the WeatherKit provider is silently skipped and the next provider in the chain takes over.
 
 ## Operational Notes
 
@@ -601,26 +604,26 @@ If the `PyJWT`/`cryptography` packages are not installed or any of the four conf
 
 ## Security
 
-The bot has been through nine audit passes with all findings resolved. See AUDIT.md for the complete finding inventory.
+The bot has been through nine audit passes with all findings resolved. See `AUDIT.md` for the complete finding inventory.
 
 **Secret store.** Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are *never* read from `config.ini`. Lookup order, first hit wins:
 
-1. `INTERNETS_<NAME>` env var
-2. OS keyring (optional, via the `keyring` library — macOS Keychain / Linux Secret Service / Windows Credential Manager)
+1. `INTERNETS_<NAME>` environment variable
+2. OS keyring (optional — `pip install keyring`, then macOS Keychain / Linux Secret Service / Windows Credential Manager)
 3. Gitignored `secrets.ini` (0600 perms strictly enforced)
 
-The committed `config.ini` is a credential-free *structural* template — section names, non-secret defaults, comments. Personal non-secret overrides (server hostname, modes, default location, admin password hash) live in `config.local.ini` (also gitignored).
+The committed `config.ini` is a credential-free *structural* template — section names, non-secret defaults, comments. Personal non-secret overrides (server hostname, modes, default location, admin password hash) live in `config.local.ini` (also gitignored). See `secrets.ini.example` for the full key list with signup URLs and tier limits inline.
 
-These values are **not hashed**. Hashing is one-way; the bot has to send the literal password / API key on the wire, so the right primitive is encryption-at-rest. The OS keyring backend gives you OS-mediated, per-user-session encryption with no plaintext on disk; for headless setups the 0600 `secrets.ini` is the practical default.
+These values are **not hashed**. Hashing is one-way; the bot has to send the literal password / API key on the wire, so the correct primitive is encryption-at-rest. The OS keyring backend provides OS-mediated, per-user-session encryption with no plaintext on disk; for headless setups the 0600 `secrets.ini` is the practical default.
 
 **Visibility guarantees:**
 
-- The bot never logs the *value* of any secret. Module on_load() logs presence only (`"omdb_key not set"` or nothing).
+- The bot never logs the *value* of any secret. Module `on_load()` logs presence only.
 - Outbound IRC traffic is scrubbed for credential prefixes (`PASS`, `NS IDENTIFY`, `OPER`, `AUTHENTICATE`) before being logged by `sender.py`.
-- `python -m secret_store get <name>` confirms presence and length only; `--reveal` is required to print the actual value (and is documented as such in `--help`).
-- `python -m secret_store list` shows the backend per secret, not the values.
+- `python -m secret_store get <name>` prints `(set, N chars, backend=<env|keyring|file>)`. `--reveal` is required to print the actual value.
+- `python -m secret_store list` shows the backend per secret, never the values.
 - `secrets.ini` is read only when `stat().st_mode & 0o777 == 0o600`. The store fails closed (returns empty) if perms are looser.
-- Unconfigured providers don't appear anywhere: their flags are hidden from `.help`, they don't show up in `.w -l` listings, and forcing them returns "not active" without making an API call.
+- Unconfigured providers and modules are hidden: the `BotModule.is_configured()` hook makes `.help` skip them, weather flags for unconfigured providers don't appear in `.w -l`, and forcing such a provider returns "not active" without making an API call.
 
 **Authentication:** Admin passwords are hashed with scrypt (default), bcrypt, or argon2. Constant-time comparison via `hmac.compare_digest`. Brute-force lockout after 5 failures (5-minute cooldown). Sessions are tracked by nickname *and* hostmask — if a nick's hostmask changes after authentication (e.g. someone else takes the nick), the session is automatically invalidated. Sessions are also cleared on disconnect. Auth commands are restricted to PM. All auth state is protected by a dedicated `threading.Lock` for GIL-free Python compatibility.
 

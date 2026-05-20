@@ -4,7 +4,13 @@ https://api.weather.gov/
 US locations only.  Unlimited calls.  Most authoritative source for US alerts.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AlertsResult, AlertEntry,
+    MarineResult,
+)
 from . import current, forecast, hourly, alerts, marine
 
 

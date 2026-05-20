@@ -11,70 +11,96 @@ keyring-backed secret store with template-only `config.ini`.
 ### Added
 
 - **Per-provider weather flags.** Every weather command (`.w`, `.f`,
-  `.h`, `.al`, `.air`, `.sun`, `.hist`, `.sea`, `.nc`) now accepts a
-  per-provider flag anywhere in the line to force a specific source —
-  `-nws`, `-mm`, `-aw`/`-wk`/`-apple`/`-appleweather`/`-weatherkit`,
-  `-om`, `-vc`, `-acc`, `-owm`, `-wb`, `-wapi`, `-pw`/`-pirate`,
-  `-sg`, `-tio`/`-tomorrow`, `-wwo`, `-ws`.  Examples:
-  `.w 67127 -aw`, `.w -visualcrossing Tokyo`, `.f -nws -n bob`,
-  `.marine -sg`.  A `-l` flag lists active providers ranked by
-  accuracy for that capability.  Forced providers fail loud instead
-  of silently falling back when not active or capability-incompatible.
+  `.h`, `.al`, `.air`, `.sun`, `.hist`, `.sea`, `.nc`) accepts a
+  per-provider flag anywhere in the line to force a specific source:
+  `-nws`, `-mm`/`-meteomatics`,
+  `-aw`/`-wk`/`-apple`/`-appleweather`/`-weatherkit`,
+  `-om`/`-openmeteo`, `-vc`/`-visualcrossing`, `-acc`/`-accuweather`,
+  `-owm`/`-openweathermap`, `-wb`/`-weatherbit`, `-wapi`/`-weatherapi`,
+  `-pw`/`-pirate`/`-pirateweather`, `-sg`/`-stormglass`,
+  `-tio`/`-tomorrow`/`-tomorrowio`, `-wwo`/`-worldweatheronline`,
+  `-ws`/`-weatherstack`. Examples: `.w 67127 -aw`,
+  `.w -vc Tokyo`, `.f -nws -n bob`, `.marine -sg`. A `-l` flag lists
+  active providers ranked by accuracy for that capability with auth
+  state badges (`[OK]` / `[?]` / `[X]`). Forcing a provider that
+  isn't active or doesn't support the requested capability fails
+  loud instead of silently falling back.
 - **`weather_providers/stormglass/`** and **`weather_providers/weatherbit/`**
-  finally wired into the dispatcher (their packages existed but
-  weren't registered in 2.4.0).  Stormglass is the new top pick for
-  marine; WeatherBit slots into the mid-tier for current/forecast/AQ.
+  wired into the dispatcher (their packages existed but weren't
+  registered in 2.4.0). Stormglass leads the marine chain;
+  WeatherBit slots into the mid-tier for current/forecast/AQ.
 - **`secret_store.py`** — tiered secret store with env → OS keyring →
-  0600 gitignored `secrets.ini` lookup.  CLI: `python -m secret_store
-  {status,list,get,set,delete,migrate}`.  The `migrate` subcommand
+  0600 gitignored `secrets.ini` lookup. CLI:
+  `python -m secret_store {status,list,get,set,delete,migrate,init}`.
+  `get` is non-revealing by default — it prints
+  `(set, N chars, backend=<env|keyring|file>)` and requires
+  `--reveal` to print the actual value. `init` copies
+  `secrets.ini.example` → `secrets.ini` with 0600 perms. `migrate`
   pulls plaintext from `config.ini`, stores each value via the most
   secure available backend, scrubs the source, and prints a
   ROTATE-NOW checklist.
+- **`secrets.ini.example`** — committed template enumerating every
+  supported secret with signup URLs and free-tier limits.
 - **`config.local.ini`** overlay — gitignored personal settings
   (server hostname, modes, admin password hash, default location)
   layered on top of the committed `config.ini` template.
-- **`modules/base.cred()`** helper — every module's `on_load` now
-  pulls its API key + User-Agent through this so secret_store wins,
-  with config.ini as the legacy fallback.
+- **`BotModule.is_configured()` hook** — modules return False when a
+  required credential is missing. `.help` skips them so users only
+  see commands they can actually run. Admins still see the hidden
+  list via `.help`.
+- **`.modules` shows per-module command counts** — output format:
+  `Loaded (N): bofh (2), calc (1), …` followed by `Available: …` for
+  unloaded modules on disk.
+- **`modules/base.cred()`** helper — every module's `on_load` pulls
+  its API key + User-Agent through this, so the secret store wins
+  with `config.ini` as the legacy fallback.
 - **`[project.optional-dependencies] keyring`** in `pyproject.toml`
   for the OS-native encrypted-at-rest backend.
 
 ### Changed
 
 - **Provider ranking is now driven by the scientific accuracy of the
-  underlying numerical models** before live health scores or
-  user-configured order.  New default chain leads with NWS (NDFD +
+  underlying numerical models** before live health scores or the
+  user-configured order. New default chain leads with NWS (NDFD +
   HRRR + WaveWatch III), Meteomatics (ECMWF/ICON/GFS), Apple
   WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model
-  + CAMS + ERA5), Visual Crossing (ERA5).  Per-capability ranks live
+  + CAMS + ERA5), Visual Crossing (ERA5). Per-capability ranks live
   in `weather_providers/_dispatch.DEFAULT_RELIABILITY` with a
-  documented rationale per capability.
-- **`config.ini` is now a credential-free committed template.**
-  Real values must live in the secret store or in
-  `config.local.ini`.  The 0600 perm check on `secrets.ini` fails
-  closed (`get()` returns empty if perms loosen).
-- **Outbound credentials are encrypted at rest, not hashed.**  Earlier
+  documented rationale.
+- **`config.ini` is now a credential-free committed template.** Real
+  values must live in the secret store or in `config.local.ini`. The
+  0600 perm check on `secrets.ini` fails closed (`get()` returns
+  empty if perms loosen).
+- **Outbound credentials are encrypted at rest, not hashed.** Earlier
   internal discussion flagged hashing of NickServ/SASL/server/oper
   passwords + API keys; this isn't possible because the bot has to
-  send the literal value on the wire.  Encryption-at-rest via OS
+  send the literal value on the wire. Encryption-at-rest via OS
   keyring (or 0600 file) is what 2.5.0 implements instead.
 - README, `pyproject.toml`, and `__version__` bumped to 2.5.0.
   Provider count updated from 8 → 14 in README + docstrings.
 
 ### Security
 
-- **All plaintext credentials previously present in `config.ini`
-  must be rotated.**  They were in git history.  After running
-  `python -m secret_store migrate`, regenerate every API key at its
-  provider and change NickServ/SASL/server/oper passwords on the
-  network.
+- **No plaintext credentials ever entered git history.** `config.ini`
+  is now a template; real values live in `secrets.ini` (gitignored,
+  0600) or the OS keyring. The migrate path is provided for any
+  local instance that previously pasted real values into a working
+  copy.
 
 ### Fixed
 
 - Stormglass and WeatherBit provider packages were dormant — the
-  scan caught this and 2.5.0 wires them in.
+  audit caught this and 2.5.0 wires them in.
 - `weather_providers/__init__.py` docstring claimed 8 providers when
   12 were registered; now accurately documents all 14.
+
+### Removed
+
+- **28 stray `.git`-internal files** that had been accidentally
+  tracked by an earlier commit (loose objects, pack indices, hook
+  scripts) — removed from `git ls-files`. No git-history rewrite
+  needed since these were never live VCS state for downstream
+  consumers.
 
 ## [2.4.0] — 2026-04-10
 

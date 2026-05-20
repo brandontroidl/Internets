@@ -2,7 +2,8 @@
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult
-_B = "http://dataservice.accuweather.com"
+# fix: was http:// — leaked apikey in query string on the wire.
+_B = "https://dataservice.accuweather.com"
 async def fetch(key, loc_key, location):
     data = await get_json(f"{_B}/currentconditions/v1/{loc_key}", params={"apikey": key, "details": "true"})
     if not data: raise ValueError("No data")

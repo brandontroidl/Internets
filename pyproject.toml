@@ -26,6 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat :: Internet Relay Chat",
 ]
 dependencies = [
@@ -50,8 +51,13 @@ all = [
     "keyring>=24.0.0,<26",
 ]
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.21",
+    "pytest>=7.0,<9",
+    "pytest-asyncio>=0.21,<1",
+    "pytest-cov>=4.0,<7",
+    "coverage>=7.0,<8",
+    "bandit[sarif]>=1.7,<2",
+    "pip-audit>=2.7,<3",
+    "build>=1.0,<2",
 ]
 
 [project.urls]
@@ -72,3 +78,32 @@ include = ["modules*", "weather_providers*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# --strict-markers is also passed on the CLI in CI; keep it here so local
+# runs catch typos in @pytest.mark.<name> too.
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = [
+    "tests/*",
+    "build/*",
+    "dist/*",
+    ".venv/*",
+    "weather_providers/*",
+    "modules/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 75
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist", ".git", "__pycache__"]

@@ -4,7 +4,13 @@ https://www.visualcrossing.com/weather-api
 Free tier: 1000 calls/day.  Current, forecast, hourly, alerts, historical.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AlertsResult, AlertEntry,
+    HistoricalResult,
+)
 from . import current, forecast, hourly, alerts, historical
 
 

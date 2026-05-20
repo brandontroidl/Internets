@@ -1,9 +1,19 @@
 """Weatherstack provider package — requires API key.
 https://weatherstack.com/documentation
 Free tier: 250 calls/month, current only. Paid adds forecast + historical.
+
+NOTE: Weatherstack's free tier historically required HTTP. As of 2024
+HTTPS is available on all paid plans and most free-tier endpoints.
+If the free tier rejects a request the dispatcher will see a 4xx with
+a "https_access_restricted" error code in the JSON envelope; callers
+should upgrade or switch providers.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HistoricalResult,
+)
 from . import current, forecast, historical
 
 class WeatherstackProvider:

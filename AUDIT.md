@@ -1,8 +1,8 @@
 # Security & Stability Audit
 
 **Auditor:** Brandon Troidl
-**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review, correctness pass, weather provider audit)
-**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `config.ini`, all modules in `modules/`, and `weather_providers/`.
+**Date:** 2026-03-02 (initial), 2026-03-03 (follow-up), 2026-03-04 (async architecture review, correctness pass, weather provider audit), 2026-05-19 (2.5.0 secret-store + per-provider weather flags pass)
+**Scope:** Full codebase audit — `internets.py`, `sender.py`, `store.py`, `hashpw.py`, `protocol.py`, `secret_store.py`, `config.ini`, `secrets.ini.example`, `config.local.ini`, all modules in `modules/`, and `weather_providers/`.
 
 All findings have been resolved. See `CHANGELOG.md` for the release-oriented summary of changes.
 
@@ -1180,6 +1180,117 @@ The test runner used Unicode check mark (✓, U+2713) and cross mark (✗, U+271
 
 ---
 
+## Ninth Pass — 2.5.0 Release Hardening (2026-05-19)
+
+**Auditor:** Brandon Troidl
+**Scope:** Secret-store rollout, per-provider weather flags, scientific-accuracy ranking, dynamic help, repo hygiene. Covers `secret_store.py`, `secrets.ini.example`, `.gitignore`, `config.ini`, `config.local.ini`, `modules/base.py` (`cred()`, `is_configured()`), `modules/weather.py` (`_parse_weather_flags`, `_send_provider_list`), `weather_providers/__init__.py`, `weather_providers/_dispatch.py`, and `admin_cmds.py` (`cmd_help`, `cmd_modules`).
+
+---
+
+### SEC-SS-001: Plaintext Credentials in Tracked `config.ini`
+
+**Severity:** High
+**File:** `config.ini`, all module `on_load()` paths
+**Status:** Fixed
+
+Earlier releases stored NickServ/SASL/server/oper passwords, every API key, and the User-Agent contact identifier directly in `config.ini`. The file was tracked in git as a template, but the moment a deployer pasted real values into a clone, those values existed in their working tree and could trivially be leaked via screenshots, pair sessions, log copies, or a misconfigured `git add -A`.
+
+**Resolution:** Built `secret_store.py` with a tiered lookup — env var (`INTERNETS_<NAME>`), OS keyring (`pip install keyring`, Keychain / Secret Service / Credential Manager), 0600 gitignored `secrets.ini`. `config.ini` is now a credential-free *structural* template; `secrets.ini` and `config.local.ini` are gitignored. The migrate subcommand pulls plaintext from `config.ini`, stores each value in the most secure available backend, scrubs the source, and prints a ROTATE-NOW checklist. No secrets ever entered git history because the move happened before the first 2.5.0 commit; the migrate flow exists for any local clone that previously pasted values.
+
+---
+
+### SEC-SS-002: `secrets.ini` Loose-Perm Read
+
+**Severity:** Medium
+**File:** `secret_store.py` (`perms_ok`, `get`)
+**Status:** Fixed
+
+Naively reading `secrets.ini` would expose credentials whenever the file was created with a default `umask 022`, producing world-readable perms (`-rw-r--r--`).
+
+**Resolution:** The store calls `stat()` on every read and refuses to return values from `secrets.ini` unless `st_mode & 0o777 == 0o600`. Fails closed — `get()` returns empty string if perms loosen, rather than silently leaking. `init` creates the file with `O_CREAT | O_EXCL, 0o600`.
+
+---
+
+### SEC-SS-003: Non-Revealing `get` is the Default
+
+**Severity:** Low
+**File:** `secret_store.py` (`_cmd_get`)
+**Status:** Implemented
+
+A common operational mistake is `python -m secret_store get nickserv_password` in a screen-shared terminal. The CLI now prints a presence-only summary (`(set, 32 chars, backend=keyring)`) and requires `--reveal` to print the actual value. Documented in `--help` and in README "Security".
+
+---
+
+### WX-RANK-001: Provider Selection Ignored Underlying Model Accuracy
+
+**Severity:** Medium (correctness)
+**File:** `weather_providers/_dispatch.py`
+**Status:** Fixed
+
+Prior dispatch ordered providers by registration order and live health alone. This routed many requests to whichever key-bearing provider responded first, regardless of whether its underlying numerical model was actually competitive (e.g. Weatherstack's single-model basic tier beating Open-Meteo's ECMWF/ICON/GFS blend on raw response time).
+
+**Resolution:** `DEFAULT_RELIABILITY` now encodes a per-capability rank derived from the underlying numerical models (NWS-NDFD/HRRR, ECMWF IFS, ICON, GFS, ERA5 reanalysis, MRMS radar nowcast, WaveWatch III). Dispatch sorts by: (1) accuracy rank, (2) health score, (3) `provider_priority` from config. Per-capability rationale is documented inline at the top of `_dispatch.py`.
+
+---
+
+### WX-FLAGS-001: No Way to Force a Specific Provider
+
+**Severity:** Low (UX)
+**File:** `modules/weather.py`
+**Status:** Implemented
+
+Users could not override the dispatcher when they wanted a specific source (e.g. forcing NWS for US alerts even when health momentarily favored a cloud provider).
+
+**Resolution:** Every weather command accepts a per-provider flag anywhere in the line — `-nws`, `-mm`/`-meteomatics`, `-aw`/`-wk`/`-apple`/`-appleweather`/`-weatherkit`, `-om`/`-openmeteo`, `-vc`/`-visualcrossing`, `-acc`/`-accuweather`, `-owm`/`-openweathermap`, `-wb`/`-weatherbit`, `-wapi`/`-weatherapi`, `-pw`/`-pirate`/`-pirateweather`, `-sg`/`-stormglass`, `-tio`/`-tomorrow`/`-tomorrowio`, `-wwo`/`-worldweatheronline`, `-ws`/`-weatherstack`. Flag parsing (`_parse_weather_flags`) leaves `-n <nick>` and date arguments untouched. Forcing a provider that isn't active or doesn't support the requested capability fails loud — no silent fallback after an explicit choice. A `-l` flag lists active providers for the requested capability with state badges (`[OK]` / `[?]` / `[X]`).
+
+---
+
+### WX-DORMANT-001: Stormglass + WeatherBit Packages Existed But Were Unregistered
+
+**Severity:** Low
+**File:** `weather_providers/__init__.py`
+**Status:** Fixed
+
+The `weather_providers/stormglass/` and `weather_providers/weatherbit/` package directories shipped with 2.4.0 but were never wired into `_PROVIDER_FACTORIES`. The dispatcher could never reach them.
+
+**Resolution:** Both now have factory functions (`_f_stormglass`, `_f_weatherbit`) registered alongside the other 12 providers. Stormglass leads the marine chain; WeatherBit slots into mid-tier current/forecast/AQ.
+
+---
+
+### OPS-HELP-001: `.help` Showed Commands Users Couldn't Run
+
+**Severity:** Low (UX)
+**File:** `modules/base.py`, `admin_cmds.py` (`cmd_help`)
+**Status:** Fixed
+
+A loaded module without its API key (e.g. `imdb` with no `omdb_key`) still showed its commands in `.help`. Invoking them returned "not configured" — wasting the user's time and cluttering the help output.
+
+**Resolution:** Added `BotModule.is_configured()` returning `True` by default. Modules with API-key requirements override it. `cmd_help` checks the hook and skips unconfigured modules. The hidden list is shown to admins only, so operators can see what's installed but missing keys.
+
+---
+
+### OPS-MODULES-001: `.modules` Showed Bare Names With No Counts
+
+**Severity:** Info
+**File:** `admin_cmds.py` (`cmd_modules`)
+**Status:** Implemented
+
+`.modules` now prints `Loaded (N): bofh (2), calc (1), …` with command counts per module, then lists unloaded modules available on disk under `Available: …`. Easier to spot a module that loaded with zero commands (which is almost always a bug).
+
+---
+
+### CLEANUP-002: 30 Stray `.git`-Internal Files Tracked by the Repo
+
+**Severity:** Low (hygiene)
+**File:** repo tree
+**Status:** Fixed
+
+An earlier commit had accidentally added 30 files from inside `.git/` (loose objects, pack indices, hook scripts, `.git/config`, several refs) into `git ls-files`. They didn't affect runtime but inflated the tree, made `git status` noisy, and could confuse downstream tooling.
+
+**Resolution:** Removed from the index via `git rm --cached`. The repo's working `.git/` directory is untouched. `.gitignore` already ignored `*` under `.git/` for new clones; the existing tracked entries simply needed to be unstaged.
+
+---
+
 ## Summary
 
 | Category | Count | Status |
@@ -1187,15 +1298,15 @@ The test runner used Unicode check mark (✓, U+2713) and cross mark (✗, U+271
 | Critical bugs (first pass) | 6 | All fixed |
 | Critical security (second pass) | 3 | All fixed |
 | High bugs (all passes) | 10 | All fixed |
-| High security (all passes) | 7 | All fixed |
-| Medium issues (all passes) | 28 | All fixed |
-| Low issues | 13 | All fixed |
+| High security (all passes) | 8 | All fixed |
+| Medium issues (all passes) | 30 | All fixed |
+| Low issues | 17 | All fixed |
 | Improvements | 11 | All fixed or documented |
 | Performance | 1 | Fixed |
 | Architecture & features | 8 | All implemented |
 | Platform compatibility | 4 | All fixed |
-| Cleanup | 1 | Fixed |
+| Cleanup | 2 | All fixed |
 | Versioning | 1 | Implemented |
 | Dependency audit | 1 | Completed |
-| Info/documented | 1 | Documented |
-| **Total** | **95** | **All resolved** |
+| Info/documented | 2 | Documented |
+| **Total** | **104** | **All resolved** |

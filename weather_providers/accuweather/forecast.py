@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
-_B = "http://dataservice.accuweather.com"
+# fix: was http:// — leaked apikey in query string on the wire.
+_B = "https://dataservice.accuweather.com"
 async def fetch(key, loc_key, location, days=4):
-    ep = "5day" if days <= 5 else "5day"
+    # fix: dead-code `ep = "5day" if days <= 5 else "5day"` — both
+    # branches returned the same value. Free tier only exposes 5-day;
+    # 10/15-day are paid plans not yet wired up here. Hardcode.
+    ep = "5day"
     data = await get_json(f"{_B}/forecasts/v1/daily/{ep}/{loc_key}", params={"apikey": key, "metric": "true"})
     fc = []
     for d in data.get("DailyForecasts",[])[:days]:

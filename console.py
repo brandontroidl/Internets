@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
+from botlog import apply_debug, apply_loglevel, log_filter
 from config import __version__
-from botlog import log_filter, apply_debug, apply_loglevel
+
+if TYPE_CHECKING:
+    from internets import IRCBot
 
 _CONSOLE_HELP = """\
   debug [on|off]            global debug toggle
@@ -24,20 +28,18 @@ _CONSOLE_HELP = """\
 log = logging.getLogger("internets")
 
 
-async def run_console(bot: object) -> None:
+async def run_console(bot: IRCBot) -> None:
     """Async console: reads stdin in a thread, processes commands."""
     while True:
         try:
-            line = await asyncio.to_thread(input, "> ")
-            line = line.strip()
+            line = (await asyncio.to_thread(input, "> ")).strip()
         except (EOFError, KeyboardInterrupt):
             break
         if not line:
             continue
 
         parts = line.split()
-        cmd   = parts[0].lower()
-        args  = parts[1:]
+        cmd, args = parts[0].lower(), parts[1:]
 
         if cmd == "help":
             print(_CONSOLE_HELP)
@@ -46,26 +48,11 @@ async def run_console(bot: object) -> None:
             apply_debug(args)
 
         elif cmd == "loglevel":
-            err = apply_loglevel(args)
-            if err:
+            if err := apply_loglevel(args):
                 print(err)
 
         elif cmd == "status":
-            print(f"  version  = {__version__}")
-            print(f"  nick     = {bot._nick}")
-            print(f"  channels = {', '.join(sorted(bot.active_channels.snapshot())) or '(none)'}")
-            with bot._mod_lock:
-                mods = list(bot._modules)
-            print(f"  modules  = {', '.join(mods) or '(none)'}")
-            with bot._auth_lock:
-                admins = sorted(bot._authed)
-            print(f"  admins   = {', '.join(admins) or '(none)'}")
-            lvl_name = logging.getLevelName(log_filter.base_level)
-            print(f"  log level = {lvl_name}"
-                  f"{' (global debug ON)' if log_filter.global_debug else ''}")
-            active = log_filter.active_subsystems()
-            if active:
-                print(f"  debug subs = {', '.join(sorted(active))}")
+            _print_status(bot)
 
         elif cmd in ("shutdown", "quit"):
             reason = " ".join(args) if args else "Console shutdown"
@@ -75,3 +62,21 @@ async def run_console(bot: object) -> None:
 
         else:
             print(f"Unknown command: {cmd!r} — type 'help' for commands.")
+
+
+def _print_status(bot: IRCBot) -> None:
+    """Pretty-print the bot's current state to stdout."""
+    print(f"  version  = {__version__}")
+    print(f"  nick     = {bot._nick}")
+    print(f"  channels = {', '.join(sorted(bot.active_channels.snapshot())) or '(none)'}")
+    with bot._mod_lock:
+        mods = list(bot._modules)
+    print(f"  modules  = {', '.join(mods) or '(none)'}")
+    with bot._auth_lock:
+        admins = sorted(bot._authed)
+    print(f"  admins   = {', '.join(admins) or '(none)'}")
+    lvl_name = logging.getLevelName(log_filter.base_level)
+    print(f"  log level = {lvl_name}"
+          f"{' (global debug ON)' if log_filter.global_debug else ''}")
+    if active := log_filter.active_subsystems():
+        print(f"  debug subs = {', '.join(sorted(active))}")

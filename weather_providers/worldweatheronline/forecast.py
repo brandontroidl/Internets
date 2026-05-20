@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
+# fix: _float was duplicated in every endpoint file — moved to _codes.
+from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"
 
@@ -23,7 +25,3 @@ async def fetch(key: str, lat: float, lon: float, location: str, days: int = 4) 
                                low_c=_float(w.get("mintempC")), description=desc_text))
     return WeatherResult(source="World Weather Online", temperature=None,
                          description="", location=location, forecast=fc)
-
-def _float(v):
-    try: return float(v)
-    except (TypeError, ValueError): return None

@@ -2,6 +2,8 @@
 from __future__ import annotations
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
+# fix: _float was duplicated in every endpoint file — moved to _codes.
+from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"
 
@@ -31,7 +33,3 @@ async def fetch(key: str, lat: float, lon: float, location: str, hours: int = 12
             ))
         if len(entries) >= hours: break
     return HourlyResult(source="World Weather Online", location=location, hours=entries)
-
-def _float(v):
-    try: return float(v)
-    except (TypeError, ValueError): return None
