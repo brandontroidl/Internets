@@ -45,11 +45,15 @@ def _strip_ctrl(s: str, max_len: int = 400) -> str:
 
 
 # HTML extractors anchored on bash-org-archive's stable markup:
-#   <p class="quote">#36737</p>     ← quote header (contains the ID)
+#   <p class="quote">                                    ← header block,
+#     <a href="/?51746"><b>#51746</b></a>  +/- (votes)     contains a
+#   </p>                                                   permalink with
+#                                                          the quote ID.
 #   <p class="qt">line<br>line</p>  ← the quote body, IRC lines separated
 #                                     by newlines and/or <br>
-_RE_QUOTE_HEADER = re.compile(r'<p\s+class="quote"[^>]*>([^<]*)</p>',
-                              re.IGNORECASE)
+_RE_QUOTE_HEADER = re.compile(r'<p\s+class="quote"[^>]*>(.*?)</p>',
+                              re.IGNORECASE | re.DOTALL)
+_RE_QUOTE_ID     = re.compile(r'#(\d+)')
 _RE_QUOTE_BODY   = re.compile(r'<p\s+class="qt"[^>]*>(.*?)</p>',
                               re.IGNORECASE | re.DOTALL)
 _RE_TAGS         = re.compile(r'<[^>]+>')
@@ -79,8 +83,19 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
         m_body = _RE_QUOTE_BODY.search(text)
         if not m_body:
             return [f"quote {qid} not found" if qid else "no quote found"]
-        m_id = _RE_QUOTE_HEADER.search(text)
-        title = _strip_ctrl(m_id.group(1).strip(), 32) if m_id else "qdb"
+
+        # Tag = `[qdb #N]` if we can find a numeric ID (the permalink in
+        # the header block, or the explicitly-requested qid); otherwise
+        # plain `[qdb]`.  Falls through to plain on archive-side markup
+        # changes rather than emitting a placeholder string.
+        quote_id: str | None = qid
+        if quote_id is None:
+            m_hdr = _RE_QUOTE_HEADER.search(text)
+            if m_hdr:
+                m_id = _RE_QUOTE_ID.search(m_hdr.group(1))
+                if m_id:
+                    quote_id = m_id.group(1)
+        tag = f"[qdb #{quote_id}]" if quote_id else "[qdb]"
 
         # Split on <br> or newlines, strip residual tags, drop empties.
         chunks = _RE_LINE_BREAK.split(m_body.group(1))
@@ -91,8 +106,8 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
         lines = [ln for ln in lines if ln]
 
         if len(lines) > _MAX_LINES:
-            return [f"[qdb {title}] long quote — view at {url}"]
-        return [f"[qdb {title}] {ln}" for ln in lines]
+            return [f"{tag} long quote — view at {url}"]
+        return [f"{tag} {ln}" for ln in lines]
     except requests.RequestException as e:
         log.warning(f"QDB request: {e}")
         return ["QDB endpoint unavailable"]
