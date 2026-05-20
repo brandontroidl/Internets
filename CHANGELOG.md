@@ -6,7 +6,24 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(No unreleased changes.)
+### Fixed
+
+- **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
+  gen-1 Pokémon (Mewtwo ≈ 425 KB, Charizard ≈ 343 KB, Charmander ≈ 299 KB)
+  no longer hit "PokéAPI response too large".  Also strip leading zeros
+  on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
+  404'ing against `/pokemon/06`.
+
+### Changed
+
+- **`modules/numberfact.py`** — rewritten as a Wikipedia / local-math
+  hybrid because numbersapi.com is defunct (it 301-redirects to
+  `rembrandtpublishing.com/<path>` which 404s).  `math` facts are now
+  computed locally; `date` (MM/DD) and `year` use Wikipedia's REST
+  On-This-Day and page-summary endpoints; `trivia` uses the number's
+  article summary with a math-fact fallback when Wikipedia returns
+  the boilerplate "natural number following X and preceding Y"
+  extract.  The `.numberfact` / `.nf` command surface is unchanged.
 
 ## [2.6.0] — 2026-05-20
 

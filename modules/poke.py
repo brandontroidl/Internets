@@ -16,7 +16,9 @@ from .base import BotModule
 log = logging.getLogger("internets.poke")
 
 _URL = "https://pokeapi.co/api/v2/pokemon"
-_MAX_BODY_BYTES = 256 * 1024
+# PokéAPI responses are huge (moves + sprites): Mewtwo ≈ 425 KB,
+# Charizard ≈ 343 KB, Pikachu ≈ 274 KB.  1 MB leaves comfortable headroom.
+_MAX_BODY_BYTES = 1024 * 1024
 _IRC_CTRL_BYTES = frozenset(
     ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
      "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
@@ -89,6 +91,8 @@ class PokeModule(BotModule):
         if not all(c.isalnum() or c == "-" for c in target):
             self.bot.privmsg(reply_to, f"{nick}: name must be alphanumeric")
             return
+        if target.isdigit():
+            target = str(int(target))  # PokéAPI 404s on leading zeros (e.g. "06")
         if self.bot.rate_limited(nick):
             self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
             return
