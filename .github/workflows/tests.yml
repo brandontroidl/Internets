@@ -14,7 +14,9 @@ permissions:
   contents: read
 
 env:
-  # Ensure Python uses UTF-8 on all platforms (prevents cp1252 crashes on Windows).
+  # Belt-and-braces alongside the explicit encoding='utf-8' kwargs in
+  # tests/run_tests.py — protects any helper that still relies on the
+  # platform's default locale (cp1252 on Windows by default).
   PYTHONIOENCODING: utf-8
 
 jobs:
@@ -28,20 +30,22 @@ jobs:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
+        # requirements.txt is the canonical runtime install (see README).
+        # `pip install -e ".[dev]"` adds pytest/coverage/bandit/pip-audit/build.
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install -r requirements.txt
           pip install -e ".[dev]"
 
-      - name: Run test suite
+      - name: Run standalone test suite
         run: python tests/run_tests.py
 
       - name: Run pytest
@@ -52,17 +56,17 @@ jobs:
     name: Coverage
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install -r requirements.txt
           pip install -e ".[dev]"
 
       - name: Run coverage
@@ -83,14 +87,14 @@ jobs:
     runs-on: ubuntu-latest
     name: Lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Check syntax (core)
+      - name: Check syntax (all top-level + audit_log + process_lock + metrics)
         run: |
           python -m py_compile \
             internets.py \
@@ -102,7 +106,10 @@ jobs:
             botlog.py \
             admin_cmds.py \
             console.py \
-            secret_store.py
+            secret_store.py \
+            audit_log.py \
+            process_lock.py \
+            metrics.py
 
       - name: Check syntax (weather_providers)
         run: |

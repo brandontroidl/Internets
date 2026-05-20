@@ -26,10 +26,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -38,13 +38,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install "bandit[sarif]>=1.7,<2"
 
-      - name: Run bandit (human-readable, fails on high-severity findings)
+      # Informational text run — `--exit-zero` so findings don't fail
+      # the job.  Real triage happens via the SARIF upload below, which
+      # surfaces findings in the Security tab as code-scanning alerts.
+      # CI green here means "we ran bandit", not "no findings".
+      - name: Run bandit (informational text output)
         run: |
           bandit -r . \
             --exclude ./tests,./.venv,./build,./dist,./.git,./__pycache__ \
-            -ll
-        continue-on-error: true
+            -ll \
+            --exit-zero
 
+      # SARIF upload — always run.  `|| true` is intentional: bandit
+      # returns non-zero on findings even in SARIF mode and we want the
+      # upload step to still get the file.
       - name: Run bandit (SARIF for code scanning)
         run: |
           bandit -r . \
@@ -53,7 +60,7 @@ jobs:
 
       - name: Upload bandit SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -63,12 +70,11 @@ jobs:
     name: pip-audit (dependency CVEs)
     permissions:
       contents: read
-      security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -78,19 +84,14 @@ jobs:
           pip install -e ".[all,dev]"
           pip install "pip-audit>=2.7,<3"
 
-      - name: Run pip-audit (text)
+      # Removed the previous SARIF step: pip-audit doesn't support
+      # `--format sarif` (its valid formats are columns / json /
+      # cyclonedx-json / cyclonedx-xml / markdown).  CVE alerts land in
+      # the Security tab via Dependabot, which already scans the
+      # lockfile in near-real-time without needing CI to upload SARIF.
+      # --strict fails the job on any CVE so triage is forced.
+      - name: Run pip-audit
         run: pip-audit --strict --progress-spinner off
-        continue-on-error: true
-
-      - name: Run pip-audit (SARIF)
-        run: pip-audit --format sarif --output pip-audit.sarif || true
-
-      - name: Upload pip-audit SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: pip-audit.sarif
-          category: pip-audit
 
   gitleaks:
     runs-on: ubuntu-latest
@@ -99,7 +100,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Full history so gitleaks can scan past commits, not just HEAD.
           fetch-depth: 0
