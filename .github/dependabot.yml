@@ -1,0 +1,59 @@
+# Dependabot configuration for the Internets IRC bot.
+#
+# Two ecosystems are watched: the Python project at the repo root and the
+# GitHub Actions used by the workflows in .github/workflows/.  Security
+# updates are grouped separately from routine version bumps so they can be
+# merged independently (and fast) without waiting on a larger feature bump.
+version: 2
+
+updates:
+  # ---- Python (pip) -------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    target-branch: "main"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    groups:
+      # Security updates: high priority, merge fast.
+      python-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      # Routine version bumps grouped to reduce PR noise.
+      python-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---- GitHub Actions -----------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    target-branch: "main"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"

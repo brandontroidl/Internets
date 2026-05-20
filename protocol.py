@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import re
-from typing import Optional
 
 
 def strip_tags(line: str) -> str:
@@ -57,15 +56,21 @@ def parse_mode_changes(
     args: list[str],
     prefix_modes: set[str],
     chanmode_types: dict[str, str],
-) -> list[tuple[bool, str, Optional[str]]]:
+) -> list[tuple[bool, str, str | None]]:
     """Parse a channel MODE string into a list of (adding, mode_char, param).
 
     *param* is ``None`` for modes that don't take one.
     Correctly consumes parameters based on ISUPPORT types.
     """
-    changes: list[tuple[bool, str, Optional[str]]] = []
+    changes: list[tuple[bool, str, str | None]] = []
     adding = True
     arg_idx = 0
+
+    def take_param() -> str | None:
+        nonlocal arg_idx
+        param = args[arg_idx] if arg_idx < len(args) else None
+        arg_idx += 1
+        return param
 
     for ch in mode_str:
         if ch == "+":
@@ -73,19 +78,11 @@ def parse_mode_changes(
         elif ch == "-":
             adding = False
         elif ch in prefix_modes:
-            param = args[arg_idx] if arg_idx < len(args) else None
-            arg_idx += 1
-            changes.append((adding, ch, param))
+            changes.append((adding, ch, take_param()))
         else:
             mtype = chanmode_types.get(ch)
-            if mtype in ("A", "B"):
-                param = args[arg_idx] if arg_idx < len(args) else None
-                arg_idx += 1
-                changes.append((adding, ch, param))
-            elif mtype == "C" and adding:
-                param = args[arg_idx] if arg_idx < len(args) else None
-                arg_idx += 1
-                changes.append((adding, ch, param))
+            if mtype in ("A", "B") or (mtype == "C" and adding):
+                changes.append((adding, ch, take_param()))
             else:
                 changes.append((adding, ch, None))
 

@@ -1,11 +1,143 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import logging
+import threading
+import time
+from collections import OrderedDict
+from typing import Optional
+
 import requests
 
 log = logging.getLogger("internets.geocode")
+
+# ---------------------------------------------------------------------------
+# TTL cache (per Nominatim ToS)
+# ---------------------------------------------------------------------------
+# Nominatim's usage policy explicitly requires clients to cache results.
+# We cache by ``(lowercased-query, user_agent)`` because the country-pin
+# logic above is fully determined by the query string — same query → same
+# upstream call, every time.  The UA is part of the key so two operators
+# sharing a single process (unlikely, but possible during reloads) don't
+# cross-contaminate each other's cache.
+#
+# Implementation: an LRU-ish ``OrderedDict`` keyed by the cache key.
+# ``move_to_end`` on hit; evict from the front when we hit the cap.
+# A ``threading.Lock`` serialises mutations — geocode() is awaited via
+# ``asyncio.to_thread`` so cache access happens from a worker thread.
+#
+# The cache stores a 4-tuple result (lat, lon, name, cc) or the sentinel
+# ``None`` (negative result) — both are valid and worth caching.
+
+_GEOCODE_CACHE_TTL = 24 * 60 * 60   # 24h, per Nominatim ToS
+_GEOCODE_CACHE_MAX = 1000           # bounded — memory cap
+_geocode_cache: "OrderedDict[tuple[str, str], tuple[float, Optional[tuple[float, float, str, str]]]]" = OrderedDict()
+_geocode_cache_lock = threading.Lock()
+_geocode_cache_stats = {"hits": 0, "misses": 0, "evictions": 0}
+
+
+def _cache_key(query: str, user_agent: str) -> tuple[str, str]:
+    return (query.strip().lower(), user_agent)
+
+
+def _cache_get(key: tuple[str, str]) -> tuple[bool, Optional[tuple[float, float, str, str]]]:
+    """Return ``(found, value)``.  ``found`` is False on miss or expiry."""
+    now = time.time()
+    with _geocode_cache_lock:
+        entry = _geocode_cache.get(key)
+        if entry is None:
+            _geocode_cache_stats["misses"] += 1
+            return (False, None)
+        ts, value = entry
+        if now - ts > _GEOCODE_CACHE_TTL:
+            # Expired — drop and treat as miss.
+            del _geocode_cache[key]
+            _geocode_cache_stats["misses"] += 1
+            return (False, None)
+        # LRU touch.
+        _geocode_cache.move_to_end(key)
+        _geocode_cache_stats["hits"] += 1
+        return (True, value)
+
+
+def _cache_put(key: tuple[str, str], value: Optional[tuple[float, float, str, str]]) -> None:
+    now = time.time()
+    with _geocode_cache_lock:
+        if key in _geocode_cache:
+            _geocode_cache.move_to_end(key)
+        _geocode_cache[key] = (now, value)
+        # Evict oldest entries until we're under the cap.
+        while len(_geocode_cache) > _GEOCODE_CACHE_MAX:
+            _geocode_cache.popitem(last=False)
+            _geocode_cache_stats["evictions"] += 1
+
+
+def geocode_cache_stats() -> dict[str, int]:
+    """Return a snapshot of cache statistics.
+
+    Keys:
+      * ``size``       — current number of cached entries
+      * ``hits``       — successful lookups since process start
+      * ``misses``     — lookups that fell through to the network
+      * ``evictions``  — entries dropped due to the size cap
+
+    Useful for status output / ops dashboards.
+    """
+    with _geocode_cache_lock:
+        return {
+            "size": len(_geocode_cache),
+            "hits": _geocode_cache_stats["hits"],
+            "misses": _geocode_cache_stats["misses"],
+            "evictions": _geocode_cache_stats["evictions"],
+        }
+
+# ---------------------------------------------------------------------------
+# Security / abuse-control constants
+# ---------------------------------------------------------------------------
+# Nominatim's usage policy requires a unique, contactable User-Agent.  We
+# refuse to call out if the configured UA looks like the default template
+# placeholder — sending generic UAs gets the bot's IP banned (and is also
+# a poor neighbour move).  The check below is intentionally permissive:
+# any "@" or "http" inside the UA is treated as a contact identifier.
+def _ua_has_contact(ua: str) -> bool:
+    """Return True if the UA appears to embed an email or URL."""
+    if not ua:
+        return False
+    lower = ua.lower()
+    return ("@" in ua and "." in ua.split("@", 1)[1]) or "http://" in lower or "https://" in lower
+
+
+# Cap the JSON we read from Nominatim — normal responses are <10 KB; this
+# bounds memory if upstream misbehaves or a TLS-stripping proxy injects HTML.
+_MAX_BODY_BYTES = 128 * 1024
+
+# Cap display name length we emit downstream so a long upstream string
+# (Nominatim sometimes returns >300 char ``display_name`` fields) can't
+# blow past the 510-byte IRC line limit when combined with other context.
+_MAX_NAME_CHARS = 160
+
+# Cap the user's raw query length.  Anything longer is junk and also
+# inflates the cost of the upstream request.
+_MAX_QUERY_CHARS = 200
+
+_IRC_CTRL_BYTES = frozenset(
+    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
+     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
+)
+
+
+def _strip_ctrl(s: object, max_len: int = _MAX_NAME_CHARS) -> str:
+    """Drop IRC control bytes from upstream strings and cap length.
+
+    Nominatim ``display_name`` and ``address.*`` values are user-editable
+    OSM data: anyone with an OSM account can put ``\r\nQUIT :pwned`` in a
+    place name.  We must never splice raw OSM strings into an IRC line.
+    """
+    text = "" if s is None else str(s)
+    cleaned = "".join(ch for ch in text if ch not in _IRC_CTRL_BYTES)
+    return cleaned[:max_len]
 
 # ---------------------------------------------------------------------------
 # US state display formatting (full name → USPS abbreviation)
@@ -215,14 +347,21 @@ def _country_code_for(query: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _format_name(addr: dict[str, str], fallback: str) -> tuple[str, str]:
-    cc   = addr.get("country_code", "").lower()
-    city = (addr.get("city") or addr.get("town") or
-            addr.get("village") or addr.get("county") or "")
+    # Every value below ultimately comes from OSM, which is user-editable.
+    # _strip_ctrl removes CR/LF/IRC formatting bytes so a vandalised place
+    # name cannot be used to inject a second IRC command or spoof bot
+    # output via reverse/bold/colour codes.
+    cc   = _strip_ctrl(addr.get("country_code", ""), 8).lower()
+    city = _strip_ctrl(addr.get("city") or addr.get("town") or
+                       addr.get("village") or addr.get("county") or "")
+    fallback = _strip_ctrl(fallback)
     if cc == "us":
-        state = _STATE_ABBR.get(addr.get("state", ""), addr.get("state", ""))
-        return f"{city}, {state}".strip(", ") or fallback, cc
-    country = addr.get("country", "")
-    return f"{city}, {country}".strip(", ") or fallback, cc
+        raw_state = addr.get("state", "")
+        state = _STATE_ABBR.get(raw_state, raw_state)
+        state = _strip_ctrl(state, 64)
+        return (f"{city}, {state}".strip(", ") or fallback)[:_MAX_NAME_CHARS], cc
+    country = _strip_ctrl(addr.get("country", ""), 64)
+    return (f"{city}, {country}".strip(", ") or fallback)[:_MAX_NAME_CHARS], cc
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +370,31 @@ def _format_name(addr: dict[str, str], fallback: str) -> tuple[str, str]:
 
 def _get(url: str, *, params: dict | None = None,
          headers: dict | None = None, timeout: int = 10) -> requests.Response:
-    """Blocking HTTP GET."""
-    return requests.get(url, params=params, headers=headers, timeout=timeout)
+    """Blocking HTTP GET (stream=True so callers can cap response size)."""
+    return requests.get(url, params=params, headers=headers,
+                        timeout=timeout, stream=True)
+
+
+def _read_json_capped(r: requests.Response) -> object | None:
+    """Read up to _MAX_BODY_BYTES from *r* and parse as JSON.
+
+    Returns None if the response is oversize or not valid JSON.  Capping
+    the body size protects against a misbehaving / hostile upstream
+    streaming an unbounded payload at us.
+    """
+    try:
+        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+    except Exception as e:
+        log.warning(f"Nominatim read: {e}")
+        return None
+    if len(body) > _MAX_BODY_BYTES:
+        log.warning("Nominatim response exceeded size cap")
+        return None
+    try:
+        return json.loads(body.decode("utf-8", errors="replace"))
+    except (ValueError, UnicodeDecodeError) as e:
+        log.warning(f"Nominatim parse: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -264,24 +426,71 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
 
     Priority: US zip > US state name/abbr > country/province name > none.
     """
+    # Reject empty / whitespace-only queries cleanly so we never send an
+    # empty ``q=`` to Nominatim (which their policy frowns on).
+    if query is None:
+        return None
     query = query.strip().strip("'\"")
+    if not query:
+        return None
+    # Cap query length: anything longer is junk and inflates upstream cost.
+    if len(query) > _MAX_QUERY_CHARS:
+        query = query[:_MAX_QUERY_CHARS]
+
+    # Nominatim usage policy: require an identifiable User-Agent that
+    # includes a contact (email or URL).  If the operator hasn't
+    # configured one we refuse to call out — better to fail the geocode
+    # than get the bot's IP banned for the whole channel.
+    if not _ua_has_contact(user_agent):
+        log.warning(
+            "Nominatim UA missing contact info — set [weather] user_agent to "
+            "include an email or URL.  Geocode disabled."
+        )
+        return None
     hdrs: dict[str, str] = {"User-Agent": user_agent}
+
+    # ---- TTL cache lookup ------------------------------------------------
+    # We only reach this point with a non-empty, length-capped query and a
+    # validated UA — both are part of the cache key.  ``found`` differentiates
+    # a cached negative result (None) from a miss.
+    cache_key = _cache_key(query, user_agent)
+    found, cached = _cache_get(cache_key)
+    if found:
+        return cached
+
+    def _store(result):
+        """Cache *result* (including ``None`` negatives) and return it.
+
+        We cache failures so a flood of identical bad queries can't
+        keep hammering Nominatim — TTL covers the case where the
+        upstream eventually starts returning useful data again.
+        """
+        _cache_put(cache_key, result)
+        return result
 
     # ---- Coordinate passthrough ------------------------------------------
     m = _COORD_RE.match(query)
     if m:
         lat, lon = float(m.group(1)), float(m.group(2))
+        # Sanity-bound the coordinates before sending them upstream.
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return _store(None)
         try:
             r = await asyncio.to_thread(
                 _get, "https://nominatim.openstreetmap.org/reverse",
                 params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
                 headers=hdrs,
             )
-            d = r.json()
-            name, cc = _format_name(d.get("address", {}), f"{lat:.4f},{lon:.4f}")
-            return lat, lon, name, cc
+            d = _read_json_capped(r)
+            if not isinstance(d, dict):
+                return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
+            addr = d.get("address", {})
+            if not isinstance(addr, dict):
+                addr = {}
+            name, cc = _format_name(addr, f"{lat:.4f},{lon:.4f}")
+            return _store((lat, lon, name, cc))
         except Exception:
-            return lat, lon, f"{lat:.4f},{lon:.4f}", ""
+            return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
 
     # ---- Place-name search with word-drop fallback -----------------------
     # If Nominatim returns no hits for the full query, drop the last token
@@ -304,22 +513,36 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
                 _get, "https://nominatim.openstreetmap.org/search",
                 params=params, headers=hdrs,
             )
-            hits = r.json()
+            hits = _read_json_capped(r)
         except Exception as e:
             log.warning(f"Geocode '{candidate}': {e}")
-            return None
+            return _store(None)
 
-        if hits:
-            hit      = hits[0]
-            lat, lon = float(hit["lat"]), float(hit["lon"])
-            name, cc = _format_name(hit.get("address", {}), hit.get("display_name", candidate))
+        if isinstance(hits, list) and hits and isinstance(hits[0], dict):
+            hit = hits[0]
+            # Defensive coercion: Nominatim returns lat/lon as strings.
+            # If they're missing or unparseable, skip this hit rather than
+            # propagate an exception with attacker-influenced data.
+            try:
+                lat = float(hit.get("lat"))
+                lon = float(hit.get("lon"))
+            except (TypeError, ValueError):
+                break
+            if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+                break
+            addr = hit.get("address", {})
+            if not isinstance(addr, dict):
+                addr = {}
+            # display_name and candidate are upstream/user strings — _format_name
+                # will _strip_ctrl them before returning, never interpret IRC codes.
+            name, cc = _format_name(addr, hit.get("display_name", candidate))
             if candidate != query:
                 log.info(f"Geocode: '{query}' missed, resolved via truncated '{candidate}'")
-            return lat, lon, name, cc
+            return _store((lat, lon, name, cc))
 
         words = candidate.rsplit(None, 1)
         if len(words) < 2:
             break
         candidate = words[0]
 
-    return None
+    return _store(None)

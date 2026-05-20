@@ -206,6 +206,9 @@ def _():
         s.loc_set("test", "12345")
         s.flush()
         data = json.loads(Path(os.path.join(tmp, "loc.json")).read_text())
+        # store.py v2 schema wraps the payload in {"schema": 2, "checksum": ..., "data": {...}}
+        if isinstance(data, dict) and data.get("schema") and "data" in data:
+            data = data["data"]
         assert data["test"] == "12345"
         s.stop()
 
@@ -444,15 +447,20 @@ def _():
     assert deg_to_card(270) == "W"
     assert deg_to_card(None) == ""
 
-@test("configure: defaults to Open-Meteo when no config section")
+@test("configure: registers free providers when no config section")
 def _():
+    # No [weather_providers] section → registers every keyless provider
+    # (currently nws + openmeteo).  Order = registration order in
+    # _PROVIDER_FACTORIES, which is documented to put nws first.
     from configparser import ConfigParser
     import weather_providers as wp
     cfg = ConfigParser()
     wp.configure(cfg)
     providers = wp.get_providers()
     assert len(providers) >= 1
-    assert providers[0] == "openmeteo"
+    # Both keyless providers must be present.
+    assert "openmeteo" in providers
+    assert "nws" in providers
 
 @test("configure: skips providers without API keys")
 def _():
@@ -1059,16 +1067,25 @@ def _():
 
 @test("BUG-027: privmsg rejects targets containing spaces")
 def _():
-    # Build a minimal bot mock that tracks send calls.
+    # Static check — the implementation must guard against spaces.
     from internets import IRCBot
     source = inspect.getsource(IRCBot.privmsg)
-    assert '" " in target' in source or "' ' in target" in source or 'space' in source.lower() or '"' in source
+    # Drop the trivial `'"' in source` shortcut that made this always pass.
+    assert (
+        '" " in target' in source
+        or "' ' in target" in source
+        or 'space' in source.lower()
+    )
 
 @test("BUG-027: notice rejects targets containing spaces")
 def _():
     from internets import IRCBot
     source = inspect.getsource(IRCBot.notice)
-    assert '" " in target' in source or "' ' in target" in source or 'space' in source.lower() or '"' in source
+    assert (
+        '" " in target' in source
+        or "' ' in target" in source
+        or 'space' in source.lower()
+    )
 
 @test("BUG-028: module loader blocks symlinks outside modules dir (code inspection)")
 def _():

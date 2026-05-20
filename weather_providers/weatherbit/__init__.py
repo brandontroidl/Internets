@@ -3,7 +3,14 @@ https://www.weatherbit.io/api
 Free tier: 500 calls/day, current + 16-day forecast + hourly + alerts + AQ + historical.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AlertsResult, AlertEntry,
+    AirQualityResult, aqi_category,
+    HistoricalResult,
+)
 from . import current, forecast, hourly, alerts, air_quality, historical
 
 class WeatherBitProvider:

@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 from ._health import ProviderHealth, health_registry
+from ._http import HTTPError
 
 log = logging.getLogger("internets.weather.dispatch")
 
@@ -92,6 +93,60 @@ DEFAULT_RELIABILITY: dict[str, dict[str, int]] = {
                     "worldweatheronline": 4},
     "nowcast":     {"pirateweather": 1, "meteomatics": 2, "openmeteo": 3},
 }
+
+
+# ── Failure classification helpers ───────────────────────────────────
+
+# Substring tokens we'll still accept as a rate-limit hint when the
+# exception isn't an HTTPError (e.g. a provider that raised a custom
+# exception before reaching the HTTP layer).  Kept narrow to avoid
+# false positives on words like "iterate".
+_RL_TOKEN_HINTS = ("429", "rate limit", "ratelimit", "too many requests",
+                   "quota exceeded")
+
+
+def _is_rate_limit_error(e: BaseException) -> bool:
+    """Return True iff exception ``e`` indicates an upstream 429 / quota.
+
+    Prefers structured signals (``HTTPError.is_rate_limit``, ``.status``)
+    over string sniffing, but keeps a narrow substring fallback for
+    provider-raised custom exceptions that never touched _http.
+    """
+    # Structured path — HTTPError carries explicit metadata.
+    if isinstance(e, HTTPError):
+        if e.is_rate_limit or e.status == 429:
+            return True
+        return False
+    # aiohttp raises ClientResponseError for non-2xx if .raise_for_status
+    # was called directly by a provider that bypassed our wrapper.
+    status = getattr(e, "status", None)
+    if status == 429:
+        return True
+    # Last-resort: substring sniff on the message AND the type name.
+    msg = str(e).lower()
+    if any(tok in msg for tok in _RL_TOKEN_HINTS):
+        return True
+    return "ratelimit" in type(e).__name__.lower()
+
+
+def _redact(e: BaseException, limit: int = 160) -> str:
+    """Return a one-line, truncated, key-redacted error string.
+
+    Provider URLs frequently include ``?apikey=...`` or ``?appid=...``.
+    We don't want those in warning logs.  This is a defensive scrub —
+    HTTPError instances already avoid logging full URLs, but defence in
+    depth is cheap.
+    """
+    s = str(e).replace("\n", " ").replace("\r", " ")
+    # Redact common api-key query params.
+    import re
+    s = re.sub(
+        r"(?i)\b(apikey|api_key|appid|key|token|secret|password)=[^&\s]+",
+        r"\1=<redacted>", s,
+    )
+    if len(s) > limit:
+        s = s[: limit - 1] + "…"
+    return s
 
 
 class _RegisteredProvider:
@@ -171,17 +226,21 @@ class Dispatcher:
             providers = caps.get(cap, [])
             if providers:
                 chain = " → ".join(
-                    self._sorted_for_capability(cap, providers))
+                    self.sort_chain(cap, providers))
                 lines.append(f"  {cap}: {chain}")
             else:
                 lines.append(f"  {cap}: (no providers)")
         return "\n".join(lines)
 
-    def _sorted_for_capability(
+    def sort_chain(
         self, capability: str, provider_ids: list[str] | None = None
     ) -> list[str]:
-        """Sort providers by scientific accuracy first, then health, then
-        user-configured priority.
+        """Return the dispatch order for a capability — public API.
+
+        Sort providers by scientific accuracy first, then health, then
+        user-configured priority.  When ``provider_ids`` is None we
+        sort every registered provider that supports the capability;
+        otherwise we sort only the supplied subset.
 
         Order of tie-breaks:
           1. Static reliability rank — providers using the most
@@ -210,6 +269,14 @@ class Dispatcher:
             return (rank, -score, reg)
 
         return sorted(provider_ids, key=sort_key)
+
+    # Back-compat shim — modules/weather.py used the private name
+    # before this refactor.  Forward to the public method.  New code
+    # should call ``sort_chain`` directly.
+    def _sorted_for_capability(
+        self, capability: str, provider_ids: list[str] | None = None
+    ) -> list[str]:
+        return self.sort_chain(capability, provider_ids)
 
     async def dispatch(
         self, capability: str, *args: Any, **kwargs: Any
@@ -259,6 +326,23 @@ class Dispatcher:
             if method is None:
                 continue
 
+            # Circuit-breaker gate (weather_providers/_health.py).  When a
+            # provider has tripped open, skip it entirely so we don't burn
+            # latency on a known-bad upstream during its cooldown.
+            if not rp.health.is_callable():
+                log.debug("%s: %s skipped — circuit open", pid, capability)
+                continue
+
+            # Quota counter — count every attempted upstream call so
+            # quota_status() reflects reality even when the call fails.
+            # Imported here (not at module top) to avoid the import-cycle
+            # weather_providers/__init__.py ↔ _dispatch.py.
+            try:
+                from . import record_call as _record_call  # noqa: PLC0415
+                _record_call(pid)
+            except Exception:
+                pass
+
             start = time.monotonic()
             try:
                 result = await method(*args, **kwargs)
@@ -269,10 +353,17 @@ class Dispatcher:
             except Exception as e:
                 latency = time.monotonic() - start
                 etype = type(e).__name__
-                is_rate_limit = "429" in str(e) or "rate" in etype.lower()
+                is_rate_limit = _is_rate_limit_error(e)
                 rp.health.record_failure(rate_limited=is_rate_limit)
-                log.warning("%s: %s failed (%s, %.2fs)",
-                            pid, capability, etype, latency)
+                # Structured, single-line, grep-friendly failure log.
+                # We deliberately *don't* log args/kwargs (lat/lon/loc
+                # are not secret but URL params can include API keys,
+                # so we keep it to type:msg only).
+                log.warning(
+                    "dispatch_fail provider=%s capability=%s err=%s:%s "
+                    "rate_limited=%s latency=%.2fs",
+                    pid, capability, etype, _redact(e), is_rate_limit, latency,
+                )
                 continue
 
         log.error("All providers failed for '%s'", capability)

@@ -3,9 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
-_B = "http://api.weatherstack.com"
+from .current import _check_envelope
+# fix: was http:// — leaked access_key in plaintext query string.
+_B = "https://api.weatherstack.com"
 async def fetch(key, lat, lon, location, days=4):
     data = await get_json(f"{_B}/forecast", params={"access_key": key, "query": f"{lat},{lon}", "units": "m", "forecast_days": min(days,7)})
+    # fix: detect {"success":false,"error":...} envelope (was silently swallowed).
+    _check_envelope(data)
     fc_data = data.get("forecast",{})
     fc = []
     for dt_str in sorted(fc_data.keys())[:days]:

@@ -1,6 +1,14 @@
 """Open-Meteo weather provider package — free, no API key required."""
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AirQualityResult, aqi_category,
+    AstronomyResult,
+    HistoricalResult,
+    MarineResult,
+)
 from . import current, forecast, hourly, air_quality, astronomy, historical, marine
 
 class OpenMeteoProvider:

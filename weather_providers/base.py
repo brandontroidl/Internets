@@ -230,9 +230,13 @@ class WeatherProvider(Protocol):
     Required (all providers):
         get_weather, get_forecast
 
-    Optional (implement if the API supports it):
+    Optional (implement if the API supports it).  Method names listed
+    here MUST match the values in ``_dispatch.CAPABILITY_METHODS`` —
+    that's what the dispatcher uses with ``hasattr`` to discover which
+    capabilities a provider supports:
+
         get_hourly, get_alerts, get_air_quality, get_astronomy,
-        get_historical, get_marine
+        get_historical, get_marine, get_nowcast
 
     Providers that don't support an optional method simply omit it.
     The registry skips providers that lack the requested method.

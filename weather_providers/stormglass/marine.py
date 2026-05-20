@@ -16,7 +16,10 @@ async def fetch(headers, lat, lon, location):
     }, headers=headers)
     hours = data.get("hours", [])
     if not hours:
-        raise ValueError("Stormglass marine returned no data")
+        # fix: was raising ValueError; every other provider returns an
+        # empty dataclass on empty upstream data so the dispatcher can
+        # treat "no data" uniformly. Match that behaviour.
+        return MarineResult(source="Stormglass", location=location)
     c = hours[0]
     return MarineResult(
         source="Stormglass",

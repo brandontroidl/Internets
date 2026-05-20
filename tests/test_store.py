@@ -67,17 +67,35 @@ class TestUserTracking:
 
     def test_part_updates_last_seen(self, store):
         store.user_join("#test", "Bob", "bob@host")
-        time.sleep(0.01)
+        users = store.channel_users("#test")
+        first_seen = users["bob"]["first_seen"]
+        last_seen_before = users["bob"]["last_seen"]
+        # Sleep long enough that ISO timestamps differ even on coarse clocks.
+        time.sleep(0.02)
         store.user_part("#test", "Bob")
         users = store.channel_users("#test")
         assert "bob" in users
+        # The part should have advanced last_seen but left first_seen alone.
+        assert users["bob"]["first_seen"] == first_seen
+        assert users["bob"]["last_seen"] > last_seen_before, (
+            f"last_seen did not advance: {users['bob']['last_seen']!r} "
+            f"vs {last_seen_before!r}"
+        )
 
     def test_quit_updates_all_channels(self, store):
         store.user_join("#a", "Carol", "carol@host")
         store.user_join("#b", "Carol", "carol@host")
+        before_a = store.channel_users("#a")["carol"]["last_seen"]
+        before_b = store.channel_users("#b")["carol"]["last_seen"]
+        time.sleep(0.02)
         store.user_quit("Carol")
-        assert "carol" in store.channel_users("#a")
-        assert "carol" in store.channel_users("#b")
+        users_a = store.channel_users("#a")
+        users_b = store.channel_users("#b")
+        assert "carol" in users_a
+        assert "carol" in users_b
+        # quit should advance last_seen for the nick in every channel.
+        assert users_a["carol"]["last_seen"] > before_a
+        assert users_b["carol"]["last_seen"] > before_b
 
     def test_rename(self, store):
         store.user_join("#test", "OldNick", "user@host")
@@ -131,7 +149,9 @@ class TestFlush:
     def test_flush_writes_dirty(self, store, tmp_dir):
         store.loc_set("test", "value")
         store.flush()
-        data = json.loads((tmp_dir / "loc.json").read_text())
+        raw = json.loads((tmp_dir / "loc.json").read_text())
+        # v2 envelope: {"schema": 2, "checksum": "...", "data": {...}}
+        data = raw["data"] if isinstance(raw, dict) and "schema" in raw else raw
         assert data["test"] == "value"
 
     def test_atomic_write(self, store, tmp_dir):

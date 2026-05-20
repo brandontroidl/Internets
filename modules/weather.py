@@ -366,8 +366,20 @@ class WeatherModule(BotModule):
         if arg:
             m = re.match(r"^-n\s+(\S+)$", arg.strip(), re.IGNORECASE)
             if m:
-                saved = self.bot.loc_get(m.group(1))
-                return (saved, None) if saved else (None, f"{m.group(1)} has no saved location.")
+                target = m.group(1)
+                # Privacy: refuse cross-user lookups for opted-out nicks.
+                # The invoker can still look up themselves regardless of
+                # their own opt-out state.  We probe the store via the
+                # public is_opted_out() helper; if it isn't available
+                # (older Store) the check defaults to allow.
+                if target.lower() != nick.lower():
+                    is_opted_out = getattr(
+                        getattr(self.bot, "_store", None), "is_opted_out", None,
+                    )
+                    if callable(is_opted_out) and is_opted_out(target):
+                        return None, f"{target} has opted out of location sharing."
+                saved = self.bot.loc_get(target)
+                return (saved, None) if saved else (None, f"{target} has no saved location.")
             return arg.strip(), None
         saved = self.bot.loc_get(nick)
         if saved:

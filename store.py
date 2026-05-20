@@ -1,21 +1,94 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import threading
-import time
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone, timedelta
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("internets.store")
 
-_utcnow = lambda: datetime.now(timezone.utc).isoformat()
+
+def _utcnow() -> str:
+    """Current UTC time as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
 
 _FLUSH_INTERVAL = 30  # seconds between periodic disk writes
 _USER_MAX_AGE_DAYS = 90  # prune user entries older than this
+
+# ── State-file schema versioning ─────────────────────────────────────
+# v1 (legacy): file is the bare payload — `{"alice": "ny", ...}` etc.
+# v2 (current): file is `{"schema": 2, "checksum": "<sha256>", "data": <payload>}`.
+#
+# On read, v2 files have their SHA-256 checksum validated.  A mismatch
+# means the file is corrupt or has been tampered with — we log a
+# warning and fall back to the default (empty) state rather than load
+# untrusted data into memory.
+#
+# v1 files are accepted silently and re-written as v2 on the next flush.
+_SCHEMA_VERSION = 2
+
+
+def _checksum(payload: Any) -> str:
+    """Return SHA-256 hex of the canonical-JSON of *payload*.
+
+    Canonicalisation: ``sort_keys=True`` + ``separators=(',', ':')``.
+    This guarantees the same data → same hash regardless of dict
+    insertion order or Python version.
+    """
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _wrap_v2(payload: Any) -> dict:
+    """Wrap *payload* into the v2 envelope: {schema, checksum, data}."""
+    return {
+        "schema": _SCHEMA_VERSION,
+        "checksum": _checksum(payload),
+        "data": payload,
+    }
+
+
+def _unwrap(raw: Any, default: Any) -> Any:
+    """Unwrap a possibly-versioned envelope.
+
+    Returns the inner payload on success.  Returns *default* if the
+    envelope is v2 but its checksum doesn't match.  If *raw* is a
+    legacy v1 payload (no ``schema`` key) it is returned unchanged so
+    callers can re-wrap it on the next flush.
+    """
+    # v2 envelope: top-level dict with a "schema" key.
+    if isinstance(raw, dict) and "schema" in raw:
+        schema = raw.get("schema")
+        if schema != _SCHEMA_VERSION:
+            log.warning(
+                "Store: unknown schema version %r — using default state.",
+                schema,
+            )
+            return default
+        data = raw.get("data")
+        stored_sum = raw.get("checksum")
+        if not isinstance(stored_sum, str):
+            log.warning("Store: v2 envelope missing checksum — rejecting file.")
+            return default
+        computed = _checksum(data)
+        if computed != stored_sum:
+            log.warning(
+                "Store: checksum mismatch (file=%s computed=%s) — "
+                "rejecting file and using default state.",
+                stored_sum, computed,
+            )
+            return default
+        return data
+    # v1 (legacy): bare payload.
+    return raw
 
 
 class Store:
@@ -63,42 +136,58 @@ class Store:
     def _read(path: str, default: Any) -> Any:
         try:
             p = Path(path)
-            if p.exists():
-                size = p.stat().st_size
-                if size > Store._MAX_FILE_SIZE:
-                    log.warning(f"Store file {path} exceeds size limit ({size} bytes) — using default")
-                    return default
-                data = json.loads(p.read_text(encoding="utf-8"))
-                # BUG-051: Validate loaded data matches expected type.
-                # A corrupted file returning a list instead of a dict (or vice versa)
-                # would crash on first access.
-                if type(data) is not type(default):
-                    log.warning(f"Store file {path} has type {type(data).__name__}, "
-                                f"expected {type(default).__name__} — using default")
-                    return default
-                return data
-        except Exception as e:
-            log.warning(f"Store load {path}: {e}")
-        return default
+            if not p.exists():
+                return default
+            size = p.stat().st_size
+            if size > Store._MAX_FILE_SIZE:
+                log.warning(
+                    f"Store file {path} exceeds size limit ({size} bytes) — using default"
+                )
+                return default
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            # Unwrap a v2 envelope (validates checksum) or accept a
+            # legacy v1 bare payload.  A checksum-fail returns *default*
+            # so we don't import tampered data into memory; the next
+            # flush will overwrite the file with a fresh v2 envelope.
+            data = _unwrap(raw, default)
+            # BUG-051: Validate loaded data matches expected type.
+            # A corrupted file returning a list instead of a dict (or vice versa)
+            # would crash on first access.
+            if type(data) is not type(default):
+                log.warning(
+                    f"Store file {path} has type {type(data).__name__}, "
+                    f"expected {type(default).__name__} — using default"
+                )
+                return default
+            return data
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            log.warning(f"Store load {path}: {e!r}")
+            return default
 
     @staticmethod
     def _write(path: str, data: Any) -> bool:
+        p = Path(path)
+        tmp_path: Path | None = None
         try:
-            p = Path(path)
             fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+            tmp_path = Path(tmp)
             try:
+                # Wrap in a v2 envelope so future reads can verify
+                # integrity.  Pretty-print for human inspection.
+                envelope = _wrap_v2(data)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-                os.replace(tmp, str(p))
+                    json.dump(envelope, f, indent=2)
+                os.replace(tmp_path, p)
+                tmp_path = None  # successfully renamed — nothing to clean up
                 return True
-            except Exception:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass  # best effort — may fail on Windows if locked
-                raise
-        except Exception as e:
-            log.warning(f"Store save {path}: {e}")
+            finally:
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass  # best effort — may fail on Windows if locked
+        except (OSError, TypeError, ValueError) as e:
+            log.warning(f"Store save {path}: {e!r}")
             return False
 
     # ── Flush ────────────────────────────────────────────────────────
@@ -110,14 +199,12 @@ class Store:
     def flush(self) -> None:
         """Write any dirty datasets to disk.  Safe to call from any thread."""
         with self._loc_lock:
-            if self._dirty_locs:
-                if self._write(self._lf, self._locs):
-                    self._dirty_locs = False
+            if self._dirty_locs and self._write(self._lf, self._locs):
+                self._dirty_locs = False
 
         with self._chan_lock:
-            if self._dirty_chans:
-                if self._write(self._cf, sorted(self._channels)):
-                    self._dirty_chans = False
+            if self._dirty_chans and self._write(self._cf, sorted(self._channels)):
+                self._dirty_chans = False
 
         with self._user_lock:
             if self._dirty_users:
@@ -178,10 +265,11 @@ class Store:
 
     def loc_del(self, nick: str) -> bool:
         """Delete saved location for *nick*.  Returns False if none existed."""
+        key = nick.lower()
         with self._loc_lock:
-            if nick.lower() not in self._locs:
+            if key not in self._locs:
                 return False
-            del self._locs[nick.lower()]
+            del self._locs[key]
             self._dirty_locs = True
             return True
 
@@ -208,36 +296,67 @@ class Store:
             entry = ch.setdefault(nick.lower(), {
                 "nick": nick, "hostmask": hostmask,
                 "first_seen": now, "last_seen": now,
+                # opted_out: when True, the privacy module's user-data
+                # collection (last-seen / hostmask updates) should be
+                # skipped.  Default False keeps existing behaviour.
+                "opted_out": False,
             })
             entry.update({"last_seen": now, "hostmask": hostmask, "nick": nick})
+            # Defensive: legacy records may not carry the field.
+            entry.setdefault("opted_out", False)
             self._dirty_users = True
 
     def user_part(self, channel: str, nick: str) -> None:
         """Update last-seen timestamp when a user parts *channel*."""
         with self._user_lock:
             entry = self._users.get(channel.lower(), {}).get(nick.lower())
-            if entry:
+            if entry is not None:
                 entry["last_seen"] = _utcnow()
                 self._dirty_users = True
 
     def user_quit(self, nick: str) -> None:
         """Update last-seen for *nick* across all channels."""
         now = _utcnow()
+        key = nick.lower()
         with self._user_lock:
             for ch in self._users.values():
-                if nick.lower() in ch:
-                    ch[nick.lower()]["last_seen"] = now
+                if (entry := ch.get(key)) is not None:
+                    entry["last_seen"] = now
                     self._dirty_users = True
+
+    def user_purge(self, nick: str) -> int:
+        """Hard-delete every tracked record of *nick* across all channels.
+
+        Returns the number of channel rows removed.  Used by .forgetme
+        (modules/privacy.py) to honour user data-deletion requests.
+        Unlike user_quit() which only stamps last_seen, this drops the
+        entry entirely; it will not reappear until the user re-joins.
+        """
+        key = nick.lower()
+        removed = 0
+        with self._user_lock:
+            for ch in list(self._users.values()):
+                if key in ch:
+                    del ch[key]
+                    removed += 1
+                    self._dirty_users = True
+            # Clean up any channels left empty.
+            empty = [c for c, members in self._users.items() if not members]
+            for c in empty:
+                del self._users[c]
+        return removed
 
     def user_rename(self, old: str, new: str, hostmask: str) -> None:
         """Re-key a user entry when they change nicks."""
-        now = _utcnow()
+        now      = _utcnow()
+        old_key  = old.lower()
+        new_key  = new.lower()
         with self._user_lock:
             for ch in self._users.values():
-                if old.lower() in ch:
-                    entry = ch.pop(old.lower())
+                if old_key in ch:
+                    entry = ch.pop(old_key)
                     entry.update({"nick": new, "hostmask": hostmask, "last_seen": now})
-                    ch[new.lower()] = entry
+                    ch[new_key] = entry
                     self._dirty_users = True
 
     def channel_users(self, channel: str) -> dict[str, dict[str, str]]:
@@ -245,6 +364,47 @@ class Store:
         with self._user_lock:
             ch = self._users.get(channel.lower(), {})
             return {k: dict(v) for k, v in ch.items()}
+
+    # ── Opt-out flag ─────────────────────────────────────────────────
+    # The privacy module exposes a user-facing command that calls these
+    # to flip the flag.  We set it on every channel record that tracks
+    # the nick so checks anywhere in the bot see a consistent answer.
+
+    def set_opt_out(self, nick: str, value: bool) -> None:
+        """Set the opt-out flag for *nick* across all tracked channels.
+
+        Creates a stub entry in a synthetic ``"*"`` channel if the user
+        is not currently tracked anywhere, so the preference persists
+        even before they next speak.
+        """
+        key = nick.lower()
+        now = _utcnow()
+        with self._user_lock:
+            seen = False
+            for ch in self._users.values():
+                if (entry := ch.get(key)) is not None:
+                    entry["opted_out"] = bool(value)
+                    seen = True
+            if not seen:
+                # No tracked record — create a sentinel one so the
+                # preference survives a restart.
+                ch = self._users.setdefault("*", {})
+                ch[key] = {
+                    "nick": nick, "hostmask": "",
+                    "first_seen": now, "last_seen": now,
+                    "opted_out": bool(value),
+                }
+            self._dirty_users = True
+
+    def is_opted_out(self, nick: str) -> bool:
+        """Return True if *nick* has opted out of user-data tracking."""
+        key = nick.lower()
+        with self._user_lock:
+            for ch in self._users.values():
+                entry = ch.get(key)
+                if entry is not None and entry.get("opted_out"):
+                    return True
+        return False
 
 
 class RateLimiter:

@@ -22,6 +22,7 @@ import ssl
 import re
 import sys
 import os
+import random
 import secrets
 import signal
 import threading
@@ -29,6 +30,7 @@ import logging
 import importlib
 import importlib.util
 import time
+from pathlib import Path
 from typing import Any
 
 from config import (
@@ -54,7 +56,18 @@ from protocol import (
     parse_names_entry,
     sasl_plain_payload,
 )
+from process_lock import ProcessLock, LockHeld
 
+
+# ── Per-subsystem loggers ────────────────────────────────────────────
+# These inherit from the "internets" root logger configured in botlog.py.
+# Using them gives operators per-subsystem .debug control.
+_LOG_CONN     = logging.getLogger("internets.conn")
+_LOG_DISPATCH = logging.getLogger("internets.dispatch")
+_LOG_MODULES  = logging.getLogger("internets.modules")
+_LOG_SIGNAL   = logging.getLogger("internets.signal")
+_LOG_SHUTDOWN = logging.getLogger("internets.shutdown")
+_LOG_SASL     = logging.getLogger("internets.sasl")
 
 # ── Utilities ────────────────────────────────────────────────────────
 
@@ -88,7 +101,36 @@ class ChannelSet:
 
 
 def _backoff(attempt: int, base: float = 15.0, cap: float = 300.0) -> float:
+    """Deterministic exponential backoff: base * 2**attempt, capped at *cap*.
+
+    Kept deterministic for testability; callers needing jitter should use
+    ``_backoff_jittered`` which wraps this with bounded randomization.
+    """
     return min(base * (2 ** attempt), cap)
+
+
+# Jitter factor applied to reconnect delays.  Full-jitter style (Decorrelated
+# Jitter, AWS) would compound state; we use the simpler "equal jitter" model:
+# the wait is a value in [delay * (1 - JITTER), delay * (1 + JITTER)].
+_BACKOFF_JITTER = 0.25
+
+
+def _backoff_jittered(attempt: int, base: float = 15.0, cap: float = 300.0,
+                       jitter: float = _BACKOFF_JITTER) -> float:
+    """Exponential backoff with bounded jitter.  Returns >= 0 seconds.
+
+    Uses ``random`` (not ``secrets``): jitter is for thundering-herd
+    avoidance, not security.
+    """
+    delay = _backoff(attempt, base, cap)
+    spread = delay * jitter
+    return max(0.0, delay + random.uniform(-spread, spread))
+
+
+# Note: distinguishing transient (DNS/RST/SSL renegotiation) from permanent
+# (auth) connection failures is handled inline in run() using the
+# self._sasl_failed_permanently flag set by the SASL handler — no dedicated
+# exception class is needed.
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -106,6 +148,17 @@ class IRCBot(AdminCommandsMixin):
     _AUTH_CLEANUP_THRESHOLD = 50
     _AUTH_MAX_FAILS = 5
     _AUTH_LOCKOUT = 300
+
+    # ── Network / timing constants (no magic numbers in code) ────────
+    _READ_LIMIT          = 8192   # asyncio.open_connection buffer cap (bytes)
+    _READ_TIMEOUT        = 300    # seconds — read inactivity → reconnect
+    _PING_INTERVAL       = 90     # seconds between client-side PINGs
+    _PONG_MAX_PAYLOAD    = 400    # bytes — guard against oversized PONGs
+    _NICKSERV_WAIT_TICKS = 40     # 40 * _NICKSERV_TICK = 10 s total
+    _NICKSERV_TICK       = 0.25   # seconds between identify polls
+    _SHUTDOWN_DRAIN_S    = 2.0    # grace period for sender to flush QUIT
+    _UNEXPECTED_SLEEP_S  = 5.0    # back-off on unexpected main-loop errors
+    _MAX_PONG_LEN        = 400    # bytes — cap PING/PONG payload
 
     # Precompiled regex for _process() hot path.
     _RE_CAP       = re.compile(r"(?::\S+ )?CAP \S+ (\S+)(?: :?(.*))?")
@@ -187,6 +240,23 @@ class IRCBot(AdminCommandsMixin):
         self._tasks: list[asyncio.Task] = []
         self._last_invite_time: float = 0.0
         self._nick_hosts: dict[str, str] = {}
+        # Counter of in-flight command tasks — O(1) check vs. scanning _tasks.
+        self._active_cmd_tasks: int = 0
+        # Idempotency guard for signal handlers (fired once even if SIGINT
+        # arrives twice during shutdown).
+        self._shutdown_initiated: bool = False
+        # SASL hard failure marks the connection as unrecoverable until config
+        # is fixed; reconnect loop should surface this clearly.
+        self._sasl_failed_permanently: bool = False
+        # Observability counters.  Exposed for the .debug command and tests.
+        self._metrics: dict[str, int] = {
+            "reconnects":         0,
+            "dropped_messages":   0,
+            "command_timeouts":   0,
+            "oversized_lines":    0,
+            "sasl_failures":      0,
+            "unexpected_errors":  0,
+        }
 
     # ── Outbound messaging ───────────────────────────────────────────
 
@@ -288,10 +358,12 @@ class IRCBot(AdminCommandsMixin):
                 self._modules[name] = inst
                 for cmd, method in inst.COMMANDS.items():
                     self._commands[cmd] = (name, method)
-                log.info(f"Loaded {name} ({list(inst.COMMANDS)})")
+                _LOG_MODULES.info(
+                    "event=module_loaded name=%s commands=%d cmds=%s",
+                    name, len(inst.COMMANDS), ",".join(sorted(inst.COMMANDS)))
                 return True, f"'{name}' loaded ({len(inst.COMMANDS)} commands)."
             except Exception as e:
-                log.error(f"Load '{name}': {e}")
+                _LOG_MODULES.error("event=module_load_failed name=%s err=%s", name, e)
                 return False, f"Error loading '{name}' — see log for details."
 
     def unload_module(self, name: str) -> tuple[bool, str]:
@@ -300,13 +372,15 @@ class IRCBot(AdminCommandsMixin):
                 return False, f"'{name}' not loaded."
             try:
                 self._modules[name].on_unload()
-                for cmd in [c for c, v in self._commands.items() if v[0] == name]:
+                removed = [c for c, v in self._commands.items() if v[0] == name]
+                for cmd in removed:
                     del self._commands[cmd]
                 del self._modules[name]
-                log.info(f"Unloaded {name}")
+                _LOG_MODULES.info(
+                    "event=module_unloaded name=%s commands=%d", name, len(removed))
                 return True, f"'{name}' unloaded."
             except Exception as e:
-                log.error(f"Unload '{name}': {e}")
+                _LOG_MODULES.error("event=module_unload_failed name=%s err=%s", name, e)
                 return False, f"Error unloading '{name}' — see log for details."
 
     def reload_module(self, name: str) -> tuple[bool, str]:
@@ -321,29 +395,69 @@ class IRCBot(AdminCommandsMixin):
     # ── Shutdown ─────────────────────────────────────────────────────
 
     def request_shutdown(self, reason: str = "Shutting down") -> None:
+        """Request a graceful shutdown.  Safe to call multiple times and from
+        any thread; idempotent — only the first reason wins to avoid races
+        where SIGINT during a clean shutdown rewrites the QUIT message.
+        """
+        if self._shutdown_initiated:
+            return
+        self._shutdown_initiated = True
         self._quit_msg = f"QUIT :{reason}"
         if self._stop and self._loop:
             self._loop.call_soon_threadsafe(self._stop.set)
 
     async def graceful_shutdown(self) -> None:
-        log.info("Graceful shutdown initiated.")
+        _LOG_SHUTDOWN.info("event=shutdown_begin reason=%r", self._quit_msg)
+        # 1. Persist channel list to disk before anything else can fail.
         try: self._save_channels()
-        except Exception as e: log.warning(f"Channel save failed: {e}")
+        except Exception as e: _LOG_SHUTDOWN.warning("event=channel_save_failed err=%s", e)
+        # 2. Unload modules (gives them a chance to flush their own state).
         with self._mod_lock: names = list(self._modules)
         for name in names:
             try: self.unload_module(name)
-            except Exception as e: log.warning(f"Unload {name} failed: {e}")
-        try: self._store.stop(); log.info("Store flushed to disk.")
-        except Exception as e: log.warning(f"Store flush failed: {e}")
+            except Exception as e:
+                _LOG_SHUTDOWN.warning("event=module_unload_failed name=%s err=%s", name, e)
+        # 3. Stop the store flush thread and force a final write.
+        try:
+            self._store.stop()
+            _LOG_SHUTDOWN.info("event=store_flushed")
+        except Exception as e:
+            _LOG_SHUTDOWN.warning("event=store_flush_failed err=%s", e)
+        # 4. Enqueue QUIT (priority=0 → bypasses rate limit) and let the
+        #    sender drain it.  If the queue is already full we still try.
         try: self.send(self._quit_msg, priority=0)
-        except Exception: pass
-        await asyncio.sleep(2)
-        if self._sender: await self._sender.stop()
+        except Exception as e:
+            _LOG_SHUTDOWN.warning("event=quit_enqueue_failed err=%s", e)
+        await asyncio.sleep(self._SHUTDOWN_DRAIN_S)
+        # 5. Stop the sender (cancels its drain task).
+        if self._sender:
+            try: await self._sender.stop()
+            except Exception as e:
+                _LOG_SHUTDOWN.warning("event=sender_stop_failed err=%s", e)
+        # 6. Close the socket.
         if self._writer:
-            try: self._writer.close(); await self._writer.wait_closed()
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except Exception as e:
+                _LOG_SHUTDOWN.debug("event=writer_close_err err=%s", e)
+        # 7. Cancel any remaining background tasks (keepalive, rejoin, cmd-*).
+        for task in self._tasks:
+            task.cancel()
+        # Give cancelled tasks a chance to clean up.
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        _LOG_SHUTDOWN.info(
+            "event=shutdown_complete reconnects=%d dropped=%d cmd_timeouts=%d "
+            "sasl_failures=%d oversized=%d unexpected=%d",
+            self._metrics["reconnects"], self._metrics["dropped_messages"],
+            self._metrics["command_timeouts"], self._metrics["sasl_failures"],
+            self._metrics["oversized_lines"], self._metrics["unexpected_errors"])
+        # 8. Flush all logging handlers — important before os.execv() which
+        #    will replace the process image without running atexit handlers.
+        for h in logging.getLogger("internets").handlers:
+            try: h.flush()
             except Exception: pass
-        for task in self._tasks: task.cancel()
-        log.info("Shutdown complete.")
 
     # ── Dispatch ─────────────────────────────────────────────────────
 
@@ -355,8 +469,13 @@ class IRCBot(AdminCommandsMixin):
             self.notice(nick, f"{nick}: slow down ({FLOOD_CD}s cooldown)"); return
         if arg and len(arg) > self._MAX_ARG_LEN:
             self.notice(nick, f"{nick}: input too long (max {self._MAX_ARG_LEN} chars)."); return
-        active = sum(1 for t in self._tasks if not t.done() and (t.get_name() or "").startswith("cmd-"))
-        if active >= self._MAX_TASKS:
+        # O(1) cap check via counter instead of O(n) scan over self._tasks.
+        # Kept _MAX_TASKS reference for the existing test (BUG-030 inspects
+        # the dispatch source for the constant name).
+        if self._active_cmd_tasks >= self._MAX_TASKS:
+            _LOG_DISPATCH.warning(
+                "event=dispatch_rejected reason=at_capacity active=%d cap=%d nick=%s cmd=%s",
+                self._active_cmd_tasks, self._MAX_TASKS, nick, cmd)
             self.notice(nick, f"{nick}: bot is busy — try again shortly."); return
         handler = None
         if cmd in self._CORE:
@@ -368,16 +487,26 @@ class IRCBot(AdminCommandsMixin):
             if inst and entry:
                 handler = getattr(inst, entry[1])
         if handler and self._loop:
+            self._active_cmd_tasks += 1
             task = self._loop.create_task(
                 self._run_cmd(handler, nick, reply_to, arg, cmd), name=f"cmd-{cmd}")
             self._tasks.append(task)
-            task.add_done_callback(lambda t: t in self._tasks and self._tasks.remove(t))
+            def _on_done(t: asyncio.Task, _self=self) -> None:
+                _self._active_cmd_tasks = max(0, _self._active_cmd_tasks - 1)
+                if t in _self._tasks:
+                    _self._tasks.remove(t)
+            task.add_done_callback(_on_done)
 
     async def _run_cmd(self, handler: Any, nick: str, reply_to: str,
                        arg: str | None, cmd: str) -> None:
         try:
             await handler(nick, reply_to, arg)
+        except asyncio.CancelledError:
+            # Propagate cancellation cleanly during shutdown — don't notify.
+            self._metrics["command_timeouts"] += 1
+            raise
         except Exception as e:
+            self._metrics["unexpected_errors"] += 1
             log.error(f"Command {cmd!r} from {nick} crashed: {e}", exc_info=True)
             self.notice(nick, f"{nick}: internal error processing '{cmd}' — see log for details.")
 
@@ -386,8 +515,9 @@ class IRCBot(AdminCommandsMixin):
     async def _connect(self) -> None:
         use_ssl = cfg["irc"].getboolean("ssl", fallback=True)
         verify  = cfg["irc"].getboolean("ssl_verify", fallback=True)
-        log.info(f"Connecting {SERVER}:{PORT} ({'SSL' if use_ssl else 'plain'}"
-                 f"{', no verify' if use_ssl and not verify else ''})")
+        _LOG_CONN.info(
+            "event=connect_begin host=%s port=%d ssl=%s verify=%s",
+            SERVER, PORT, use_ssl, verify if use_ssl else "n/a")
         ssl_ctx: ssl.SSLContext | None = None
         if use_ssl:
             ssl_ctx = ssl.create_default_context()
@@ -395,19 +525,34 @@ class IRCBot(AdminCommandsMixin):
             if not verify:
                 ssl_ctx.check_hostname = False
                 ssl_ctx.verify_mode = ssl.CERT_NONE
-        self._reader, self._writer = await asyncio.open_connection(SERVER, PORT, ssl=ssl_ctx, limit=8192)
+                # Cert verification is off — emit a loud warning per
+                # reconnect so this never silently regresses in a
+                # production deployment.  Configured intentionally for
+                # self-signed networks like ChatNPlay, but worth
+                # surfacing every time we connect.
+                log.warning(
+                    "event=tls_unverified host=%s port=%d — ssl_verify=false "
+                    "in config: TLS hostname + certificate verification "
+                    "are DISABLED for this connection. Acceptable only for "
+                    "trusted networks with self-signed certs.",
+                    SERVER, PORT)
+        # Note: 8192 must remain as a literal here too — test BUG-042 inspects
+        # the source for ``limit=8192``.  _READ_LIMIT documents the value.
+        self._reader, self._writer = await asyncio.open_connection(
+            SERVER, PORT, ssl=ssl_ctx, limit=8192)
         self._nick = NICKNAME
         self._cap_busy = self._sasl_in_progress = self._ns_identified = False
         self._caps = set(); self._chanops = {}
         if self._sender: await self._sender.stop()
         self._sender = Sender(self._loop)
         self._sender.start(self._writer)
+        _LOG_CONN.info("event=connect_ok host=%s port=%d", SERVER, PORT)
 
     # ── Background tasks / channel state ─────────────────────────────
 
     async def _keepalive(self) -> None:
         while True:
-            await asyncio.sleep(90)
+            await asyncio.sleep(self._PING_INTERVAL)
             self.send(f"PING :{SERVER}", priority=0)
 
     _INVITE_COOLDOWN = 5.0
@@ -436,13 +581,14 @@ class IRCBot(AdminCommandsMixin):
 
     async def _deferred_rejoin(self) -> None:
         if NS_PW:
-            for _ in range(40):
+            for _ in range(self._NICKSERV_WAIT_TICKS):
                 if self._ns_identified: break
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(self._NICKSERV_TICK)
+            total_wait = self._NICKSERV_WAIT_TICKS * self._NICKSERV_TICK
             if self._ns_identified:
-                log.info("NickServ confirmed — rejoining channels.")
+                log.info("event=rejoin nickserv=confirmed")
             else:
-                log.warning("NickServ did not confirm within 10s — rejoining anyway.")
+                log.warning("event=rejoin nickserv=timeout wait=%.1fs", total_wait)
         saved = self._store.channels_load()
         if not saved:
             log.info("No saved channels — waiting for INVITE."); return
@@ -456,6 +602,8 @@ class IRCBot(AdminCommandsMixin):
     def _process(self, line: str) -> None:
         if line.startswith("PING"):
             payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
+            # Test BUG-050 inspects the source for the literal [:400] slice —
+            # keep it; _MAX_PONG_LEN documents the value for humans.
             self.send(f"PONG :{payload[:400]}", priority=0); return
         line = strip_tags(line)
         with self._mod_lock: snapshot = list(self._modules.values())
@@ -488,13 +636,29 @@ class IRCBot(AdminCommandsMixin):
                 if new: self.send(f"CAP REQ :{' '.join(sorted(new))}", priority=0)
             return True
         if line == "AUTHENTICATE +" and self._sasl_in_progress:
-            self.send(f"AUTHENTICATE {sasl_plain_payload(NICKNAME, NS_PW)}", priority=0); return True
+            # BUG FIX: previously sent the startup NICKNAME constant; must use
+            # the runtime nick (which may have been bumped via 433 collision
+            # handling) so SASL authenticates the actual session identity.
+            self.send(f"AUTHENTICATE {sasl_plain_payload(self._nick, NS_PW)}", priority=0)
+            _LOG_SASL.debug("event=sasl_authenticate nick=%s", self._nick)
+            return True
         if self._RE_903.match(line):
             self._sasl_in_progress = False; self._ns_identified = True
-            log.info("SASL authentication successful"); self.send("CAP END", priority=0); self._cap_busy = False; return True
+            _LOG_SASL.info("event=sasl_success nick=%s", self._nick)
+            self.send("CAP END", priority=0); self._cap_busy = False; return True
         if self._RE_SASL_FAIL.match(line):
             self._sasl_in_progress = False
-            log.warning("SASL authentication failed — will fall back to NickServ IDENTIFY")
+            self._metrics["sasl_failures"] += 1
+            # 904 (FAILED) and 905 (TOO_LONG) are credential-level failures —
+            # retrying won't help.  902 (DESTROYED) is transient.  We continue
+            # to CAP END either way so the connection completes; the operator
+            # will see the warning in logs.  Mark permanently failed for
+            # 904/905 so the reconnect loop can short-circuit if there's no
+            # IDENTIFY fallback configured.
+            if " 904 " in line or " 905 " in line:
+                self._sasl_failed_permanently = True
+            _LOG_SASL.warning("event=sasl_failure nick=%s permanent=%s line=%r — falling back to NickServ IDENTIFY",
+                              self._nick, self._sasl_failed_permanently, line)
             self.send("CAP END", priority=0); self._cap_busy = False; return True
         if self._RE_421_CAP.match(line):
             if self._cap_busy: self._cap_busy = False; log.info("Server has no CAP support")
@@ -560,7 +724,23 @@ class IRCBot(AdminCommandsMixin):
     def _handle_membership(self, line: str) -> bool:
         m = self._RE_CHGHOST.match(line)
         if m: self._store.user_rename(m.group(1), m.group(1), f"{m.group(2)}@{m.group(3)}"); return True
-        if self._RE_ACCOUNT.match(line): return True
+        m = self._RE_ACCOUNT.match(line)
+        if m:
+            # IRCv3 account-notify: ":nick!user@host ACCOUNT <accountname>"
+            # An account of "*" means the user logged out.  We don't persist
+            # account names in the store today, but we do log them for audit
+            # and refresh the cached hostmask so admin auth (which is keyed
+            # on hostmask) stays accurate across rename/account events.
+            acct_nick, account = m.group(1), m.group(2)
+            _LOG_DISPATCH.info("event=account_change nick=%s account=%s",
+                               acct_nick, account)
+            # Touch the user record so we keep an up-to-date last_seen even
+            # if no PRIVMSG/JOIN follows.  user_rename(old, old, hostmask)
+            # is the existing way to refresh metadata in-place.
+            cached_hm = self._nick_hosts.get(acct_nick.lower())
+            if cached_hm:
+                self._store.user_rename(acct_nick, acct_nick, cached_hm)
+            return True
         m = self._RE_INVITE.match(line)
         if m: self._on_invite(m.group(1), m.group(2)); return True
         m = self._RE_JOIN.match(line)
@@ -641,18 +821,50 @@ class IRCBot(AdminCommandsMixin):
     async def run(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._stop = asyncio.Event()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try: self._loop.add_signal_handler(sig, lambda s=sig: self._on_signal(s))
-            except NotImplementedError: pass
+        # ── Signal handlers (POSIX only; Windows has no add_signal_handler) ─
+        # SIGINT, SIGTERM → graceful shutdown
+        # SIGHUP          → rehash (reload config) without dropping the link
+        if os.name != "nt":
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    self._loop.add_signal_handler(sig, lambda s=sig: self._on_signal(s))
+                except (NotImplementedError, RuntimeError) as e:
+                    _LOG_SIGNAL.warning("event=signal_setup_failed sig=%s err=%s", sig, e)
+            try:
+                self._loop.add_signal_handler(signal.SIGHUP, self._on_sighup)
+                _LOG_SIGNAL.info("event=signal_handlers_installed sigs=SIGINT,SIGTERM,SIGHUP")
+            except (NotImplementedError, RuntimeError, AttributeError) as e:
+                _LOG_SIGNAL.debug("event=sighup_setup_skipped err=%s", e)
+        else:
+            # On Windows the event-loop signal API is not supported; rely on
+            # KeyboardInterrupt + the console task for shutdown.
+            _LOG_SIGNAL.info("event=signal_handlers_skipped platform=windows")
+
         self.autoload_modules()
-        log.info(f"Desired caps: {', '.join(sorted(DESIRED_CAPS))}")
+        log.info("event=caps_requested caps=%s", ",".join(sorted(DESIRED_CAPS)))
+
+        # ── Initial connect with bounded backoff ────────────────────────
         attempt = 0
-        while True:
-            try: await self._connect(); break
+        while not self._stop.is_set():
+            try:
+                await self._connect()
+                break
             except Exception as e:
-                delay = _backoff(attempt)
-                log.error(f"Connect failed: {e} — retry in {delay:.0f}s")
-                await asyncio.sleep(delay); attempt += 1
+                delay = _backoff_jittered(attempt)
+                _LOG_CONN.error(
+                    "event=connect_failed attempt=%d delay=%.1fs err=%s",
+                    attempt, delay, e)
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                    # _stop was set → break out without retrying.
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                attempt += 1
+        if self._stop.is_set():
+            await self.graceful_shutdown()
+            return
+
         identified = registered = False
         while not self._stop.is_set():
             try:
@@ -662,10 +874,17 @@ class IRCBot(AdminCommandsMixin):
                     self.send(f"NICK {self._nick}", priority=0)
                     self.send(f"USER {NICKNAME} 0 * :{REALNAME}", priority=0)
                     registered = True
-                try: raw = await asyncio.wait_for(self._reader.readline(), timeout=300)
-                except asyncio.TimeoutError: raise ConnectionResetError("Read timeout (300s)")
+                try:
+                    raw = await asyncio.wait_for(
+                        self._reader.readline(), timeout=self._READ_TIMEOUT)
+                except asyncio.TimeoutError:
+                    raise ConnectionResetError(
+                        f"Read timeout ({self._READ_TIMEOUT}s)")
                 except asyncio.LimitOverrunError:
-                    log.warning("Oversized IRC line (>8KB) — discarding")
+                    self._metrics["oversized_lines"] += 1
+                    _LOG_CONN.warning(
+                        "event=oversized_line limit=%d action=discard",
+                        self._READ_LIMIT)
                     try: await self._reader.readuntil(b"\n")
                     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError): pass
                     continue
@@ -688,56 +907,185 @@ class IRCBot(AdminCommandsMixin):
                     identified = True
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError, OSError) as e:
                 if self._stop.is_set(): break
+                self._metrics["reconnects"] += 1
+                # Distinguish transient (most OSErrors, RST, SSL renegotiation,
+                # DNS) from likely-permanent (auth-related) failures.  SASL
+                # hard-fail above already incremented sasl_failures; if that
+                # was the cause and there's no NickServ password to fall back
+                # on, retrying won't help.
+                permanent = (self._sasl_failed_permanently
+                             and self._metrics["sasl_failures"] >= 3
+                             and not NS_PW)
+                # Tear down current connection state.
                 for task in self._tasks: task.cancel()
                 self._tasks.clear()
                 if self._sender: await self._sender.stop()
                 with self._auth_lock:
-                    if self._authed: log.info(f"Cleared {len(self._authed)} admin session(s)."); self._authed.clear()
-                self._nick_hosts.clear(); identified = registered = False
+                    if self._authed:
+                        _LOG_CONN.info("event=auth_sessions_cleared count=%d",
+                                       len(self._authed))
+                        self._authed.clear()
+                self._nick_hosts.clear()
+                identified = registered = False
+                if permanent:
+                    _LOG_CONN.critical(
+                        "event=reconnect_aborted reason=auth_failed err=%s", e)
+                    break
                 attempt = 0
                 while not self._stop.is_set():
-                    delay = _backoff(attempt)
-                    log.warning(f"Lost connection: {e} — reconnect in {delay:.0f}s")
-                    await asyncio.sleep(delay)
-                    try: await self._connect(); break
-                    except Exception as ce: log.error(f"Reconnect failed: {ce}"); attempt += 1
-            except asyncio.CancelledError: break
+                    delay = _backoff_jittered(attempt)
+                    _LOG_CONN.warning(
+                        "event=connection_lost attempt=%d delay=%.1fs err=%s",
+                        attempt, delay, e)
+                    try:
+                        await asyncio.wait_for(self._stop.wait(), timeout=delay)
+                        break  # _stop was set → abandon reconnect
+                    except asyncio.TimeoutError:
+                        pass
+                    try:
+                        await self._connect()
+                        break
+                    except Exception as ce:
+                        _LOG_CONN.error(
+                            "event=reconnect_failed attempt=%d err=%s",
+                            attempt, ce)
+                        attempt += 1
+            except asyncio.CancelledError:
+                # Cooperative shutdown — main loop cancelled (e.g. by the
+                # console task finishing).  Don't swallow further; exit loop.
+                break
             except Exception as e:
-                log.error(f"Unexpected error in main loop: {e}", exc_info=True)
-                await asyncio.sleep(5)
+                self._metrics["unexpected_errors"] += 1
+                log.error("event=mainloop_unexpected err=%s", e, exc_info=True)
+                try:
+                    await asyncio.wait_for(self._stop.wait(),
+                                           timeout=self._UNEXPECTED_SLEEP_S)
+                    break
+                except asyncio.TimeoutError:
+                    pass
         await self.graceful_shutdown()
 
     def _on_signal(self, signum: int) -> None:
-        log.info(f"Received signal {signum}, shutting down.")
-        self._quit_msg = "QUIT :Caught signal, shutting down"
-        if self._stop: self._stop.set()
+        """SIGINT / SIGTERM handler.  Idempotent: a second signal is logged
+        but does not re-trigger shutdown (which is already in flight)."""
+        try:
+            name = signal.Signals(signum).name
+        except (ValueError, AttributeError):
+            name = str(signum)
+        if self._shutdown_initiated:
+            _LOG_SIGNAL.warning(
+                "event=signal_repeat sig=%s ignored=true shutdown_already_in_flight",
+                name)
+            return
+        _LOG_SIGNAL.info("event=signal_received sig=%s action=shutdown", name)
+        self.request_shutdown(f"Caught {name}, shutting down")
+
+    def _on_sighup(self) -> None:
+        """SIGHUP: rehash config from disk without dropping the connection."""
+        _LOG_SIGNAL.info("event=signal_received sig=SIGHUP action=rehash")
+        try:
+            cfg.read(CONFIG_PATH)
+            _LOG_SIGNAL.info("event=rehash_ok path=%s", CONFIG_PATH)
+        except Exception as e:
+            _LOG_SIGNAL.error("event=rehash_failed err=%s", e)
+            return
+        # Clear admin sessions: secrets may have changed.
+        with self._auth_lock:
+            n = len(self._authed)
+            self._authed.clear()
+        if n:
+            _LOG_SIGNAL.info("event=rehash_sessions_cleared count=%d", n)
 
 
 # ── Entry point ──────────────────────────────────────────────────────
 
-async def _main() -> None:
+async def _main(lock: ProcessLock | None = None) -> None:
     bot = IRCBot()
     tasks: list[asyncio.Task] = []
+    bot_task: asyncio.Task | None = None
     if not cli_args.no_console and sys.stdin.isatty():
         tasks.append(asyncio.create_task(run_console(bot), name="console"))
         log.info("Interactive console enabled (type 'help' for commands)")
-    tasks.append(asyncio.create_task(bot.run(), name="bot"))
+    bot_task = asyncio.create_task(bot.run(), name="bot")
+    tasks.append(bot_task)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    # If the bot task is still running (e.g. the console exited first), ask
+    # it to shut down cleanly so the sender drains and the store flushes.
+    # Cancelling the bot task directly would skip graceful_shutdown().
+    if bot_task in pending:
+        bot.request_shutdown("Console exited")
+        try:
+            await asyncio.wait_for(bot_task, timeout=10.0)
+        except asyncio.TimeoutError:
+            log.warning("event=bot_shutdown_timeout action=cancel")
+            bot_task.cancel()
+            try: await bot_task
+            except (asyncio.CancelledError, Exception): pass
+        pending.discard(bot_task)
+    # Cancel any other still-pending tasks (e.g. the console).
     for task in pending:
         task.cancel()
         try: await task
-        except asyncio.CancelledError: pass
+        except (asyncio.CancelledError, Exception): pass
+    # Final logging-handler flush before potential execv().
+    for h in logging.getLogger("internets").handlers:
+        try: h.flush()
+        except Exception: pass
     if bot._restart_flag:
-        log.info("Executing restart ...")
+        log.info("event=restart_exec argv=%s", sys.argv)
+        # Close all logging file handlers before exec to ensure clean log
+        # rotation across the restart.
+        for h in logging.getLogger("internets").handlers:
+            try: h.close()
+            except Exception: pass
+        # Release the process lock before execv replaces the process image —
+        # otherwise the lockfile (containing OUR PID, which is preserved
+        # across execv) would still be on disk when the new image starts,
+        # and stale-detection would see the PID as live and refuse to
+        # acquire.  On the Windows subprocess path the parent will exit
+        # cleanly and __exit__ on the lock would run anyway, but we
+        # release here too for symmetry.
+        if lock is not None:
+            try: lock.release()
+            except Exception as e:
+                log.warning("event=restart_lock_release_failed err=%r", e)
         if os.name == "nt":
-            import subprocess; subprocess.Popen([sys.executable] + sys.argv); sys.exit(0)
-        else: os.execv(sys.executable, [sys.executable] + sys.argv)
+            import subprocess
+            subprocess.Popen([sys.executable] + sys.argv)
+            sys.exit(0)
+        else:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def _entry() -> None:
-    """Entry point for ``pip install`` console script."""
-    try: asyncio.run(_main())
-    except KeyboardInterrupt: pass
+    """Entry point for ``pip install`` console script.
+
+    KeyboardInterrupt is caught here only after the event loop has had a
+    chance to react — by that point ``_on_signal`` should have already
+    requested a clean shutdown.  We deliberately do NOT bury other
+    exceptions: a bare ``except:`` here would hide real bugs.
+
+    A :class:`ProcessLock` is acquired around the event loop to prevent
+    two bot instances from running simultaneously and silently corrupting
+    the JSON state files (locations / channels / users / secrets).  The
+    lock is passed into ``_main`` so it can be released explicitly before
+    ``os.execv()`` on the restart path; otherwise the lockfile (which
+    records OUR PID, preserved across execv) would block the new image
+    from re-acquiring.
+    """
+    lock_path = Path("./internets.pid").resolve()
+    try:
+        with ProcessLock(lock_path) as lock:
+            try:
+                asyncio.run(_main(lock))
+            except KeyboardInterrupt:
+                # Signal handler ran (or we're on Windows).  Exit non-zero so
+                # supervisors notice — but do not print a traceback.
+                log.info("event=keyboard_interrupt")
+                sys.exit(130)  # 128 + SIGINT
+    except LockHeld as e:
+        log.critical(f"Another bot instance is already running: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

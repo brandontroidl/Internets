@@ -1,8 +1,10 @@
 """Pirate Weather — minutely precipitation nowcast (next 60 min)."""
 from __future__ import annotations
 from datetime import datetime
-from .._http import get_json
 from ..base import NowcastResult, NowcastEntry
+# fix: key embedded in URL path leaks into HTTPError messages — use
+# safe_get_json wrapper which redacts the key before re-raising.
+from ._codes import safe_get_json
 
 _BASE = "https://api.pirateweather.net/forecast"
 
@@ -13,7 +15,7 @@ def _intensity(mm: float | None) -> str:
     return "heavy"
 
 async def fetch(key: str, lat: float, lon: float, location: str) -> NowcastResult:
-    data = await get_json(f"{_BASE}/{key}/{lat},{lon}",
+    data = await safe_get_json(f"{_BASE}/{key}/{lat},{lon}", key,
                           params={"units": "si", "exclude": "hourly,daily,alerts"})
     minutely = data.get("minutely", {})
     summary = minutely.get("summary", "")

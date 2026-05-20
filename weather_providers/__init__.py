@@ -38,7 +38,9 @@ Providers, ranked by scientific accuracy (see _dispatch.DEFAULT_RELIABILITY):
 from __future__ import annotations
 
 import logging
+import threading
 from configparser import ConfigParser
+from datetime import datetime, timezone
 from typing import Any
 
 from .base import (
@@ -48,7 +50,8 @@ from .base import (
     NowcastResult, NowcastEntry, aqi_category,
 )
 from ._dispatch import Dispatcher, CAPABILITY_METHODS
-from ._health import health_registry
+from ._health import health_registry, format_health_score
+from ._http import HTTPError, ResponseTooLargeError
 
 # Lazy imports — provider packages are imported only when needed.
 _PROVIDER_FACTORIES: dict[str, Any] = {}
@@ -75,15 +78,131 @@ __all__ = [
     "HourlyResult", "HourlyEntry", "AlertsResult", "AlertEntry",
     "AirQualityResult", "AstronomyResult", "HistoricalResult", "MarineResult",
     "NowcastResult", "NowcastEntry", "aqi_category",
-    "configure", "get_providers", "get_weather", "get_forecast",
+    "configure", "get_providers", "provider_capabilities", "provider_status",
+    "get_weather", "get_forecast",
     "get_hourly", "get_alerts", "get_air_quality",
     "get_astronomy", "get_historical", "get_marine", "get_nowcast",
-    "dispatcher",
+    "dispatcher", "HTTPError", "ResponseTooLargeError",
+    "format_health_score",
+    "record_call", "quota_status",
 ]
 
 log = logging.getLogger("internets.weather.providers")
 
 _MAX_FORECAST_DAYS = 16
+
+
+# ── Per-provider quota tracking ───────────────────────────────────────
+# Operators care about staying under each upstream's free-tier ceiling.
+# We track a *daily* counter per provider (resets at UTC midnight) and
+# compare it to a per-provider limit.  Limits are best-effort — most
+# vendors publish monthly or per-minute caps that don't translate
+# directly to a "calls today" number, so the dispatcher just uses
+# these for visibility, not enforcement.
+#
+# ``quota`` is module-level so it's visible to anything that imports
+# the package.  Mutations are serialised under ``_quota_lock``.
+#
+# Schema:
+#   quota = {
+#       "openweathermap": {"day": "2026-05-19", "count": 17, "limit": 1000},
+#       ...
+#   }
+#
+# Default limits (per-day, in calls):
+#   - WeatherAPI:        1_000_000  (1M/mo free tier ≈ 33k/day, we use 1M/mo)
+#   - OpenWeatherMap:    60_000     (60/min free tier × 60min × 24h, capped)
+#   - Tomorrow.io:       500        (500/day free tier)
+#   - WeatherBit:        50         (50/day free tier)
+#   - Visual Crossing:   1_000      (1000/day free tier)
+#   - WeatherStack:      1_000      (1000/mo ≈ 33/day — use monthly value)
+#   - AccuWeather:       50         (50/day free tier)
+#   - World Weather Online: 500     (500/day free)
+#   - Pirate Weather:    10_000     (10k/mo free tier)
+#   - Stormglass:        10         (10/day free tier)
+#   - NWS / Open-Meteo / Meteomatics / WeatherKit: None (free, no published cap)
+_DEFAULT_QUOTA_LIMITS: dict[str, int | None] = {
+    "weatherapi":           1_000_000,
+    "openweathermap":       60_000,
+    "tomorrowio":           500,
+    "weatherbit":           50,
+    "visualcrossing":       1_000,
+    "weatherstack":         1_000,
+    "accuweather":          50,
+    "worldweatheronline":   500,
+    "pirateweather":        10_000,
+    "stormglass":           10,
+    "nws":                  None,
+    "openmeteo":            None,
+    "meteomatics":          None,
+    "weatherkit":           None,
+}
+
+# Public module-level dict — operators / status pages can read this
+# directly if they prefer not to round-trip through quota_status().
+quota: dict[str, dict[str, Any]] = {}
+_quota_lock = threading.Lock()
+
+
+def _today_utc() -> str:
+    """Current UTC date as ``YYYY-MM-DD``."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _quota_entry_locked(provider_id: str) -> dict[str, Any]:
+    """Return the quota entry for *provider_id*, creating / rolling it
+    if needed.  Caller must hold ``_quota_lock``.
+    """
+    today = _today_utc()
+    entry = quota.get(provider_id)
+    if entry is None or entry.get("day") != today:
+        entry = {
+            "day": today,
+            "count": 0,
+            "limit": _DEFAULT_QUOTA_LIMITS.get(provider_id),
+        }
+        quota[provider_id] = entry
+    return entry
+
+
+def record_call(provider_id: str) -> None:
+    """Increment today's quota counter for *provider_id*.
+
+    NOTE: This is **not** called from the dispatcher automatically —
+    callers (e.g. the dispatch agent's wiring) must invoke it once per
+    upstream request.  Resets at midnight UTC.
+    """
+    if not provider_id:
+        return
+    with _quota_lock:
+        entry = _quota_entry_locked(provider_id)
+        entry["count"] = int(entry.get("count", 0)) + 1
+
+
+def quota_status(provider_id: str) -> dict[str, Any]:
+    """Return current quota usage for *provider_id*.
+
+    Returns a dict with::
+
+        {
+            "used":      int   — calls made today (UTC)
+            "limit":     int|None — daily cap (None = no published limit)
+            "remaining": int|None — limit - used, None when limit is None
+            "pct":       float — used / limit * 100 (0.0 when limit is None)
+        }
+    """
+    with _quota_lock:
+        entry = _quota_entry_locked(provider_id)
+        used = int(entry.get("count", 0))
+        limit = entry.get("limit")
+    if isinstance(limit, int) and limit > 0:
+        remaining = max(0, limit - used)
+        pct = (used / limit) * 100.0
+    else:
+        limit = None
+        remaining = None
+        pct = 0.0
+    return {"used": used, "limit": limit, "remaining": remaining, "pct": pct}
 
 # ── Provider factories ────────────────────────────────────────────────
 
@@ -272,8 +391,10 @@ def get_providers() -> list[str]:
 
 def provider_capabilities(provider_id: str) -> set[str]:
     """Return the capability set for an active provider, or empty set."""
-    rp = dispatcher._providers.get(provider_id)
-    return set(rp.capabilities) if rp else set()
+    return {
+        cap for cap, pids in dispatcher.capabilities().items()
+        if provider_id in pids
+    }
 
 
 def provider_status() -> list[dict]:
@@ -289,6 +410,7 @@ def provider_status() -> list[dict]:
             "fails":        int (recent failure count),
             "success_rate": float (EMA, 0.0–1.0),
             "health_score": float (0.0–1.0),
+            "quota":        dict (see quota_status() — used/limit/remaining/pct),
         }
 
     ``state`` decoder:
@@ -306,6 +428,7 @@ def provider_status() -> list[dict]:
                 "id": pid, "registered": False, "state": "unconfigured",
                 "calls": 0, "fails": 0,
                 "success_rate": 0.0, "health_score": 0.0,
+                "quota": quota_status(pid),
             })
             continue
         h = health_registry.get(pid)
@@ -319,40 +442,89 @@ def provider_status() -> list[dict]:
             "id": pid, "registered": True, "state": state,
             "calls": h.total_calls, "fails": h.total_failures,
             "success_rate": h.success_rate, "health_score": h.health_score,
+            "quota": quota_status(pid),
         })
     return result
 
 
 # ── Public dispatch functions ─────────────────────────────────────────
-# All accept an optional ``force_provider=<id>`` kwarg (consumed by the
-# dispatcher) to restrict the chain to a single provider — used by the
-# user-facing `-p <name>` flag in modules/weather.py.
+# All accept ``force_provider=<id>`` (e.g. "nws") to pin the dispatch
+# chain to a single provider, bypassing the accuracy/health ordering.
+# That kwarg is used by the user-facing `-p <name>` flag in
+# modules/weather.py — passing None (the default) restores normal
+# fallback behaviour.  Extra keyword arguments are forwarded to the
+# selected provider's method untouched.
 
-async def get_weather(lat, lon, location, **kw) -> WeatherResult | None:
-    return await dispatcher.dispatch("current", lat, lon, location, **kw)
+def _force_kw(force_provider: str | None, kw: dict) -> dict:
+    if force_provider is not None:
+        kw["force_provider"] = force_provider
+    return kw
 
-async def get_forecast(lat, lon, location, days=4, **kw) -> WeatherResult | None:
+async def get_weather(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> WeatherResult | None:
+    """Current conditions.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "current", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_forecast(
+    lat, lon, location, days=4, *, force_provider: str | None = None, **kw,
+) -> WeatherResult | None:
+    """Multi-day forecast.  ``force_provider`` pins one provider."""
     days = max(1, min(days, _MAX_FORECAST_DAYS))
-    return await dispatcher.dispatch("forecast", lat, lon, location, days=days, **kw)
+    return await dispatcher.dispatch(
+        "forecast", lat, lon, location, days=days,
+        **_force_kw(force_provider, kw))
 
-async def get_hourly(lat, lon, location, hours=12, **kw) -> HourlyResult | None:
+async def get_hourly(
+    lat, lon, location, hours=12, *, force_provider: str | None = None, **kw,
+) -> HourlyResult | None:
+    """Hourly forecast (≤48 h).  ``force_provider`` pins one provider."""
     hours = max(1, min(hours, 48))
-    return await dispatcher.dispatch("hourly", lat, lon, location, hours=hours, **kw)
+    return await dispatcher.dispatch(
+        "hourly", lat, lon, location, hours=hours,
+        **_force_kw(force_provider, kw))
 
-async def get_alerts(lat, lon, location, **kw) -> AlertsResult | None:
-    return await dispatcher.dispatch("alerts", lat, lon, location, **kw)
+async def get_alerts(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> AlertsResult | None:
+    """Active weather alerts.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "alerts", lat, lon, location, **_force_kw(force_provider, kw))
 
-async def get_air_quality(lat, lon, location, **kw) -> AirQualityResult | None:
-    return await dispatcher.dispatch("air_quality", lat, lon, location, **kw)
+async def get_air_quality(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> AirQualityResult | None:
+    """Air-quality / pollutants.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "air_quality", lat, lon, location, **_force_kw(force_provider, kw))
 
-async def get_astronomy(lat, lon, location, **kw) -> AstronomyResult | None:
-    return await dispatcher.dispatch("astronomy", lat, lon, location, **kw)
+async def get_astronomy(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> AstronomyResult | None:
+    """Sun/moon ephemeris.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "astronomy", lat, lon, location, **_force_kw(force_provider, kw))
 
-async def get_historical(lat, lon, location, target_date="", **kw) -> HistoricalResult | None:
-    return await dispatcher.dispatch("historical", lat, lon, location, target_date=target_date, **kw)
+async def get_historical(
+    lat, lon, location, target_date="", *,
+    force_provider: str | None = None, **kw,
+) -> HistoricalResult | None:
+    """Historical weather for ``target_date``.  ``force_provider`` pins one."""
+    return await dispatcher.dispatch(
+        "historical", lat, lon, location, target_date=target_date,
+        **_force_kw(force_provider, kw))
 
-async def get_marine(lat, lon, location, **kw) -> MarineResult | None:
-    return await dispatcher.dispatch("marine", lat, lon, location, **kw)
+async def get_marine(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> MarineResult | None:
+    """Marine / wave conditions.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "marine", lat, lon, location, **_force_kw(force_provider, kw))
 
-async def get_nowcast(lat, lon, location, **kw) -> NowcastResult | None:
-    return await dispatcher.dispatch("nowcast", lat, lon, location, **kw)
+async def get_nowcast(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> NowcastResult | None:
+    """Short-range precipitation nowcast.  ``force_provider`` pins one."""
+    return await dispatcher.dispatch(
+        "nowcast", lat, lon, location, **_force_kw(force_provider, kw))

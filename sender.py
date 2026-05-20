@@ -56,11 +56,46 @@ class Sender:
             self._task = None
 
     def _safe_put(self, item: tuple[int, int, str]) -> None:
-        """Put an item on the queue, dropping if full.  Runs in event loop thread."""
+        """Put an item on the queue, dropping if full.  Runs in event loop thread.
+
+        Priority-0 traffic (PONG/CAP/NICK/QUIT) MUST NOT be dropped on
+        overflow: losing a PONG causes a server ping-timeout disconnect,
+        which produces a reconnect storm worse than the original overflow.
+        On a full queue we evict a low-priority message from the *tail*
+        before inserting the priority-0 item, so the bot stays connected
+        even when chatty modules saturate the queue.
+        """
+        priority = item[0]
         try:
             self._q.put_nowait(item)
         except asyncio.QueueFull:
-            log.warning("Send queue full — dropping message")
+            if priority == 0:
+                # Evict the lowest-priority/highest-seq slot to guarantee
+                # protocol traffic enqueues.  PriorityQueue exposes its
+                # heap as ._queue — using it is acceptable here because
+                # the alternative is dropping a PONG.
+                try:
+                    heap = self._q._queue  # type: ignore[attr-defined]
+                    if heap:
+                        # Find the worst (largest pri/seq) entry and evict it.
+                        worst_idx = max(range(len(heap)), key=lambda i: heap[i])
+                        evicted = heap.pop(worst_idx)
+                        # Heap invariant has to be restored after a pop()
+                        # from an arbitrary index.
+                        import heapq
+                        heapq.heapify(heap)
+                        log.warning(
+                            f"Send queue full — evicted pri={evicted[0]} "
+                            f"to make room for priority-0 traffic"
+                        )
+                        self._q.put_nowait(item)
+                        return
+                except Exception as e:  # pragma: no cover — defensive
+                    log.error(f"Failed to evict for priority-0: {e}")
+                # If eviction failed, log loudly — never silently drop pri-0.
+                log.error("Send queue full — UNABLE to enqueue priority-0 message")
+            else:
+                log.warning("Send queue full — dropping message")
 
     def enqueue(self, msg: str, priority: int = 1) -> None:
         """Thread-safe enqueue.  Safe to call from any thread."""
@@ -71,8 +106,38 @@ class Sender:
         self._loop.call_soon_threadsafe(self._safe_put, item)
 
     # Prefixes of outgoing IRC commands whose arguments contain secrets.
+    # Matched case-insensitively in ``_write_line`` so misconfigured callers
+    # using lowercase ("privmsg nickserv :identify ...") are also covered.
+    # Order matters only for log readability; matching is greedy on the
+    # first prefix that matches.
     _REDACT_OUT: tuple[str, ...] = (
-        "PASS ", "OPER ", "PRIVMSG NickServ :IDENTIFY ", "AUTHENTICATE ",
+        # Server password handshake.
+        "PASS ",
+        # OPER login (oper-name + password on the wire).
+        "OPER ",
+        # NickServ IDENTIFY in all the common spellings.  Cover both the
+        # PRIVMSG form and the IRCv3 short form "NS IDENTIFY ...", plus
+        # the "/ns identify" alias some clients emit verbatim, and
+        # NickServ REGISTER (which also carries a password).
+        "PRIVMSG NickServ :IDENTIFY ",
+        "PRIVMSG NICKSERV :IDENTIFY ",
+        "PRIVMSG NickServ :REGISTER ",
+        "PRIVMSG NICKSERV :REGISTER ",
+        "NICKSERV IDENTIFY ",
+        "NICKSERV REGISTER ",
+        "NS IDENTIFY ",
+        "NS REGISTER ",
+        # ChanServ IDENTIFY also carries a channel password.
+        "PRIVMSG ChanServ :IDENTIFY ",
+        "PRIVMSG CHANSERV :IDENTIFY ",
+        "CHANSERV IDENTIFY ",
+        "CS IDENTIFY ",
+        # Generic IDENT (older networks / Atheme aliases).
+        "IDENT ",
+        # SASL: AUTHENTICATE <base64-of-user\0user\0pass> for PLAIN, or
+        # the empty "AUTHENTICATE +" continuation — redact both.  Any
+        # non-prefix-stripped AUTHENTICATE payload is treated as secret.
+        "AUTHENTICATE ",
     )
 
     # Maximum IRC line length including \r\n (RFC 2812 §2.3).

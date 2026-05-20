@@ -3,7 +3,13 @@ https://openweathermap.org/api
 Free tier: 60 calls/min, current + 5-day/3-hour forecast.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AlertsResult, AlertEntry,
+    AirQualityResult, aqi_category,
+)
 from . import current, forecast, hourly, alerts, air_quality
 
 class OpenWeatherMapProvider:

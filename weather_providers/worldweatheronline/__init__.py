@@ -4,7 +4,14 @@ https://www.worldweatheronline.com/weather-api/
 Free tier: 500 calls/day.  Current, forecast, hourly, astronomy, historical, marine.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+    AstronomyResult,
+    HistoricalResult,
+    MarineResult,
+)
 from . import current, forecast, hourly, astronomy, historical, marine
 
 

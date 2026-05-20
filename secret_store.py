@@ -108,9 +108,19 @@ CONFIG_LOCATIONS: dict[str, tuple[str, str]] = {
 }
 
 # Placeholders that mean "not set" — never migrated, never returned.
+# All values matched case-insensitively (callers lowercase before lookup).
+# Common dummy strings shipped in example configs, plus the obvious "fill
+# me in" markers we've seen in the wild.
 _PLACEHOLDERS = frozenset({
-    "", "changeme", "your-key-here", "placeholder",
-    "set-via-secret-store", "<your-key>",
+    "", "changeme", "change-me", "change_me",
+    "your-key-here", "your_key_here", "your-key", "your_key", "<your-key>",
+    "your-token", "your_token", "<your-token>",
+    "your-api-key", "your_api_key", "<your-api-key>",
+    "your-password", "your_password", "<your-password>",
+    "placeholder", "set-via-secret-store", "set_via_secret_store",
+    "todo", "tbd", "xxx", "none", "null", "n/a", "na",
+    "example", "example-key", "demo", "test", "fixme",
+    "insert-key-here", "insertkeyhere",
 })
 
 
@@ -119,10 +129,21 @@ _PLACEHOLDERS = frozenset({
 def _keyring():
     """Import keyring lazily; return module or None."""
     try:
-        import keyring  # noqa: PLC0415
+        import keyring  # noqa: PLC0415  (intentional lazy import — optional dep)
         return keyring
     except ImportError:
         return None
+
+
+def _safe_exc(e: BaseException) -> str:
+    """Return ``ExceptionType`` without the message.
+
+    Exception messages from configparser / keyring / argon2 / bcrypt
+    occasionally echo back fragments of the offending value (e.g.
+    configparser includes the bad line, argon2 includes the hash in
+    some error paths).  We never want those in our logs.
+    """
+    return type(e).__name__
 
 
 def keyring_available() -> bool:
@@ -175,7 +196,9 @@ def get(name: str, default: str = "") -> str:
             if val:
                 return val
         except Exception as e:
-            log.debug("keyring lookup failed for %s: %s", name, e)
+            # NB: exception type only — keyring backends sometimes embed
+            # the entry value or path in str(e).
+            log.debug("keyring lookup failed for %s: %s", name, _safe_exc(e))
     # 3) secrets.ini
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)
@@ -190,7 +213,9 @@ def get(name: str, default: str = "") -> str:
                 if val and val.lower() not in _PLACEHOLDERS:
                     return val
         except configparser.Error as e:
-            log.warning("secrets.ini parse error: %s", e)
+            # configparser includes the offending line in its messages.
+            # That line may contain a partial secret — log type only.
+            log.warning("secrets.ini parse error: %s", _safe_exc(e))
     return default
 
 
@@ -385,7 +410,11 @@ def migrate(config_path: Path = Path("config.ini"),
             results[name] = f"stored:{used}"
             migrated.append(name)
         except Exception as e:
-            results[name] = f"error:{type(e).__name__}:{e}"
+            # Backend errors can include the offending value in str(e)
+            # (e.g. keyring backends quoting the entry).  Report the
+            # type only — operators can grep the log for full traceback
+            # by re-running with --backend file if needed.
+            results[name] = f"error:{_safe_exc(e)}"
     if scrub and migrated:
         _scrub_config_ini(cfg_path, migrated)
     return results
@@ -448,8 +477,19 @@ def _cmd_get(args: argparse.Namespace) -> int:
                     backend = "keyring"
             except Exception:
                 pass
-        if backend == "unknown" and SECRETS_FILE.exists():
-            backend = "file"
+        if backend == "unknown" and SECRETS_FILE.exists() and perms_ok(SECRETS_FILE)[0]:
+            # Confirm the value actually lives in the file before
+            # claiming it — avoids misreporting when the value was
+            # picked up via env/keyring but secrets.ini happens to exist.
+            parser = configparser.ConfigParser()
+            try:
+                parser.read(SECRETS_FILE)
+                if parser.has_option("secrets", args.name):
+                    v = parser.get("secrets", args.name).strip()
+                    if v and v.lower() not in _PLACEHOLDERS:
+                        backend = "file"
+            except configparser.Error:
+                pass
     print(f"(set, {len(val)} chars, backend={backend})")
     print("Use --reveal to print the actual value.", file=sys.stderr)
     return 0

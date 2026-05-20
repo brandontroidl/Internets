@@ -3,7 +3,11 @@ https://www.meteomatics.com/en/api/
 Free tier: limited, professional weather data.
 """
 from __future__ import annotations
-from ..base import *
+# fix: replaced "from ..base import *" with explicit imports for clarity
+from ..base import (
+    WeatherResult, ForecastDay,
+    HourlyResult, HourlyEntry,
+)
 from . import current, forecast, hourly
 
 class MeteomaticsProvider:

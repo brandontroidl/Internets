@@ -8,7 +8,15 @@ log = logging.getLogger("internets.location")
 
 
 class LocationModule(BotModule):
-    """User location registration and lookup."""
+    """User location registration and lookup.
+
+    Privacy note: every command in this module acts on the *invoker's
+    own* saved location (keyed by ``nick``).  There is no cross-user
+    access path here, so the per-user opt-out flag does not need to be
+    consulted; an opted-out user can still set/view/delete their own
+    location.  Cross-user lookups (e.g. ``.w -n othernick``) live in
+    modules/weather.py, where the opt-out check is enforced.
+    """
     COMMANDS: dict[str, str] = {
         "regloc":            "cmd_regloc",
         "register_location": "cmd_regloc",
