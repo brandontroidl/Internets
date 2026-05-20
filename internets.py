@@ -198,6 +198,12 @@ class IRCBot(AdminCommandsMixin):
         "reload": "cmd_reload", "reloadall": "cmd_reloadall",
         "restart": "cmd_restart", "rehash": "cmd_rehash",
         "mode": "cmd_mode", "snomask": "cmd_snomask", "raw": "cmd_raw",
+        "say": "cmd_say", "act": "cmd_act", "audit": "cmd_audit",
+        "uptime": "cmd_uptime", "nick": "cmd_nick", "stats": "cmd_stats",
+        "fingerprint": "cmd_fingerprint",
+        "shadow-ban":   "cmd_shadow_ban",
+        "shadow-unban": "cmd_shadow_unban",
+        "shadow-list":  "cmd_shadow_list",
         "shutdown": "cmd_shutdown", "die": "cmd_shutdown",
         "loglevel": "cmd_loglevel", "debug": "cmd_debug",
     }
@@ -230,6 +236,19 @@ class IRCBot(AdminCommandsMixin):
             user_max_age_days=int(cfg["bot"].get("user_max_age_days", "90")),
         )
         self._rate = RateLimiter(FLOOD_CD, API_CD)
+        # ── stats counters surfaced via .stats / .uptime ────────────
+        self._stats_boot_ts:    float        = time.time()
+        self._stats_connect_ts: float | None = None
+        self._stats_cmd_count:  int          = 0
+        self._stats_msg_in:     int          = 0
+        self._stats_msg_out:    int          = 0
+        # ── shadow-ban set: nicks whose traffic is silently dropped ─
+        # Loaded from shadow_bans.json (0600).  Keys lowercased.
+        self._shadow_bans:          set[str]      = set()
+        self._shadow_ban_reasons:   dict[str, str] = {}
+        self._shadow_bans_file:     str = cfg["bot"].get("shadow_bans_file",
+                                                         "shadow_bans.json")
+        self._load_shadow_bans()
         self._loop:    asyncio.AbstractEventLoop | None = None
         self._sender:  Sender | None = None
         self._reader:  asyncio.StreamReader | None = None
@@ -261,7 +280,9 @@ class IRCBot(AdminCommandsMixin):
     # ── Outbound messaging ───────────────────────────────────────────
 
     def send(self, msg: str, priority: int = 1) -> None:
-        if self._sender: self._sender.enqueue(msg, priority)
+        if self._sender:
+            self._sender.enqueue(msg, priority)
+            self._stats_msg_out += 1
 
     def privmsg(self, target: str, msg: str) -> None:
         if " " in target or not target:
@@ -331,6 +352,61 @@ class IRCBot(AdminCommandsMixin):
         floods where many distinct nicks each send 1 command/sec.
         """
         return self._rate.channel_check(channel)
+
+    # ── Shadow-ban store ─────────────────────────────────────────────
+
+    def is_shadow_banned(self, nick: str) -> bool:
+        """True if ``nick`` is on the shadow-ban list (case-insensitive)."""
+        return nick.lower() in self._shadow_bans
+
+    def _load_shadow_bans(self) -> None:
+        """Read shadow_bans.json into ``self._shadow_bans``.  Tolerant of
+        missing/corrupt files — the list just stays empty."""
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path(self._shadow_bans_file)
+            if not p.exists():
+                return
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                bans = data.get("bans") or []
+                reasons = data.get("reasons") or {}
+                if isinstance(bans, list):
+                    self._shadow_bans = {str(n).lower() for n in bans}
+                if isinstance(reasons, dict):
+                    self._shadow_ban_reasons = {
+                        str(k).lower(): str(v) for k, v in reasons.items()
+                    }
+        except Exception as e:
+            log.warning(f"shadow_bans: load failed: {type(e).__name__}: {e}")
+
+    def _save_shadow_bans(self) -> None:
+        """Atomic write of the shadow-ban list to disk, 0600 perms."""
+        try:
+            import json as _json
+            import os as _os
+            import tempfile as _tempfile
+            from pathlib import Path as _Path
+            p = _Path(self._shadow_bans_file)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "bans":    sorted(self._shadow_bans),
+                "reasons": self._shadow_ban_reasons,
+            }
+            fd, tmp_path = _tempfile.mkstemp(prefix=p.name + ".",
+                                             dir=str(p.parent))
+            try:
+                with _os.fdopen(fd, "w", encoding="utf-8") as f:
+                    _json.dump(payload, f, indent=2, ensure_ascii=False)
+                _os.chmod(tmp_path, 0o600)
+                _os.replace(tmp_path, p)
+            except Exception:
+                try: _os.unlink(tmp_path)
+                except OSError: pass
+                raise
+        except Exception as e:
+            log.warning(f"shadow_bans: save failed: {type(e).__name__}: {e}")
 
     def loc_get(self, nick: str) -> str | None: return self._store.loc_get(nick)
     def loc_set(self, nick: str, raw: str) -> None: self._store.loc_set(nick, raw)
@@ -478,6 +554,13 @@ class IRCBot(AdminCommandsMixin):
 
     def _dispatch(self, nick: str, reply_to: str, cmd: str,
                   arg: str | None, is_pm: bool) -> None:
+        # Shadow-bans drop ALL commands silently — no privmsg/notice reply,
+        # no rate-limit consumption, no audit log entry.  The banned nick
+        # cannot tell whether the command is being ignored or the bot is
+        # offline, which is the entire point.
+        if self.is_shadow_banned(nick):
+            log.debug(f"shadow-banned cmd dropped: {nick}!{cmd!r}")
+            return
         if cmd in ("auth", "deauth") and not is_pm:
             self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM."); return
         if self.flood_limited(nick):
@@ -511,6 +594,7 @@ class IRCBot(AdminCommandsMixin):
                 handler = getattr(inst, entry[1])
         if handler and self._loop:
             self._active_cmd_tasks += 1
+            self._stats_cmd_count += 1
             # Metrics counter for command volume.  Module label is the
             # owning module name (or "core" for built-in admin commands).
             module_label = "core"
@@ -612,6 +696,7 @@ class IRCBot(AdminCommandsMixin):
         if self._sender: await self._sender.stop()
         self._sender = Sender(self._loop)
         self._sender.start(self._writer)
+        self._stats_connect_ts = time.time()
         _LOG_CONN.info("event=connect_ok host=%s port=%d", SERVER, PORT)
 
     # ── Background tasks / channel state ─────────────────────────────
@@ -672,10 +757,25 @@ class IRCBot(AdminCommandsMixin):
             # keep it; _MAX_PONG_LEN documents the value for humans.
             self.send(f"PONG :{payload[:400]}", priority=0); return
         line = strip_tags(line)
-        with self._mod_lock: snapshot = list(self._modules.values())
-        for inst in snapshot:
-            try: inst.on_raw(line)
-            except Exception as e: log.debug(f"on_raw error in {type(inst).__name__}: {e}")
+        # Shadow-ban filter: if the line's prefix nick is shadow-banned,
+        # skip the module on_raw fanout so .seen / .tell / etc. don't
+        # record them.  Bot-internal handlers (CAP, numerics, membership,
+        # PRIVMSG → _dispatch) still run — _dispatch silently drops the
+        # banned nick's commands at that layer.  Net effect: the user is
+        # invisible to modules but the bot still tracks them for ops use.
+        skip_module_fanout = False
+        if self._shadow_bans and line.startswith(":"):
+            try:
+                src_nick = line[1:].split("!", 1)[0].split(" ", 1)[0]
+                if src_nick and src_nick.lower() in self._shadow_bans:
+                    skip_module_fanout = True
+            except Exception:
+                pass
+        if not skip_module_fanout:
+            with self._mod_lock: snapshot = list(self._modules.values())
+            for inst in snapshot:
+                try: inst.on_raw(line)
+                except Exception as e: log.debug(f"on_raw error in {type(inst).__name__}: {e}")
         if self._handle_cap(line): return
         if self._handle_numeric(line): return
         if self._handle_membership(line): return
@@ -860,6 +960,7 @@ class IRCBot(AdminCommandsMixin):
         if not m: return
         nick, hostmask, target, text = m.groups()
         text = text.strip()
+        self._stats_msg_in += 1
         self._nick_hosts[nick.lower()] = hostmask
         if text.startswith("\x01"): return
         is_pm = target.lower() == self._nick.lower()
