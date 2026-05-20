@@ -13,11 +13,13 @@ This is intentionally separate from the main ``botlog`` stream.  Goals:
     serialization.  Not designed for cross-process concurrent writers.
 
 Wire-up:
-    The audit log is created here but other modules must *call* it.
-    See the TODO marker below for the integration list in
-    ``admin_cmds.py``.
-
-# TODO(admin_cmds.py): call `audit_log.default().record(nick, host, "auth"/"load"/"unload"/"shutdown"/...)` from each privileged handler.
+    Already integrated.  Every privileged handler in ``admin_cmds.py``
+    calls ``audit_log.default().record(nick, host, action, args)`` via
+    the ``_audit()`` helper on ``AdminCommandsMixin`` — see auth,
+    deauth, load, unload, reload, reloadall, restart, rehash, mode,
+    snomask, loglevel, debug, shutdown.  The ``modules/health.py``
+    ``.health`` command surfaces ``verify()`` so operators can confirm
+    the chain isn't tampered.
 """
 
 from __future__ import annotations
