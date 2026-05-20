@@ -1,0 +1,621 @@
+"""Tiered secret store — keyring > env var > secrets.ini.
+
+Outbound credentials (NickServ password, SASL password, server password,
+oper password, weather API keys, etc.) MUST be reversible — the bot has
+to send them on the wire — so this module provides encryption-at-rest,
+not hashing.  Hashing is one-way and would break authentication.
+
+Lookup order for ``get(name)``:
+    1. Environment variable ``INTERNETS_<NAME_UPPER>`` if set.
+    2. OS keyring entry under service ``internets-irc``, user=<name>,
+       via the optional ``keyring`` library.  Encrypted by the OS
+       (macOS Keychain, Linux Secret Service/kwallet, Windows CredMan).
+    3. ``secrets.ini`` ``[secrets]`` section, file mode strictly 0o600.
+    4. Empty string default.
+
+The keyring backend is the most secure: the secret never lives on disk
+in plaintext and is unlocked per user session.  The secrets.ini fallback
+exists for headless servers without a session keyring; ``perms_ok()``
+fails closed if the file is group- or world-readable.
+
+CLI::
+
+    python -m secret_store status
+    python -m secret_store set <name> [--value <v>] [--backend keyring|file]
+    python -m secret_store get <name>
+    python -m secret_store delete <name> [--backend keyring|file|all]
+    python -m secret_store migrate           # scrub plaintext from config.ini
+    python -m secret_store list              # show which keys are stored where
+"""
+
+from __future__ import annotations
+
+import argparse
+import configparser
+import getpass
+import logging
+import os
+import stat
+import sys
+from pathlib import Path
+
+log = logging.getLogger("internets.secrets")
+
+SERVICE = "internets-irc"
+ENV_PREFIX = "INTERNETS_"
+SECRETS_FILE = Path("secrets.ini").resolve()
+
+# Canonical secret names — every key the bot considers sensitive.
+# Used by migrate / list / status.  Adding a key here makes it part of
+# the migration sweep without any other code changes.
+KNOWN_SECRETS: tuple[str, ...] = (
+    # IRC auth (all sent reversibly on the wire — can't be hashed)
+    "nickserv_password",
+    "sasl_password",     # falls back to nickserv_password if unset
+    "server_password",
+    "oper_password",
+    # PII / contact identifier sent in HTTP User-Agent
+    "weather_user_agent",
+    # Weather provider keys
+    "weatherapi_key", "tomorrowio_key", "openweathermap_key",
+    "visualcrossing_key", "pirateweather_key", "weatherstack_key",
+    "accuweather_key", "worldweatheronline_key", "weatherbit_key",
+    "stormglass_key",
+    "meteomatics_username", "meteomatics_password",
+    "weatherkit_team_id", "weatherkit_service_id", "weatherkit_key_id",
+    "weatherkit_key_file",
+    # Other module keys
+    "omdb_key", "lastfm_key", "youtube_key",
+    "finnhub_key", "alphavantage_key", "twelvedata_key",
+    "steam_key",
+    "twitch_client_id", "twitch_client_secret",
+    "brave_key",
+)
+
+# Mapping: canonical secret name → (config.ini section, key)
+# Drives the migrate command (knows where to scrape plaintext from).
+CONFIG_LOCATIONS: dict[str, tuple[str, str]] = {
+    "nickserv_password":      ("irc", "nickserv_password"),
+    "server_password":        ("irc", "server_password"),
+    "oper_password":          ("irc", "oper_password"),
+    "weather_user_agent":     ("weather", "user_agent"),
+    "weatherapi_key":         ("weather_providers", "weatherapi_key"),
+    "tomorrowio_key":         ("weather_providers", "tomorrowio_key"),
+    "openweathermap_key":     ("weather_providers", "openweathermap_key"),
+    "visualcrossing_key":     ("weather_providers", "visualcrossing_key"),
+    "pirateweather_key":      ("weather_providers", "pirateweather_key"),
+    "weatherstack_key":       ("weather_providers", "weatherstack_key"),
+    "accuweather_key":        ("weather_providers", "accuweather_key"),
+    "worldweatheronline_key": ("weather_providers", "worldweatheronline_key"),
+    "weatherbit_key":         ("weather_providers", "weatherbit_key"),
+    "stormglass_key":         ("weather_providers", "stormglass_key"),
+    "meteomatics_username":   ("weather_providers", "meteomatics_username"),
+    "meteomatics_password":   ("weather_providers", "meteomatics_password"),
+    "weatherkit_team_id":     ("weather_providers", "weatherkit_team_id"),
+    "weatherkit_service_id":  ("weather_providers", "weatherkit_service_id"),
+    "weatherkit_key_id":      ("weather_providers", "weatherkit_key_id"),
+    "weatherkit_key_file":    ("weather_providers", "weatherkit_key_file"),
+    "omdb_key":               ("imdb", "omdb_key"),
+    "lastfm_key":              ("lastfm", "lastfm_key"),
+    "youtube_key":             ("youtube", "youtube_key"),
+    "finnhub_key":             ("stocks", "finnhub_key"),
+    "alphavantage_key":        ("stocks", "alphavantage_key"),
+    "twelvedata_key":          ("stocks", "twelvedata_key"),
+    "steam_key":               ("steam", "steam_key"),
+    "twitch_client_id":        ("twitch", "twitch_client_id"),
+    "twitch_client_secret":    ("twitch", "twitch_client_secret"),
+    "brave_key":               ("search", "brave_key"),
+}
+
+# Placeholders that mean "not set" — never migrated, never returned.
+_PLACEHOLDERS = frozenset({
+    "", "changeme", "your-key-here", "placeholder",
+    "set-via-secret-store", "<your-key>",
+})
+
+
+# ── Backend detection ────────────────────────────────────────────────
+
+def _keyring():
+    """Import keyring lazily; return module or None."""
+    try:
+        import keyring  # noqa: PLC0415
+        return keyring
+    except ImportError:
+        return None
+
+
+def keyring_available() -> bool:
+    """True if the ``keyring`` library is importable AND has a usable backend."""
+    kr = _keyring()
+    if kr is None:
+        return False
+    try:
+        backend = kr.get_keyring()
+        # The "fail" backend is what keyring uses when nothing real is found.
+        return "fail" not in type(backend).__name__.lower()
+    except Exception:
+        return False
+
+
+def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:
+    """Check that ``path`` is 0o600 (owner rw only).  Returns (ok, reason)."""
+    if not path.exists():
+        return True, "absent"
+    try:
+        st = path.stat()
+    except OSError as e:
+        return False, f"stat failed: {e}"
+    if os.name == "nt":
+        # POSIX modes are advisory on Windows; rely on filesystem ACLs.
+        return True, "windows (acl-based)"
+    mode = stat.S_IMODE(st.st_mode)
+    if mode != 0o600:
+        return False, f"mode is {oct(mode)}, expected 0o600 — run `chmod 600 {path}`"
+    return True, "0o600"
+
+
+# ── Public API ───────────────────────────────────────────────────────
+
+def get(name: str, default: str = "") -> str:
+    """Return the secret value, or ``default`` if not stored anywhere.
+
+    Tiered lookup (first hit wins): env var → keyring → secrets.ini.
+    """
+    # 1) Env var
+    env_key = ENV_PREFIX + name.upper()
+    val = os.environ.get(env_key)
+    if val:
+        return val
+    # 2) Keyring
+    kr = _keyring()
+    if kr is not None:
+        try:
+            val = kr.get_password(SERVICE, name)
+            if val:
+                return val
+        except Exception as e:
+            log.debug("keyring lookup failed for %s: %s", name, e)
+    # 3) secrets.ini
+    if SECRETS_FILE.exists():
+        ok, reason = perms_ok(SECRETS_FILE)
+        if not ok:
+            log.error("REFUSING to read %s — %s", SECRETS_FILE, reason)
+            return default
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(SECRETS_FILE)
+            if parser.has_option("secrets", name):
+                val = parser.get("secrets", name).strip()
+                if val and val.lower() not in _PLACEHOLDERS:
+                    return val
+        except configparser.Error as e:
+            log.warning("secrets.ini parse error: %s", e)
+    return default
+
+
+def set_value(name: str, value: str, *, backend: str = "auto") -> str:
+    """Store ``value`` for ``name``.  Returns the backend actually used."""
+    backend = backend.lower()
+    if backend == "auto":
+        backend = "keyring" if keyring_available() else "file"
+    if backend == "keyring":
+        kr = _keyring()
+        if kr is None:
+            raise RuntimeError("keyring backend requested but not installed "
+                               "(pip install keyring)")
+        kr.set_password(SERVICE, name, value)
+        return "keyring"
+    if backend == "file":
+        _write_file_secret(name, value)
+        return "file"
+    raise ValueError(f"unknown backend {backend!r}; use auto/keyring/file")
+
+
+def delete(name: str, *, backend: str = "all") -> list[str]:
+    """Remove ``name`` from one or all backends.  Returns backends touched."""
+    backend = backend.lower()
+    touched: list[str] = []
+    if backend in ("keyring", "all"):
+        kr = _keyring()
+        if kr is not None:
+            try:
+                kr.delete_password(SERVICE, name)
+                touched.append("keyring")
+            except Exception:
+                pass
+    if backend in ("file", "all") and SECRETS_FILE.exists():
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(SECRETS_FILE)
+            if parser.has_option("secrets", name):
+                parser.remove_option("secrets", name)
+                _write_file_atomic(parser)
+                touched.append("file")
+        except configparser.Error:
+            pass
+    return touched
+
+
+def status() -> dict[str, object]:
+    """Diagnostic snapshot of the secret store environment."""
+    kr = _keyring()
+    backend_name = ""
+    if kr is not None:
+        try:
+            backend_name = type(kr.get_keyring()).__name__
+        except Exception as e:
+            backend_name = f"<error: {e}>"
+    perms, perms_reason = perms_ok(SECRETS_FILE)
+    return {
+        "keyring_installed":   kr is not None,
+        "keyring_available":   keyring_available(),
+        "keyring_backend":     backend_name,
+        "secrets_file":        str(SECRETS_FILE),
+        "secrets_file_exists": SECRETS_FILE.exists(),
+        "secrets_file_perms":  perms_reason,
+        "perms_ok":            perms,
+        "env_prefix":          ENV_PREFIX,
+        "service":             SERVICE,
+    }
+
+
+def list_stored() -> dict[str, str]:
+    """Return ``{secret_name: backend}`` for every known secret currently stored.
+
+    Backend may be ``"env"``, ``"keyring"``, ``"file"``, or ``""`` (none).
+    """
+    out: dict[str, str] = {}
+    parser: configparser.ConfigParser | None = None
+    if SECRETS_FILE.exists() and perms_ok(SECRETS_FILE)[0]:
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(SECRETS_FILE)
+        except configparser.Error:
+            parser = None
+    kr = _keyring()
+    for name in KNOWN_SECRETS:
+        if os.environ.get(ENV_PREFIX + name.upper()):
+            out[name] = "env"
+            continue
+        if kr is not None:
+            try:
+                if kr.get_password(SERVICE, name):
+                    out[name] = "keyring"
+                    continue
+            except Exception:
+                pass
+        if parser is not None and parser.has_option("secrets", name):
+            v = parser.get("secrets", name).strip()
+            if v and v.lower() not in _PLACEHOLDERS:
+                out[name] = "file"
+                continue
+        out[name] = ""
+    return out
+
+
+# ── secrets.ini file backend ─────────────────────────────────────────
+
+def _write_file_atomic(parser: configparser.ConfigParser) -> None:
+    """Write ``parser`` to ``SECRETS_FILE`` with 0o600 perms, atomically."""
+    SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SECRETS_FILE.with_suffix(SECRETS_FILE.suffix + ".tmp")
+    # Create tmp with 0o600 from the start to avoid a window where the
+    # file is world-readable.
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            parser.write(f)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, SECRETS_FILE)
+    if os.name != "nt":
+        os.chmod(SECRETS_FILE, 0o600)
+
+
+def _write_file_secret(name: str, value: str) -> None:
+    parser = configparser.ConfigParser()
+    if SECRETS_FILE.exists():
+        ok, reason = perms_ok(SECRETS_FILE)
+        if not ok:
+            raise PermissionError(
+                f"refusing to modify {SECRETS_FILE} — {reason}")
+        parser.read(SECRETS_FILE)
+    if not parser.has_section("secrets"):
+        parser.add_section("secrets")
+    parser.set("secrets", name, value)
+    _write_file_atomic(parser)
+
+
+# ── Migration from config.ini ────────────────────────────────────────
+
+def _scrub_config_ini(cfg_path: Path, names: list[str]) -> None:
+    """Rewrite config.ini with the given secret keys removed/cleared.
+
+    Preserves comments and structure by editing line-by-line instead of
+    round-tripping through configparser (which loses formatting).
+    """
+    target_keys = {CONFIG_LOCATIONS[n][1] for n in names if n in CONFIG_LOCATIONS}
+    text = cfg_path.read_text(encoding="utf-8")
+    out_lines: list[str] = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        # Match "<key> = <value>" and zero-out the value if the key is targeted.
+        # Don't touch comments or non-assignment lines.
+        if stripped and not stripped.startswith((";", "#", "[")):
+            if "=" in stripped:
+                key = stripped.split("=", 1)[0].strip().lower()
+                if key in target_keys:
+                    indent = line[:len(line) - len(stripped)]
+                    out_lines.append(f"{indent}{key} =\n")
+                    continue
+        out_lines.append(line)
+    cfg_path.write_text("".join(out_lines), encoding="utf-8")
+
+
+def migrate(config_path: Path = Path("config.ini"),
+            backend: str = "auto",
+            *, scrub: bool = True) -> dict[str, str]:
+    """Move all known plaintext secrets from config.ini into the secret store.
+
+    Returns ``{name: action}`` where action is ``stored:<backend>``,
+    ``skipped:empty``, or ``error:<reason>``.
+    """
+    cfg_path = config_path.resolve()
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"{cfg_path} not found")
+    parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
+    parser.read(cfg_path)
+    results: dict[str, str] = {}
+    migrated: list[str] = []
+    for name, (section, key) in CONFIG_LOCATIONS.items():
+        if not parser.has_option(section, key):
+            results[name] = "skipped:absent"
+            continue
+        value = parser.get(section, key).strip()
+        if not value or value.lower() in _PLACEHOLDERS:
+            results[name] = "skipped:empty"
+            continue
+        try:
+            used = set_value(name, value, backend=backend)
+            results[name] = f"stored:{used}"
+            migrated.append(name)
+        except Exception as e:
+            results[name] = f"error:{type(e).__name__}:{e}"
+    if scrub and migrated:
+        _scrub_config_ini(cfg_path, migrated)
+    return results
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+
+def _cmd_status(_: argparse.Namespace) -> int:
+    info = status()
+    print("Secret store status")
+    print("-" * 60)
+    for k, v in info.items():
+        print(f"  {k:24} {v}")
+    print()
+    backend = "keyring" if info["keyring_available"] else "file"
+    print(f"Default write backend: {backend}")
+    if not info["keyring_installed"]:
+        print("  Tip: pip install keyring  (for OS-native encrypted storage)")
+    return 0
+
+
+def _cmd_list(_: argparse.Namespace) -> int:
+    stored = list_stored()
+    width = max(len(n) for n in KNOWN_SECRETS) + 2
+    print(f"{'secret':<{width}} backend")
+    print("-" * (width + 12))
+    for name in KNOWN_SECRETS:
+        backend = stored.get(name) or "(unset)"
+        print(f"{name:<{width}} {backend}")
+    return 0
+
+
+def _cmd_get(args: argparse.Namespace) -> int:
+    """Confirm presence of a secret without printing the value.
+
+    By default prints a non-revealing summary — ``(set, 32 chars,
+    backend=keyring)`` — so the value cannot be read by anyone watching
+    the screen, shell history, or terminal recording.  Pass
+    ``--reveal`` to actually print the value (useful when you genuinely
+    need to extract it, e.g. for rotating a key into another system).
+    """
+    val = get(args.name)
+    if not val:
+        print(f"(no value for {args.name!r})", file=sys.stderr)
+        return 1
+    if args.reveal:
+        print(val)
+        return 0
+    # Identify which backend held the value (re-runs the lookup chain
+    # so we report the actual hit point — env / keyring / file).
+    backend = "unknown"
+    env_key = ENV_PREFIX + args.name.upper()
+    if os.environ.get(env_key):
+        backend = "env"
+    else:
+        kr = _keyring()
+        if kr is not None:
+            try:
+                if kr.get_password(SERVICE, args.name):
+                    backend = "keyring"
+            except Exception:
+                pass
+        if backend == "unknown" and SECRETS_FILE.exists():
+            backend = "file"
+    print(f"(set, {len(val)} chars, backend={backend})")
+    print("Use --reveal to print the actual value.", file=sys.stderr)
+    return 0
+
+
+def _cmd_set(args: argparse.Namespace) -> int:
+    value = args.value
+    if value is None:
+        value = getpass.getpass(f"Value for {args.name}: ")
+    if not value:
+        print("error: empty value", file=sys.stderr)
+        return 2
+    used = set_value(args.name, value, backend=args.backend)
+    print(f"stored {args.name} in {used}")
+    return 0
+
+
+def _cmd_delete(args: argparse.Namespace) -> int:
+    touched = delete(args.name, backend=args.backend)
+    if touched:
+        print(f"removed {args.name} from: {', '.join(touched)}")
+        return 0
+    print(f"{args.name} not found in any backend", file=sys.stderr)
+    return 1
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Create secrets.ini from secrets.ini.example with 0600 perms.
+
+    First-time create does a verbatim copy so all the inline comments,
+    signup URLs, and tier-limit hints are preserved.  --force on an
+    existing file uses configparser to merge new template keys in (so
+    upgrades pick up new providers without clobbering existing values).
+    """
+    src = Path("secrets.ini.example").resolve()
+    if not src.exists():
+        print(f"error: {src} not found — re-clone the repo or fetch it from "
+              "the project root.", file=sys.stderr)
+        return 2
+    if SECRETS_FILE.exists() and not args.force:
+        print(f"error: {SECRETS_FILE} already exists. Re-run with --force to "
+              "merge new template keys in (existing values are preserved).",
+              file=sys.stderr)
+        return 1
+    if SECRETS_FILE.exists() and args.force:
+        # Merge: existing values win, new keys from template added blank.
+        # Comments are lost on this path — that's an acceptable cost for
+        # the upgrade-aware merge.
+        existing = configparser.ConfigParser()
+        existing.read(SECRETS_FILE)
+        tmpl = configparser.ConfigParser()
+        tmpl.read(src)
+        for section in tmpl.sections():
+            if not existing.has_section(section):
+                existing.add_section(section)
+            for key in tmpl[section]:
+                if not existing.has_option(section, key):
+                    existing.set(section, key, tmpl.get(section, key))
+        _write_file_atomic(existing)
+        print(f"merged template keys into {SECRETS_FILE} (existing values preserved)")
+        return 0
+    # First-time create: byte-for-byte copy so comments survive, then
+    # tighten perms.  Avoids configparser round-trip which strips comments.
+    text = src.read_text(encoding="utf-8")
+    SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(SECRETS_FILE),
+                 os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+    except Exception:
+        try:
+            SECRETS_FILE.unlink()
+        except OSError:
+            pass
+        raise
+    if os.name != "nt":
+        os.chmod(SECRETS_FILE, 0o600)
+    print(f"created {SECRETS_FILE} (mode 0600, {len(text)} bytes)")
+    print(f"edit it with your real values, or run "
+          f"`python -m secret_store set <name>`")
+    return 0
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    cfg_path = Path(args.config).resolve()
+    print(f"Migrating secrets from {cfg_path}")
+    print(f"  backend: {args.backend}")
+    print(f"  scrub:   {'yes' if not args.no_scrub else 'no (dry-run)'}")
+    results = migrate(cfg_path, backend=args.backend, scrub=not args.no_scrub)
+    stored = [n for n, a in results.items() if a.startswith("stored:")]
+    errors = [(n, a) for n, a in results.items() if a.startswith("error:")]
+    print()
+    print(f"Stored ({len(stored)}):")
+    for n in stored:
+        print(f"  {n:24} → {results[n]}")
+    if errors:
+        print(f"\nErrors ({len(errors)}):")
+        for n, a in errors:
+            print(f"  {n:24} {a}")
+    if stored:
+        print()
+        print("=" * 60)
+        print("ROTATE EVERY SECRET LISTED ABOVE.")
+        print("=" * 60)
+        print("These values were just moved out of config.ini, but the file")
+        print("is in git history.  Anyone with a clone of this repo can read")
+        print("them.  Rotate each one at its provider (regenerate API keys,")
+        print("change NickServ/SASL/oper/server passwords) before relying on")
+        print("the new storage.")
+    return 1 if errors else 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="python -m secret_store",
+        description="Manage Internets bot secrets (keyring/env/file).")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("status", help="show backend status").set_defaults(func=_cmd_status)
+    sub.add_parser("list",   help="list known secrets and which backend holds each"
+                  ).set_defaults(func=_cmd_list)
+
+    g = sub.add_parser("get",
+        help="confirm a secret is set (use --reveal to print the actual value)")
+    g.add_argument("name")
+    g.add_argument("--reveal", action="store_true",
+                   help="print the secret value to stdout (off by default)")
+    g.set_defaults(func=_cmd_get)
+
+    s = sub.add_parser("set", help="store a secret value")
+    s.add_argument("name")
+    s.add_argument("--value", default=None,
+                   help="value (omit to be prompted; safer for shell history)")
+    s.add_argument("--backend", default="auto",
+                   choices=("auto", "keyring", "file"))
+    s.set_defaults(func=_cmd_set)
+
+    d = sub.add_parser("delete", help="remove a secret")
+    d.add_argument("name")
+    d.add_argument("--backend", default="all",
+                   choices=("all", "keyring", "file"))
+    d.set_defaults(func=_cmd_delete)
+
+    i = sub.add_parser("init",
+        help="create secrets.ini from secrets.ini.example with 0600 perms")
+    i.add_argument("--force", action="store_true",
+                   help="merge template keys into an existing secrets.ini "
+                        "(existing values are preserved)")
+    i.set_defaults(func=_cmd_init)
+
+    m = sub.add_parser("migrate",
+        help="move plaintext from config.ini into the secret store + scrub config.ini")
+    m.add_argument("--config", default="config.ini")
+    m.add_argument("--backend", default="auto",
+                   choices=("auto", "keyring", "file"))
+    m.add_argument("--no-scrub", action="store_true",
+                   help="store secrets but leave config.ini untouched (dry-run-ish)")
+    m.set_defaults(func=_cmd_migrate)
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    return int(args.func(args) or 0)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

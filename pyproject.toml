@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "internets-irc"
+version = "2.5.0"
+description = "Async modular IRC bot with weather, calculator, dice, translation, and more."
+readme = "README.md"
+license = {text = "ISC"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Brandon Troidl"},
+]
+keywords = ["irc", "bot", "asyncio", "weather", "modular"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: ISC License (ISCL)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Chat :: Internet Relay Chat",
+]
+dependencies = [
+    "requests>=2.31.0,<3",
+]
+
+[project.optional-dependencies]
+async = ["aiohttp>=3.9.0,<4"]
+bcrypt = ["bcrypt>=4.0.0,<5"]
+argon2 = ["argon2-cffi>=23.1.0,<24"]
+weatherkit = ["PyJWT>=2.0.0,<3", "cryptography>=41.0.0,<44"]
+# OS-native keyring backend for the secret store (macOS Keychain,
+# Linux Secret Service / kwallet, Windows Credential Manager).  Without
+# this the store falls back to a 0600 gitignored secrets.ini.
+keyring = ["keyring>=24.0.0,<26"]
+all = [
+    "aiohttp>=3.9.0,<4",
+    "bcrypt>=4.0.0,<5",
+    "argon2-cffi>=23.1.0,<24",
+    "PyJWT>=2.0.0,<3",
+    "cryptography>=41.0.0,<44",
+    "keyring>=24.0.0,<26",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[project.urls]
+Homepage = "https://github.com/brandontroidl/Internets"
+Repository = "https://github.com/brandontroidl/Internets"
+Issues = "https://github.com/brandontroidl/Internets/issues"
+Changelog = "https://github.com/brandontroidl/Internets/blob/main/CHANGELOG.md"
+
+[project.scripts]
+internets = "internets:_entry"
+
+[tool.setuptools]
+py-modules = ["internets", "config", "botlog", "admin_cmds", "console", "sender", "store", "protocol", "hashpw", "secret_store"]
+
+[tool.setuptools.packages.find]
+include = ["modules*", "weather_providers*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bot runtime files
+*.log
+locations.json
+channels.json
+users.json
+steamids.json
+
+# Secret store — never commit real credentials.  All outbound secrets
+# (NickServ/SASL/server/oper passwords, API keys, the User-Agent email)
+# live here once you run:  python -m secret_store migrate
+#
+# config.ini is tracked as a credential-free template; real values go
+# into the OS keyring (preferred) or secrets.ini (0600, this file).
+secrets.ini
+secrets.ini.tmp
+
+# Personal non-secret overrides (server hostname, user_modes, admin
+# password hash).  Loaded on top of config.ini by config.py.
+config.local.ini

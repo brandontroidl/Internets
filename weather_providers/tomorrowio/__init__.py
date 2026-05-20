@@ -1,0 +1,19 @@
+"""Tomorrow.io provider package — requires API key."""
+from __future__ import annotations
+from ..base import *
+from . import current, forecast, hourly, alerts, air_quality
+
+class TomorrowIOProvider:
+    name: str = "Tomorrow.io"
+    requires_key: bool = True
+    def __init__(self, api_key: str) -> None: self._key = api_key
+    async def get_weather(self, lat, lon, location, **kw):
+        return await current.fetch(self._key, lat, lon, location)
+    async def get_forecast(self, lat, lon, location, days=4, **kw):
+        return await forecast.fetch(self._key, lat, lon, location, days)
+    async def get_hourly(self, lat, lon, location, hours=12, **kw):
+        return await hourly.fetch(self._key, lat, lon, location, hours)
+    async def get_alerts(self, lat, lon, location, **kw):
+        return await alerts.fetch(self._key, lat, lon, location)
+    async def get_air_quality(self, lat, lon, location, **kw):
+        return await air_quality.fetch(self._key, lat, lon, location)
