@@ -10,7 +10,7 @@ Outbound credentials (NickServ / SASL / server / oper passwords, every API key, 
 
 **Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
 **Python:** 3.10+  
-**Dependencies:** `requests` (single runtime dependency). Optional: `aiohttp` for true async HTTP, `bcrypt`, `argon2-cffi` for stronger password hashing, `PyJWT` + `cryptography` for Apple WeatherKit.
+**Dependencies:** `pip install -r requirements.txt` installs the full runtime stack. Individual packages listed in [Requirements](#requirements).
 
 ## Architecture
 
@@ -604,8 +604,6 @@ If `PyJWT` / `cryptography` are not installed or any of the four values are miss
 
 ## Security
 
-The bot has been through nine audit passes with all findings resolved. See `AUDIT.md` for the complete finding inventory.
-
 **Secret store.** Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are *never* read from `config.ini`. Lookup order, first hit wins:
 
 1. `INTERNETS_<NAME>` environment variable
@@ -670,4 +668,4 @@ The bot does not parse `353` (NAMES reply) for user roster purposes. Users who w
 
 ## License
 
-ISC — see [LICENSE](LICENSE).
+ISC — see [LICENSE.md](LICENSE.md).
