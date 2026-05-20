@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import random
 import re
 
 import requests
@@ -50,15 +51,35 @@ def _lookup_sync(ua: str) -> str:
             timeout=15,
         )
         r.raise_for_status()
-        matches = _FML_ARTICLE.findall(r.text)
-        if not matches:
+        raw_matches = _FML_ARTICLE.findall(r.text)
+        if not raw_matches:
             return "could not parse FML page — site layout may have changed"
 
-        qid, raw_text = matches[0]
-        text = _strip_tags(raw_text)
+        # Filter to real user posts.  FML's /random page occasionally
+        # serves editorial compilation articles ("Welcome to the
+        # machine", category roundups, etc.) that share the same body
+        # anchor structure but lack the universal "Today, … FML" shape
+        # of user submissions.  Drop anything that doesn't start with
+        # "Today" (case-insensitive after strip).
+        candidates: list[tuple[str, str]] = []
+        for qid, raw in raw_matches:
+            text = _strip_tags(raw)
+            if text.lower().startswith("today"):
+                candidates.append((qid, text))
+
+        if not candidates:
+            # Graceful fallback: every page should normally have at
+            # least one user post.  If literally none do, return the
+            # first raw match so the operator sees *something* and the
+            # log records the unusual case.
+            log.warning("FML page had no 'Today...' user posts among %d matches",
+                        len(raw_matches))
+            qid, raw = raw_matches[0]
+            candidates = [(qid, _strip_tags(raw))]
+
+        qid, text = random.choice(candidates)
         if len(text) > 400:
             text = text[:397] + "..."
-
         return f"[fml #{qid}] {text}"
     except Exception as e:
         log.warning(f"FML lookup: {e}")
