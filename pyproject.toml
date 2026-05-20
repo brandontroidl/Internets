@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "internets-irc"
+version = "2.5.0"
+description = "Async modular IRC bot with weather, calculator, dice, translation, and more."
+readme = "README.md"
+license = {text = "ISC"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Brandon Troidl"},
+]
+keywords = ["irc", "bot", "asyncio", "weather", "modular"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: ISC License (ISCL)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat :: Internet Relay Chat",
+]
+dependencies = [
+    "requests>=2.31.0,<3",
+]
+
+[project.optional-dependencies]
+async = ["aiohttp>=3.9.0,<4"]
+bcrypt = ["bcrypt>=4.0.0,<5"]
+argon2 = ["argon2-cffi>=23.1.0,<24"]
+weatherkit = ["PyJWT>=2.0.0,<3", "cryptography>=41.0.0,<44"]
+# OS-native keyring backend for the secret store (macOS Keychain,
+# Linux Secret Service / kwallet, Windows Credential Manager).  Without
+# this the store falls back to a 0600 gitignored secrets.ini.
+keyring = ["keyring>=24.0.0,<26"]
+# Hardened XML parser used by modules/qdb.py to block billion-laughs DoS
+# (stdlib ElementTree only blocks XXE).  Falls back to stdlib with a
+# WARNING at module load if absent.
+xml = ["defusedxml>=0.7,<1"]
+all = [
+    "aiohttp>=3.9.0,<4",
+    "bcrypt>=4.0.0,<5",
+    "argon2-cffi>=23.1.0,<24",
+    "PyJWT>=2.0.0,<3",
+    "cryptography>=41.0.0,<44",
+    "keyring>=24.0.0,<26",
+    "defusedxml>=0.7,<1",
+]
+dev = [
+    "pytest>=7.0,<9",
+    "pytest-asyncio>=0.21,<1",
+    "pytest-cov>=4.0,<7",
+    "coverage>=7.0,<8",
+    "bandit[sarif]>=1.7,<2",
+    "pip-audit>=2.7,<3",
+    "build>=1.0,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/brandontroidl/Internets"
+Repository = "https://github.com/brandontroidl/Internets"
+Issues = "https://github.com/brandontroidl/Internets/issues"
+Changelog = "https://github.com/brandontroidl/Internets/blob/main/CHANGELOG.md"
+
+[project.scripts]
+internets = "internets:_entry"
+
+[tool.setuptools]
+py-modules = ["internets", "config", "botlog", "admin_cmds", "console", "sender", "store", "protocol", "hashpw", "secret_store"]
+
+[tool.setuptools.packages.find]
+include = ["modules*", "weather_providers*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# --strict-markers is also passed on the CLI in CI; keep it here so local
+# runs catch typos in @pytest.mark.<name> too.
+addopts = "--strict-markers"
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = [
+    "tests/*",
+    "build/*",
+    "dist/*",
+    ".venv/*",
+    "weather_providers/*",
+    "modules/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 75
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist", ".git", "__pycache__"]

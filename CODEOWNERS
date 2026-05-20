@@ -1,0 +1,13 @@
+# CODEOWNERS — auto-request review for every PR.
+#
+# GitHub will assign these owners as required reviewers on any PR that
+# touches matching paths.  This file lives at the repo root (GitHub also
+# accepts .github/CODEOWNERS or docs/CODEOWNERS).
+#
+# Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+#
+# NOTE: there is currently only a single human maintainer; add team
+# handles (e.g. @your-org/security) or per-path owners as the project
+# grows.
+
+*       @brandontroidl

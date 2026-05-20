@@ -1,0 +1,42 @@
+# Internets IRC bot — full runtime dependencies.
+#
+# Install everything the bot needs for full functionality:
+#
+#     pip install -r requirements.txt
+#
+# Each package is documented inline below.  Dev/test/CI deps (pytest,
+# coverage, bandit, pip-audit, build, etc.) live in pyproject.toml
+# under [project.optional-dependencies] dev — install with
+# `pip install -e ".[dev]"` when working on the code itself.
+
+# Core HTTP client — used by every module that talks to a third-party API.
+# 2.31.0 fixed CVE-2023-32681 (proxy credential leak); <3 guards against breaking API changes.
+requests>=2.31.0,<3
+
+# Async HTTP client — preferred transport for weather provider calls;
+# the bot falls back to requests-in-thread when missing.  Enables
+# true async I/O rather than thread-pool offload.
+aiohttp>=3.9.0,<4
+
+# Argon2id — recommended admin password hasher (memory-hard, GPU-resistant).
+# Required for `password_hash = argon2$...` in config.local.ini [admin].
+argon2-cffi>=23.1.0,<24
+
+# bcrypt — alternative admin password hasher.
+# Required for `password_hash = bcrypt$...` in config.local.ini [admin].
+bcrypt>=4.0.0,<5
+
+# PyJWT + cryptography — Apple WeatherKit JWT signing (ES256).
+# Required only if you configure WeatherKit credentials in secrets.ini.
+PyJWT>=2.0.0,<3
+cryptography>=41.0.0,<44
+
+# OS-native keyring backend for the secret store (macOS Keychain,
+# Linux Secret Service / kwallet, Windows Credential Manager).
+# Without it the store falls back to a 0600 gitignored secrets.ini.
+keyring>=24.0.0,<26
+
+# Hardened XML parser used by modules/qdb.py.  Blocks billion-laughs
+# DoS in addition to stdlib's XXE protection.  Without it the module
+# falls back to stdlib ElementTree with a startup WARNING.
+defusedxml>=0.7,<1
