@@ -2,12 +2,22 @@
 
 Runs as an async task alongside the bot.  Reads stdin in a thread and
 dispatches debug, loglevel, status, and shutdown commands.
+
+SECURITY MODEL: the console grants admin-equivalent capability (debug
+toggle, log-level changes, graceful shutdown) to anyone with stdin
+access on the bot's host.  This is intentional — anyone with local
+shell access can already kill the process, read secrets.ini, etc., so
+the console is not an additional attack surface in that context.  But
+it MUST NOT run when stdin is shared with an untrusted user.  Pass
+``--no-console`` for daemonised / systemd-managed deployments, or run
+the bot under a dedicated unprivileged user with no shared shell.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 from botlog import apply_debug, apply_loglevel, log_filter
@@ -28,8 +38,33 @@ _CONSOLE_HELP = """\
 log = logging.getLogger("internets")
 
 
+def should_skip_console() -> bool:
+    """Return True when the console should auto-skip.
+
+    The console is unsafe when stdin isn't an interactive TTY — e.g.
+    under systemd, in a Docker container without -it, or with stdin
+    redirected to a file.  Skipping in those cases prevents the
+    console from looping on EOF and avoids granting admin equivalence
+    to whatever piped input happens to be there.
+    """
+    try:
+        return not sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        # No stdin at all, or it was closed — skip safely.
+        return True
+
+
 async def run_console(bot: IRCBot) -> None:
     """Async console: reads stdin in a thread, processes commands."""
+    # Loud warning on entry — anyone reading the log sees that the
+    # console is live and grants admin equivalence to stdin.
+    log.warning(
+        "event=console_active stdin=tty pid=%d — "
+        "the local console grants admin-equivalent capability "
+        "(debug, loglevel, status, shutdown) WITHOUT authentication. "
+        "Pass --no-console for daemon deployments.",
+        __import__("os").getpid(),
+    )
     while True:
         try:
             line = (await asyncio.to_thread(input, "> ")).strip()

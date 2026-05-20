@@ -45,7 +45,7 @@ from config import (
 )
 from botlog import log, log_filter  # noqa: F401 — log_filter used by tests
 from admin_cmds import AdminCommandsMixin
-from console import run_console
+from console import run_console, should_skip_console
 from store import Store, RateLimiter
 from sender import Sender
 from protocol import (
@@ -447,6 +447,13 @@ class IRCBot(AdminCommandsMixin):
         # Give cancelled tasks a chance to clean up.
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+        # 7b. Stop metrics HTTP server if it's running.
+        try:
+            from metrics import registry as _mreg
+            if _mreg.is_enabled():
+                _mreg.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         _LOG_SHUTDOWN.info(
             "event=shutdown_complete reconnects=%d dropped=%d cmd_timeouts=%d "
             "sasl_failures=%d oversized=%d unexpected=%d",
@@ -488,6 +495,16 @@ class IRCBot(AdminCommandsMixin):
                 handler = getattr(inst, entry[1])
         if handler and self._loop:
             self._active_cmd_tasks += 1
+            # Metrics counter for command volume.  Module label is the
+            # owning module name (or "core" for built-in admin commands).
+            module_label = "core"
+            if cmd in self._commands:
+                module_label = self._commands[cmd][0]
+            try:
+                from metrics import registry as _mreg  # noqa: PLC0415
+                _mreg.commands_total.inc(labels={"module": module_label, "command": cmd})
+            except Exception:  # noqa: BLE001
+                pass
             task = self._loop.create_task(
                 self._run_cmd(handler, nick, reply_to, arg, cmd), name=f"cmd-{cmd}")
             self._tasks.append(task)
@@ -908,6 +925,11 @@ class IRCBot(AdminCommandsMixin):
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError, OSError) as e:
                 if self._stop.is_set(): break
                 self._metrics["reconnects"] += 1
+                try:
+                    from metrics import registry as _mreg  # noqa: PLC0415
+                    _mreg.reconnects_total.inc()
+                except Exception:  # noqa: BLE001
+                    pass
                 # Distinguish transient (most OSErrors, RST, SSL renegotiation,
                 # DNS) from likely-permanent (auth-related) failures.  SASL
                 # hard-fail above already incremented sasl_failures; if that
@@ -1001,11 +1023,34 @@ class IRCBot(AdminCommandsMixin):
 
 async def _main(lock: ProcessLock | None = None) -> None:
     bot = IRCBot()
+    # Optional Prometheus exporter — off by default.  Enable with:
+    #     [metrics]
+    #     enable = true
+    #     host = 127.0.0.1     ; never expose to 0.0.0.0 — auth-less
+    #     port = 9779
+    # in config.ini / config.local.ini.  See metrics.py for the schema.
+    if cfg.has_section("metrics") and cfg["metrics"].getboolean("enable", False):
+        try:
+            from metrics import registry as _mreg
+            _mreg.enable()
+            host = cfg["metrics"].get("host", "127.0.0.1").strip()
+            port = cfg["metrics"].getint("port", 9779)
+            _mreg.expose(host, port)
+            log.info("event=metrics_enabled host=%s port=%d", host, port)
+        except Exception as e:  # noqa: BLE001
+            log.error("event=metrics_start_failed err=%s", e)
     tasks: list[asyncio.Task] = []
     bot_task: asyncio.Task | None = None
-    if not cli_args.no_console and sys.stdin.isatty():
+    # Console is gated on (a) operator opt-in (no --no-console) AND
+    # (b) stdin actually being an interactive TTY.  Skipping when stdin
+    # is piped / a non-TTY prevents the console from looping on EOF and
+    # avoids granting admin-equivalent capability to whatever happens
+    # to be piped in.  console.should_skip_console() owns the check.
+    if not cli_args.no_console and not should_skip_console():
         tasks.append(asyncio.create_task(run_console(bot), name="console"))
         log.info("Interactive console enabled (type 'help' for commands)")
+    elif not cli_args.no_console:
+        log.info("Console skipped: stdin is not a TTY (likely daemon/systemd)")
     bot_task = asyncio.create_task(bot.run(), name="bot")
     tasks.append(bot_task)
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
