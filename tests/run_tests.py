@@ -205,7 +205,7 @@ def _():
         s = _make_store(tmp)
         s.loc_set("test", "12345")
         s.flush()
-        data = json.loads(Path(os.path.join(tmp, "loc.json")).read_text())
+        data = json.loads(Path(os.path.join(tmp, "loc.json")).read_text(encoding="utf-8"))
         # store.py v2 schema wraps the payload in {"schema": 2, "checksum": ..., "data": {...}}
         if isinstance(data, dict) and data.get("schema") and "data" in data:
             data = data["data"]
@@ -582,7 +582,7 @@ def _():
 def _():
     # Verify that log.warning calls in __init__.py use type(e).__name__
     # rather than the full exception message (which could contain URL+key).
-    source = Path("weather_providers/__init__.py").read_text()
+    source = Path("weather_providers/__init__.py").read_text(encoding="utf-8")
     # Should use safe pattern
     assert "type(e).__name__" in source
     # Should NOT use raw f-string with exception
@@ -593,7 +593,7 @@ def _():
     # In 2.0, the Dispatcher owns the provider registry.
     # configure() calls dispatcher.clear() then dispatcher.register()
     # sequentially.  Verify the dispatcher is used.
-    source = Path("weather_providers/__init__.py").read_text()
+    source = Path("weather_providers/__init__.py").read_text(encoding="utf-8")
     assert "dispatcher.clear()" in source
     assert "dispatcher.register(" in source
 
@@ -638,7 +638,7 @@ def _():
 @test("SEC-WP-010: providers use defensive .get() for response parsing")
 def _():
     for fname in ("openmeteo/current.py", "weatherapi/current.py"):
-        source = Path(f"weather_providers/{fname}").read_text()
+        source = Path(f"weather_providers/{fname}").read_text(encoding="utf-8")
         assert '.get("current' in source or ".get('current'" in source or \
                'data.get("current")' in source or "data.get('current')" in source or \
                '.get("current' in source, \
@@ -1031,7 +1031,7 @@ def _():
 @test("SEC-009: _connect enforces TLS 1.2 minimum (code inspection)")
 def _():
     import ast
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     assert "minimum_version" in source
     assert "TLSv1_2" in source
 
@@ -1089,13 +1089,13 @@ def _():
 
 @test("BUG-028: module loader blocks symlinks outside modules dir (code inspection)")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     assert "resolve()" in source
     assert "modules directory" in source.lower() or "mod_root" in source
 
 @test("BUG-029: startup warns about world-readable config (code inspection)")
 def _():
-    source = Path("botlog.py").read_text()
+    source = Path("botlog.py").read_text(encoding="utf-8")
     assert "0o004" in source or "world-readable" in source
 
 @test("BUG-030: _MAX_TASKS constant defined and enforced")
@@ -1173,10 +1173,10 @@ def _():
 @test("SEC-017: get_hash and cmd_rehash use CONFIG_PATH")
 def _():
     # get_hash in botlog.py should reference CONFIG_PATH
-    bl_src = Path("botlog.py").read_text()
+    bl_src = Path("botlog.py").read_text(encoding="utf-8")
     assert "cfg.read(CONFIG_PATH)" in bl_src
     # cmd_rehash in admin_cmds.py should also reference CONFIG_PATH
-    ac_src = Path("admin_cmds.py").read_text()
+    ac_src = Path("admin_cmds.py").read_text(encoding="utf-8")
     assert "cfg.read(CONFIG_PATH)" in ac_src
     # Neither should hardcode "config.ini"
     assert 'cfg.read("config.ini")' not in bl_src
@@ -1184,21 +1184,21 @@ def _():
 
 @test("SEC-013: cmd_rehash does not leak exception text to IRC")
 def _():
-    source = Path("admin_cmds.py").read_text()
+    source = Path("admin_cmds.py").read_text(encoding="utf-8")
     rehash_section = source[source.index("async def cmd_rehash"):]
     rehash_section = rehash_section[:rehash_section.index("\n    async def ")]
     assert "see log" in rehash_section.lower()
 
 @test("SEC-014: cmd_auth does not leak ValueError text to IRC")
 def _():
-    source = Path("admin_cmds.py").read_text()
+    source = Path("admin_cmds.py").read_text(encoding="utf-8")
     auth_section = source[source.index("async def cmd_auth"):]
     auth_section = auth_section[:auth_section.index("\n    async def ")]
     assert "see log" in auth_section.lower()
 
 @test("BUG-035: symlink check uses Path.relative_to (cross-platform)")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     load_fn = source.split("def load_module")[1].split("\n    def ")[0]
     assert "relative_to" in load_fn
     # Must NOT use os.sep string comparison
@@ -1206,12 +1206,12 @@ def _():
 
 @test("BUG-042: asyncio.open_connection has explicit limit")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     assert "limit=8192" in source or "limit = 8192" in source
 
 @test("BUG-033: LimitOverrunError handled in main loop")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     assert "LimitOverrunError" in source
 
 @test("BUG-047: _deferred_rejoin validates channel names")
@@ -1235,14 +1235,14 @@ def _():
 
 @test("BUG-050: PING payload capped to prevent oversized PONG")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     # Find the PING handler section
     ping_section = source.split('if line.startswith("PING")')[1].split("return")[0]
     assert "[:400]" in ping_section or "[:300]" in ping_section or "cap" in ping_section.lower()
 
 @test("PLATFORM: config permission check guarded for POSIX only")
 def _():
-    source = Path("botlog.py").read_text()
+    source = Path("botlog.py").read_text(encoding="utf-8")
     # Find the BUG-029 section
     idx = source.index("BUG-029")
     section = source[idx:idx+300]
@@ -1307,12 +1307,12 @@ def _():
 
 @test("BUG-055: calc implicit mul uses safe sentinel (not NUL)")
 def _():
-    source = Path("modules/calc.py").read_text()
+    source = Path("modules/calc.py").read_text(encoding="utf-8")
     assert "\\x00" not in source  # NUL should not be used as sentinel
 
 @test("SEC-018: nick collision uses secrets, not random")
 def _():
-    source = Path("internets.py").read_text()
+    source = Path("internets.py").read_text(encoding="utf-8")
     # Find the 433 handler section (now in _handle_numeric)
     idx = source.index("_RE_433.match(line)")
     section = source[idx:idx+400]
@@ -1481,7 +1481,7 @@ def _():
 @test("sender: Sender has bounded MAX_QUEUE and safe overflow")
 def _():
     from sender import Sender
-    source = Path("sender.py").read_text()
+    source = Path("sender.py").read_text(encoding="utf-8")
     assert "maxsize=self.MAX_QUEUE" in source or "maxsize=self.MAX_QUEUE)" in source
     assert "_safe_put" in source
 
@@ -1519,7 +1519,7 @@ def _():
 @test("VERSION: __version__ matches pyproject.toml")
 def _():
     from internets import __version__
-    toml_text = Path("pyproject.toml").read_text()
+    toml_text = Path("pyproject.toml").read_text(encoding="utf-8")
     # Extract version from pyproject.toml
     import re
     m = re.search(r'version\s*=\s*"([^"]+)"', toml_text)

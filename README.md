@@ -96,42 +96,31 @@ The outbound path goes through `Sender`, an async drain loop over `asyncio.Prior
 
 ## Requirements
 
-Python 3.10 or later. One runtime dependency:
+Python 3.10 or later. Install the full runtime stack with a single command:
 
 ```
-pip install requests
+pip install -r requirements.txt
 ```
 
-For password hashing, `scrypt` is built into Python's `hashlib` — no extra packages needed. If you want stronger options:
+This pulls in every package listed below. `scrypt` is built into Python's `hashlib`, so it needs no install.
+
+| Package | Required for |
+|---|---|
+| [`requests`](https://pypi.org/project/requests/) | Core HTTP client used by every module that talks to a third-party API. Pinned `>=2.31.0` for CVE-2023-32681. |
+| [`aiohttp`](https://pypi.org/project/aiohttp/) | True async HTTP transport for weather provider calls (falls back to `requests` + `asyncio.to_thread` if missing). |
+| [`argon2-cffi`](https://pypi.org/project/argon2-cffi/) | Argon2id admin password hashing — recommended (memory-hard, GPU-resistant). |
+| [`bcrypt`](https://pypi.org/project/bcrypt/) | bcrypt admin password hashing — alternative to Argon2id. |
+| [`PyJWT`](https://pypi.org/project/PyJWT/) + [`cryptography`](https://pypi.org/project/cryptography/) | Apple WeatherKit JWT signing (ES256). Needed only if WeatherKit credentials are configured. |
+| [`keyring`](https://pypi.org/project/keyring/) | OS-native secret storage (macOS Keychain / Linux Secret Service / Windows Credential Manager). Falls back to a 0600 `secrets.ini` if missing. |
+| [`defusedxml`](https://pypi.org/project/defusedxml/) | Hardened XML parser used by `modules/qdb.py`. Blocks billion-laughs DoS on top of stdlib's XXE protection. |
+
+For development (tests, linting, security scans), install the editable dev extras:
 
 ```
-pip install bcrypt          # alternative
-pip install argon2-cffi     # strongest option
+pip install -e ".[dev]"
 ```
 
-For true async HTTP (instead of `requests` + `asyncio.to_thread`):
-
-```
-pip install aiohttp
-```
-
-For Apple WeatherKit support (requires Apple Developer Program membership):
-
-```
-pip install PyJWT cryptography
-```
-
-For OS-native encrypted-at-rest secret storage:
-
-```
-pip install keyring
-```
-
-Or install everything at once:
-
-```
-pip install internets-irc[all]
-```
+This adds `pytest`, `pytest-asyncio`, `pytest-cov`, `coverage`, `bandit`, `pip-audit`, and `build`.
 
 ## Setup
 
