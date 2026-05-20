@@ -81,3 +81,8 @@ config.local.ini.bak
 *.bak
 *.orig
 *.rej
+
+# ── Local diagnostic / scratch ───────────────────────────────────────
+# Screenshots / paste-bins / one-off captures used during debugging.
+# Useful locally; never meant for the repo.
+screenshots/
