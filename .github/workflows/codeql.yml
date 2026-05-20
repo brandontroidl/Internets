@@ -1,0 +1,55 @@
+name: CodeQL
+
+# GitHub-native semantic SAST.  Catches bugs bandit can't (data-flow
+# vulnerabilities, taint analysis, semantic patterns).  Free on
+# public repos, surfaces findings in the Security tab.
+#
+# Why this isn't redundant with bandit:
+#   bandit  -> pattern-matching SAST (cheap, fast, catches the obvious)
+#   CodeQL  -> semantic SAST (deeper, catches taint paths and dataflow
+#              issues bandit misses; e.g. a tainted-source variable
+#              reaching a sink across function boundaries).
+#
+# Both upload SARIF to the same Security tab; alerts dedupe sensibly.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Tuesday 06:00 UTC -- offset from security.yml's Monday run
+    # so they don't both fight for the same runner pool.
+    - cron: "0 6 * * 2"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL (Python)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
+        with:
+          category: "/language:${{ matrix.language }}"

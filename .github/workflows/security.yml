@@ -26,10 +26,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: "3.12"
 
@@ -38,21 +38,33 @@ jobs:
           python -m pip install --upgrade pip
           pip install "bandit[sarif]>=1.7,<2"
 
-      # Informational text run — `--exit-zero` so findings don't fail
-      # the job.  Real triage happens via the SARIF upload below, which
-      # surfaces findings in the Security tab as code-scanning alerts.
-      # CI green here means "we ran bandit", not "no findings".
-      - name: Run bandit (informational text output)
+      # Informational text run — every finding visible in CI log.
+      # `-ll` filters out LOW-severity noise; `--exit-zero` so the
+      # informational pass doesn't fail the job — the HIGH gate below
+      # is where blocking happens.
+      - name: Run bandit (informational, MEDIUM+ severity)
         run: |
           bandit -r . \
             --exclude ./tests,./.venv,./build,./dist,./.git,./__pycache__ \
             -ll \
             --exit-zero
 
-      # SARIF upload — always run.  `|| true` is intentional: bandit
-      # returns non-zero on findings even in SARIF mode and we want the
-      # upload step to still get the file.
+      # Gating step — fail CI on any HIGH-severity finding (HIGH severity
+      # AND HIGH confidence).  Lower-tier findings still appear in the
+      # Security tab via SARIF but don't block merges.  Adjust thresholds
+      # via -i (severity) and -c (confidence) if you ever need to tighten.
+      - name: Fail on HIGH-severity bandit findings
+        run: |
+          bandit -r . \
+            --exclude ./tests,./.venv,./build,./dist,./.git,./__pycache__ \
+            -iii -ll
+
+      # SARIF upload — always run, even if the HIGH gate above failed
+      # (we still want the findings in the Security tab so they can be
+      # triaged / acknowledged).  `|| true` so the SARIF generation
+      # itself never blocks the upload.
       - name: Run bandit (SARIF for code scanning)
+        if: always()
         run: |
           bandit -r . \
             --exclude ./tests,./.venv,./build,./dist,./.git,./__pycache__ \
@@ -60,7 +72,7 @@ jobs:
 
       - name: Upload bandit SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -71,10 +83,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: "3.12"
 
@@ -100,13 +112,13 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
         with:
           # Full history so gitleaks can scan past commits, not just HEAD.
           fetch-depth: 0
 
       - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "true"

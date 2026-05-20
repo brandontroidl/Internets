@@ -146,17 +146,37 @@ def _safe_exc(e: BaseException) -> str:
     return type(e).__name__
 
 
+# Backends we explicitly REFUSE to treat as "available".  The Fail
+# backend is keyring's "nothing usable" sentinel.  Plaintext / Null /
+# Memory backends store secrets without encryption — accepting them
+# would silently downgrade our security posture, so we treat them the
+# same as "no keyring at all" and let the 0600 file backend take over.
+_UNSAFE_KEYRING_BACKENDS = frozenset({
+    "fail",       # keyring.backends.fail.Keyring
+    "plaintext",  # keyring.backends.plaintext (if any third-party adds one)
+    "null",       # explicit no-op backend
+    "memory",     # process-memory only, never persisted
+})
+
+
 def keyring_available() -> bool:
-    """True if the ``keyring`` library is importable AND has a usable backend."""
+    """True iff ``keyring`` is importable AND the active backend
+    actually encrypts at rest.
+
+    Rejects Fail / Plaintext / Null / Memory backends explicitly —
+    accepting any of those would silently downgrade secret storage
+    to "no encryption", which is worse than the 0600 secrets.ini
+    fallback (which is at least file-perm protected).
+    """
     kr = _keyring()
     if kr is None:
         return False
     try:
         backend = kr.get_keyring()
-        # The "fail" backend is what keyring uses when nothing real is found.
-        return "fail" not in type(backend).__name__.lower()
     except Exception:
         return False
+    name = type(backend).__name__.lower()
+    return not any(unsafe in name for unsafe in _UNSAFE_KEYRING_BACKENDS)
 
 
 def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:

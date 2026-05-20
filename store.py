@@ -177,6 +177,16 @@ class Store:
                 envelope = _wrap_v2(data)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(envelope, f, indent=2)
+                # Tighten perms BEFORE the atomic replace so the final
+                # file is never world-readable, even momentarily.
+                # locations.json holds user-supplied ZIPs, users.json
+                # holds nick+hostmask+timestamps (PII).  POSIX only —
+                # Windows ACLs are the operator's responsibility.
+                if os.name != "nt":
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError as e:
+                        log.warning(f"Store chmod {tmp_path}: {e!r}")
                 os.replace(tmp_path, p)
                 tmp_path = None  # successfully renamed — nothing to clean up
                 return True
@@ -408,8 +418,25 @@ class Store:
 
 
 class RateLimiter:
-    """Per-nick flood and API rate limiting with periodic stale-entry cleanup."""
+    """Per-nick flood + API rate limiting, plus per-channel global gate.
+
+    Three independent windows:
+
+    * ``flood_check(nick, is_admin)`` — per-nick, fast (default 3s).
+      Admins bypass.  Catches a single user hammering the bot.
+    * ``api_check(nick)`` — per-nick, slower (default 10s).  Throttles
+      the expensive paths (geocoding + weather APIs).
+    * ``channel_check(channel, threshold)`` — per-channel, sliding window
+      across ALL users in that channel.  Catches coordinated floods
+      where N different nicks each send 1 command/second.  Returns
+      True when the channel has exceeded ``threshold`` commands in
+      the last ``_CHANNEL_WINDOW`` seconds.
+
+    Periodic ``_cleanup`` evicts stale entries from all three maps.
+    """
     _CLEANUP_INTERVAL = 300
+    _CHANNEL_WINDOW = 10        # seconds — sliding window for channel rate
+    _CHANNEL_DEFAULT_BURST = 20  # commands per window before throttling
 
     def __init__(self, flood_cd: int, api_cd: int) -> None:
         self._flood_cd = flood_cd
@@ -417,6 +444,8 @@ class RateLimiter:
         self._lock     = threading.Lock()
         self._flood: dict[str, float] = {}
         self._api:   dict[str, float] = {}
+        # Per-channel: list of recent command timestamps within the window.
+        self._channel: dict[str, list[float]] = {}
         self._last_cleanup = time.time()
 
     def _cleanup(self, now: float) -> None:
@@ -424,6 +453,13 @@ class RateLimiter:
             return
         self._flood = {k: v for k, v in self._flood.items() if now - v < self._flood_cd}
         self._api   = {k: v for k, v in self._api.items()   if now - v < self._api_cd}
+        # Channel: drop entries whose entire window has elapsed.
+        cutoff = now - self._CHANNEL_WINDOW
+        self._channel = {
+            ch: [t for t in ts if t > cutoff]
+            for ch, ts in self._channel.items()
+            if any(t > cutoff for t in ts)
+        }
         self._last_cleanup = now
 
     def flood_check(self, nick: str, is_admin: bool = False) -> bool:
@@ -448,4 +484,32 @@ class RateLimiter:
             if now - self._api.get(k, 0) < self._api_cd:
                 return True
             self._api[k] = now
+        return False
+
+    def channel_check(self, channel: str, threshold: int | None = None) -> bool:
+        """Return True if *channel* has exceeded the burst threshold.
+
+        Defends against coordinated floods across distinct nicks
+        (per-nick flood/api limits don't catch those — N users each
+        sending 1 command/second can still saturate the bot).
+        Defaults: ``_CHANNEL_DEFAULT_BURST`` commands per
+        ``_CHANNEL_WINDOW`` seconds.
+        """
+        if not channel or not channel.startswith(("#", "&", "+", "!")):
+            return False  # not a channel (PM) — only per-nick limits apply
+        cap = threshold if threshold is not None else self._CHANNEL_DEFAULT_BURST
+        now = time.time()
+        k = channel.lower()
+        with self._lock:
+            self._cleanup(now)
+            cutoff = now - self._CHANNEL_WINDOW
+            recent = [t for t in self._channel.get(k, []) if t > cutoff]
+            if len(recent) >= cap:
+                # Channel is over its budget — refuse but do NOT record
+                # the new attempt (so attackers can't keep the window
+                # full forever by spamming once the limit is hit).
+                self._channel[k] = recent
+                return True
+            recent.append(now)
+            self._channel[k] = recent
         return False
