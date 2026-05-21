@@ -54,9 +54,15 @@ def _lookup_sync(ua: str) -> str:
                 "Accept": "text/html",
             },
             timeout=15,
+            stream=True,
         )
         r.raise_for_status()
-        raw_matches = _FML_ARTICLE.findall(r.text)
+        # Cap the page at 512 KB — FML's /random is normally ~200 KB.
+        body = r.raw.read(512 * 1024 + 1, decode_content=True)
+        if len(body) > 512 * 1024:
+            return "fmylife.com response too large"
+        text = body.decode("utf-8", errors="replace")
+        raw_matches = _FML_ARTICLE.findall(text)
         if not raw_matches:
             return "could not parse FML page — site layout may have changed"
 

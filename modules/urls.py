@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse, urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.urls")
 
@@ -387,14 +387,12 @@ def _shorten_sync(url: str, ua: str) -> str:
     if not _url_is_safe(url):
         return "shortening failed"
     try:
-        r = requests.get(
+        d = fetch_json(
             "https://is.gd/create.php",
             params={"format": "json", "url": url},
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=_REQUEST_TIMEOUT,
         )
-        r.raise_for_status()
-        d = r.json()
         if "shorturl" in d:
             # is.gd returns its own URL — sanitize defensively anyway.
             return f"\x02Short URL\x02 {_strip_ctrl(str(d['shorturl']))}"

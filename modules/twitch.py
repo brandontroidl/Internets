@@ -22,6 +22,10 @@ class _TwitchAPI:
         self._expires: float = 0
 
     def _refresh_token(self) -> None:
+        # POST doesn't go through ``fetch_json`` (GET-only); inline the same
+        # stream + size-cap pattern so a malicious response can't OOM us.
+        # OAuth token responses are tiny (~200 bytes); 16 KB is generous.
+        import json  # noqa: PLC0415
         r = requests.post(
             "https://id.twitch.tv/oauth2/token",
             params={
@@ -31,9 +35,13 @@ class _TwitchAPI:
             },
             headers={"User-Agent": self._ua},
             timeout=10,
+            stream=True,
         )
         r.raise_for_status()
-        d = r.json()
+        body = r.raw.read(16 * 1024 + 1, decode_content=True)
+        if len(body) > 16 * 1024:
+            raise RuntimeError("twitch oauth token response too large")
+        d = json.loads(body.decode("utf-8", errors="replace"))
         self._token = d["access_token"]
         self._expires = time.time() + d.get("expires_in", 3600) - 60
 

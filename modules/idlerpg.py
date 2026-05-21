@@ -13,6 +13,9 @@ log = logging.getLogger("internets.idlerpg")
 _ALIGNMENTS = {"g": "Good", "e": "Evil", "n": "Neutral"}
 
 
+_MAX_BODY_BYTES = 256 * 1024
+
+
 def _lookup_sync(player: str, base_url: str, ua: str) -> str:
     """Blocking IdleRPG lookup — run via asyncio.to_thread."""
     try:
@@ -21,10 +24,17 @@ def _lookup_sync(player: str, base_url: str, ua: str) -> str:
             params={"player": player},
             headers={"User-Agent": ua},
             timeout=10,
+            stream=True,
         )
         r.raise_for_status()
+        # Cap the body before buffering all of it into RAM — defusedxml
+        # protects against XML attacks during parsing, but the raw
+        # response still has to be read first.
+        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+        if len(body) > _MAX_BODY_BYTES:
+            return "IdleRPG response too large"
+        text = body.decode("utf-8", errors="replace")
         # Strip IRC control codes that the XML may contain
-        text = r.text
         for ch in ("\x02", "\x03", "\x0f", "\x1f"):
             text = text.replace(ch, "")
 
