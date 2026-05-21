@@ -424,11 +424,10 @@ def _scrub_config_ini(cfg_path: Path, names: list[str]) -> None:
 
 
 def migrate(config_path: Path = Path("config.ini"),
-            backend: str = "auto",
             *, scrub: bool = True) -> dict[str, str]:
-    """Move all known plaintext secrets from config.ini into the secret store.
+    """Move all known plaintext secrets from config.ini into ``[secrets]``.
 
-    Returns ``{name: action}`` where action is ``stored:<backend>``,
+    Returns ``{name: action}`` where action is ``stored:file``,
     ``skipped:empty``, or ``error:<reason>``.
     """
     cfg_path = config_path.resolve()
@@ -436,24 +435,15 @@ def migrate(config_path: Path = Path("config.ini"),
         raise FileNotFoundError(f"{cfg_path} not found")
     parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     parser.read(cfg_path, encoding="utf-8")
-    # If we're going to write secrets into this file (file backend, possibly
-    # via "auto" when no keyring is available) and it's looser than 0o600,
-    # tighten it first.  Otherwise _write_file_secret would refuse every
-    # write and the migration would no-op with a flood of PermissionError.
-    effective_backend = "keyring" if (
-        backend == "auto" and keyring_available()
-    ) else ("keyring" if backend == "keyring" else "file")
-    if (effective_backend == "file"
-            and cfg_path == SECRETS_FILE
+    # Tighten perms first so _write_file_secret accepts the writes.
+    if (cfg_path == SECRETS_FILE
             and os.name != "nt"
             and stat.S_IMODE(cfg_path.stat().st_mode) != 0o600):
         os.chmod(cfg_path, 0o600)
-        # NB: don't include the path in this log line.  CodeQL's
+        # NB: don't include the path in this log line — CodeQL's
         # py/clear-text-logging-sensitive-data heuristic taints any
-        # variable that flows through this function (because the other
-        # args carry secret values), and a Path object is enough to
-        # trip the rule.  Static-string log is plenty here.
-        log.info("tightened config file to 0o600 for file-backend secret writes")
+        # variable flowing through this function.
+        log.info("tightened config file to 0o600 for [secrets] writes")
     results: dict[str, str] = {}
     migrated: list[str] = []
     for name, (section, key) in CONFIG_LOCATIONS.items():
@@ -465,14 +455,13 @@ def migrate(config_path: Path = Path("config.ini"),
             results[name] = "skipped:empty"
             continue
         try:
-            used = set_value(name, value, backend=backend)
+            used = set_value(name, value)
             results[name] = f"stored:{used}"
             migrated.append(name)
         except Exception as e:
-            # Backend errors can include the offending value in str(e)
-            # (e.g. keyring backends quoting the entry).  Report the
-            # type only — operators can grep the log for full traceback
-            # by re-running with --backend file if needed.
+            # Report exception TYPE only — error messages from configparser /
+            # OS file APIs occasionally echo back path fragments we don't
+            # want in the log.
             results[name] = f"error:{_safe_exc(e)}"
     if scrub and migrated:
         _scrub_config_ini(cfg_path, migrated)
@@ -488,26 +477,20 @@ def _cmd_status(_: argparse.Namespace) -> int:
     for k, v in info.items():
         print(f"  {k:24} {v}")
     print()
-    backend = "keyring" if info["keyring_available"] else "file"
-    print(f"Default write backend: {backend}")
-    if not info["keyring_installed"]:
-        print("  Tip: pip install keyring  (for OS-native encrypted storage)")
+    print("Backends: env var (INTERNETS_<NAME>) → config.ini[secrets] (0o600)")
     return 0
 
 
 def _cmd_list(_: argparse.Namespace) -> int:
     """``python -m secret_store list`` — show which secret keys exist
     and in which backend each is stored.  Prints only the canonical key
-    NAME and BACKEND label (env / keyring / file / unset), never the
-    secret value itself.
+    NAME and BACKEND label (env / file / unset), never the secret value
+    itself.
 
     The body uses explicit equality branches to map ``list_stored()``'s
-    return into literal display labels.  This is structurally identical
-    to a dict lookup but, unlike `.get()`, breaks CodeQL's data-flow
-    taint propagation: in each branch the printed ``label`` is provably
-    a string literal, never a value carried over from ``list_stored()``.
-    Without this, CodeQL's ``py/clear-text-logging-sensitive-data`` query
-    raises a false positive on the line that prints the inventory.
+    return into literal display labels — breaks CodeQL's data-flow taint
+    propagation so its ``py/clear-text-logging-sensitive-data`` query
+    doesn't raise a false positive on the print.
     """
     stored = list_stored()
     width = max(len(n) for n in KNOWN_SECRETS) + 2
@@ -515,12 +498,8 @@ def _cmd_list(_: argparse.Namespace) -> int:
     print("-" * (width + 12))
     for name in KNOWN_SECRETS:
         b = stored.get(name) or ""
-        # The four possible backend codes; explicit branches keep
-        # `label` provably a literal at every print site.
         if b == "env":
             label = "env"
-        elif b == "keyring":
-            label = "keyring"
         elif b == "file":
             label = "file"
         else:
@@ -532,52 +511,22 @@ def _cmd_list(_: argparse.Namespace) -> int:
 def _cmd_get(args: argparse.Namespace) -> int:
     """Confirm presence of a secret without printing the value.
 
-    Prints a non-revealing summary like ``(set, 32 chars, backend=keyring)``
+    Prints a non-revealing summary like ``(set, 32 chars, backend=file)``
     so the value cannot be captured by terminal scrollback, shell history,
-    or a screen recording open on the operator's machine.
-
-    The previous ``--reveal`` flag was removed: printing a secret to stdout
-    was a real exposure surface (CodeQL's
-    ``py/clear-text-logging-sensitive-data`` query flagged it correctly),
-    and the legitimate use case (manual key rotation) is already covered
-    by reading the value directly from Python::
+    or a screen recording open on the operator's machine.  There is no
+    CLI flag to print the value; legitimate extraction goes through::
 
         python -c "import secret_store; print(secret_store.get('omdb_key'))"
-
-    That makes the operator's intent explicit on the command line and
-    keeps the CLI free of a footgun.
     """
     val = get(args.name)
     if not val:
         print(f"(no value for {args.name!r})", file=sys.stderr)
         return 1
-    # Identify which backend held the value (re-runs the lookup chain
-    # so we report the actual hit point — env / keyring / file).
-    backend = "unknown"
-    env_key = ENV_PREFIX + args.name.upper()
-    if os.environ.get(env_key):
+    # Report which backend the value came from.
+    if os.environ.get(ENV_PREFIX + args.name.upper()):
         backend = "env"
     else:
-        kr = _keyring()
-        if kr is not None:
-            try:
-                if kr.get_password(SERVICE, args.name):
-                    backend = "keyring"
-            except Exception:
-                pass  # nosec B110: best-effort cleanup
-        if backend == "unknown" and SECRETS_FILE.exists() and perms_ok(SECRETS_FILE)[0]:
-            # Confirm the value actually lives in the file before
-            # claiming it — avoids misreporting when the value was
-            # picked up via env/keyring but config.ini happens to exist.
-            parser = configparser.ConfigParser()
-            try:
-                parser.read(SECRETS_FILE, encoding="utf-8")
-                if parser.has_option("secrets", args.name):
-                    v = parser.get("secrets", args.name).strip()
-                    if v and v.lower() not in _PLACEHOLDERS:
-                        backend = "file"
-            except configparser.Error:
-                pass
+        backend = "file"
     print(f"(set, {len(val)} chars, backend={backend})")
     return 0
 
@@ -589,17 +538,17 @@ def _cmd_set(args: argparse.Namespace) -> int:
     if not value:
         print("error: empty value", file=sys.stderr)
         return 2
-    used = set_value(args.name, value, backend=args.backend)
+    used = set_value(args.name, value)
     print(f"stored {args.name} in {used}")
     return 0
 
 
 def _cmd_delete(args: argparse.Namespace) -> int:
-    touched = delete(args.name, backend=args.backend)
+    touched = delete(args.name)
     if touched:
         print(f"removed {args.name} from: {', '.join(touched)}")
         return 0
-    print(f"{args.name} not found in any backend", file=sys.stderr)
+    print(f"{args.name} not found in [secrets]", file=sys.stderr)
     return 1
 
 
@@ -654,9 +603,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
 def _cmd_migrate(args: argparse.Namespace) -> int:
     cfg_path = Path(args.config).resolve()
     print(f"Migrating secrets from {cfg_path}")
-    print(f"  backend: {args.backend}")
     print(f"  scrub:   {'yes' if not args.no_scrub else 'no (dry-run)'}")
-    results = migrate(cfg_path, backend=args.backend, scrub=not args.no_scrub)
+    results = migrate(cfg_path, scrub=not args.no_scrub)
     stored = [n for n, a in results.items() if a.startswith("stored:")]
     errors = [(n, a) for n, a in results.items() if a.startswith("error:")]
     print()
@@ -682,10 +630,10 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m secret_store",
-        description="Manage Internets bot secrets (keyring/env/file).")
+        description="Manage Internets bot secrets (env / config.ini[secrets]).")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("status", help="show backend status").set_defaults(func=_cmd_status)
+    sub.add_parser("status", help="show secret store status").set_defaults(func=_cmd_status)
     sub.add_parser("list",   help="list known secrets and which backend holds each"
                   ).set_defaults(func=_cmd_list)
 
@@ -696,18 +644,14 @@ def _build_parser() -> argparse.ArgumentParser:
     g.add_argument("name")
     g.set_defaults(func=_cmd_get)
 
-    s = sub.add_parser("set", help="store a secret value")
+    s = sub.add_parser("set", help="store a secret value in config.ini[secrets]")
     s.add_argument("name")
     s.add_argument("--value", default=None,
                    help="value (omit to be prompted; safer for shell history)")
-    s.add_argument("--backend", default="auto",
-                   choices=("auto", "keyring", "file"))
     s.set_defaults(func=_cmd_set)
 
-    d = sub.add_parser("delete", help="remove a secret")
+    d = sub.add_parser("delete", help="remove a secret from config.ini[secrets]")
     d.add_argument("name")
-    d.add_argument("--backend", default="all",
-                   choices=("all", "keyring", "file"))
     d.set_defaults(func=_cmd_delete)
 
     i = sub.add_parser("init",
@@ -718,12 +662,10 @@ def _build_parser() -> argparse.ArgumentParser:
     i.set_defaults(func=_cmd_init)
 
     m = sub.add_parser("migrate",
-        help="move plaintext from config.ini into the secret store + scrub config.ini")
+        help="move plaintext from non-[secrets] sections into [secrets] + scrub source")
     m.add_argument("--config", default="config.ini")
-    m.add_argument("--backend", default="auto",
-                   choices=("auto", "keyring", "file"))
     m.add_argument("--no-scrub", action="store_true",
-                   help="store secrets but leave config.ini untouched (dry-run-ish)")
+                   help="store secrets but leave non-[secrets] sections untouched (dry-run-ish)")
     m.set_defaults(func=_cmd_migrate)
 
     return p
