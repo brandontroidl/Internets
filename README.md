@@ -173,7 +173,7 @@ Useful commands:
 python -m secret_store status                # backends available
 python -m secret_store list                  # all known secrets + which backend holds each
 python -m secret_store get <name>            # non-revealing: prints "(set, N chars, backend=X)"
-python -m secret_store get <name> --reveal   # actually print the value
+python -c "import secret_store; print(secret_store.get('<name>'))"   # extract the value (for rotation)
 python -m secret_store set <name>            # prompt for value, store in best available backend
 python -m secret_store delete <name>         # remove from all backends
 python -m secret_store migrate               # upgrade from 2.4.0 — move keys out of config.ini
@@ -617,7 +617,7 @@ These values are **not hashed**. Hashing is one-way; the bot has to send the lit
 
 - The bot never logs the *value* of any secret. Module `on_load()` logs presence only.
 - Outbound IRC traffic is scrubbed for credential prefixes (`PASS`, `NS IDENTIFY`, `OPER`, `AUTHENTICATE`) before being logged by `sender.py`.
-- `python -m secret_store get <name>` prints `(set, N chars, backend=<env|keyring|file>)`. `--reveal` is required to print the actual value.
+- `python -m secret_store get <name>` prints only `(set, N chars, backend=<env|keyring|file>)` — never the value. There is **no CLI flag to print the secret** (closes a scrollback / shell-history exposure surface). For legitimate extraction (key rotation), use `python -c "import secret_store; print(secret_store.get('<name>'))"` so the intent is explicit at the call site.
 - `python -m secret_store list` shows the backend per secret, never the values.
 - `config.ini` `[secrets]` is read only when `stat().st_mode & 0o777 == 0o600`. The store fails closed (returns empty) if perms are looser.
 - Unconfigured providers and modules are hidden: the `BotModule.is_configured()` hook makes `.help` skip them, weather flags for unconfigured providers don't appear in `.w -l`, and forcing such a provider returns "not active" without making an API call.

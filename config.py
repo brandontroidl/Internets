@@ -51,11 +51,17 @@ def reload_config() -> list[str]:
     Every reload path — startup, SIGHUP, cmd_rehash, get_hash —
     must go through here so the overlay stays intact.
 
+    Reads are pinned to UTF-8: the committed config.ini.example uses
+    em-dashes and box-drawing characters in its section headers, and
+    ``configparser.read()`` otherwise falls back to the platform locale
+    (cp1252 on Windows), which raises UnicodeDecodeError on the very
+    first non-ASCII byte.
+
     Returns the list of files actually read (for caller logging).
     """
-    files = cfg.read(CONFIG_PATH)
+    files = cfg.read(CONFIG_PATH, encoding="utf-8")
     if _LOCAL_CONFIG.exists():
-        files += cfg.read(str(_LOCAL_CONFIG))
+        files += cfg.read(str(_LOCAL_CONFIG), encoding="utf-8")
     return files
 
 
