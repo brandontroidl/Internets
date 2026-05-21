@@ -51,9 +51,14 @@ def _ddg_web(query: str, ua: str) -> str:
                 "Content-Type": "application/x-www-form-urlencoded",
             },
             timeout=10,
+            stream=True,
         )
         r.raise_for_status()
-        body = r.text
+        # Cap the HTML at 512 KB to defend against a tampered response.
+        raw = r.raw.read(512 * 1024 + 1, decode_content=True)
+        if len(raw) > 512 * 1024:
+            return f"[DuckDuckGo] response too large for '{query}'"
+        body = raw.decode("utf-8", errors="replace")
 
         links = _DDG_RESULT_RE.findall(body)
         snippets = _DDG_SNIPPET_RE.findall(body)

@@ -45,6 +45,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **HTTP response size caps everywhere** — added `fetch_json(url, *, ua,
+  …, max_bytes=256 KB)` to `modules/base.py` and migrated every module
+  that called `requests.get(...).json()` through it: `imdb`, `dictionary`,
+  `urbandictionary`, `lastfm`, `twitch`, `stocks` (×6), `steam` (×3 —
+  GetOwnedGames bumped to 1 MB for power users), `search`, `youtube`,
+  `urls` (is.gd).  `idlerpg` (XML) and `fml` (HTML scrape) inlined the
+  same stream + cap pattern.  Twitch's OAuth POST got an inline 16 KB
+  cap too.  Closes the OOM / JSON-bomb gap a third-party-API audit
+  flagged (the rest of the codebase already followed this pattern via
+  `r.raw.read(MAX_BODY_BYTES + 1, decode_content=True)`).
 - **`modules/idlerpg.py`** — use `defusedxml.ElementTree` instead of the
   stdlib parser for 3rd-party IdleRPG XML (Bandit B314 — XXE / billion-
   laughs hardening).
