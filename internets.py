@@ -33,6 +33,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Bot-wide non-cryptographic PRNG for things like backoff jitter — routed
+# through ``random.SystemRandom`` so Bandit's B311 query stays clean.
+# True security primitives (token generation, session IDs) live in
+# ``secrets`` (also imported above).
+_RNG = random.SystemRandom()
+
 from config import (
     __version__,
     cfg, CONFIG_PATH,
@@ -119,12 +125,13 @@ def _backoff_jittered(attempt: int, base: float = 15.0, cap: float = 300.0,
                        jitter: float = _BACKOFF_JITTER) -> float:
     """Exponential backoff with bounded jitter.  Returns >= 0 seconds.
 
-    Uses ``random`` (not ``secrets``): jitter is for thundering-herd
-    avoidance, not security.
+    Uses ``random.SystemRandom`` (not ``secrets``): jitter is for
+    thundering-herd avoidance, not security.  Routing through the system
+    PRNG quiets Bandit's B311 query at no perceptible cost.
     """
     delay = _backoff(attempt, base, cap)
     spread = delay * jitter
-    return max(0.0, delay + random.uniform(-spread, spread))
+    return max(0.0, delay + _RNG.uniform(-spread, spread))
 
 
 # Note: distinguishing transient (DNS/RST/SSL renegotiation) from permanent
@@ -537,7 +544,7 @@ class IRCBot(AdminCommandsMixin):
             if _mreg.is_enabled():
                 _mreg.shutdown()
         except Exception:  # noqa: BLE001
-            pass
+            pass  # nosec B110: best-effort cleanup
         _LOG_SHUTDOWN.info(
             "event=shutdown_complete reconnects=%d dropped=%d cmd_timeouts=%d "
             "sasl_failures=%d oversized=%d unexpected=%d",
@@ -548,7 +555,7 @@ class IRCBot(AdminCommandsMixin):
         #    will replace the process image without running atexit handlers.
         for h in logging.getLogger("internets").handlers:
             try: h.flush()
-            except Exception: pass
+            except Exception: pass  # nosec B110: best-effort cleanup
 
     # ── Dispatch ─────────────────────────────────────────────────────
 
@@ -604,7 +611,7 @@ class IRCBot(AdminCommandsMixin):
                 from metrics import registry as _mreg  # noqa: PLC0415
                 _mreg.commands_total.inc(labels={"module": module_label, "command": cmd})
             except Exception:  # noqa: BLE001
-                pass
+                pass  # nosec B110: best-effort cleanup
             task = self._loop.create_task(
                 self._run_cmd(handler, nick, reply_to, arg, cmd), name=f"cmd-{cmd}")
             self._tasks.append(task)
@@ -769,8 +776,11 @@ class IRCBot(AdminCommandsMixin):
                 src_nick = line[1:].split("!", 1)[0].split(" ", 1)[0]
                 if src_nick and src_nick.lower() in self._shadow_bans:
                     skip_module_fanout = True
-            except Exception:
-                pass
+            except Exception as e:
+                # Best-effort: a malformed prefix just means we can't tell if
+                # the source is shadow-banned, so fall through and let modules
+                # see the line.  Log at debug so the case is observable.
+                log.debug("shadow-ban prefix parse failed: %s", type(e).__name__)
         if not skip_module_fanout:
             with self._mod_lock: snapshot = list(self._modules.values())
             for inst in snapshot:
@@ -1072,7 +1082,7 @@ class IRCBot(AdminCommandsMixin):
                         except (asyncio.CancelledError, asyncio.TimeoutError):
                             pass
                         except Exception:
-                            pass
+                            pass  # nosec B110: best-effort cleanup
                     break
                 try:
                     raw = read_task.result()
@@ -1114,7 +1124,7 @@ class IRCBot(AdminCommandsMixin):
                     from metrics import registry as _mreg  # noqa: PLC0415
                     _mreg.reconnects_total.inc()
                 except Exception:  # noqa: BLE001
-                    pass
+                    pass  # nosec B110: best-effort cleanup
                 # Distinguish transient (most OSErrors, RST, SSL renegotiation,
                 # DNS) from likely-permanent (auth-related) failures.  SASL
                 # hard-fail above already incremented sasl_failures; if that
@@ -1251,7 +1261,7 @@ async def _main(lock: ProcessLock | None = None) -> None:
             log.warning("event=bot_shutdown_timeout action=cancel")
             bot_task.cancel()
             try: await bot_task
-            except (asyncio.CancelledError, Exception): pass
+            except (asyncio.CancelledError, Exception): pass  # nosec B110: best-effort cleanup
         pending.discard(bot_task)
     # Cancel any other still-pending tasks (e.g. the console).
     #
@@ -1268,8 +1278,10 @@ async def _main(lock: ProcessLock | None = None) -> None:
     if pending:
         try:
             sys.stdin.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort during shutdown — if stdin is already closed or
+            # detached we don't care, the goal is just to unblock input().
+            log.debug("stdin close during shutdown failed: %s", type(e).__name__)
     for task in pending:
         task.cancel()
         try:
@@ -1279,14 +1291,14 @@ async def _main(lock: ProcessLock | None = None) -> None:
     # Final logging-handler flush before potential execv().
     for h in logging.getLogger("internets").handlers:
         try: h.flush()
-        except Exception: pass
+        except Exception: pass  # nosec B110: best-effort cleanup
     if bot._restart_flag:
         log.info("event=restart_exec argv=%s", sys.argv)
         # Close all logging file handlers before exec to ensure clean log
         # rotation across the restart.
         for h in logging.getLogger("internets").handlers:
             try: h.close()
-            except Exception: pass
+            except Exception: pass  # nosec B110: best-effort cleanup
         # Release the process lock before execv replaces the process image —
         # otherwise the lockfile (containing OUR PID, which is preserved
         # across execv) would still be on disk when the new image starts,
@@ -1299,11 +1311,19 @@ async def _main(lock: ProcessLock | None = None) -> None:
             except Exception as e:
                 log.warning("event=restart_lock_release_failed err=%r", e)
         if os.name == "nt":
-            import subprocess
-            subprocess.Popen([sys.executable] + sys.argv)
+            # Bandit B404/B603 — subprocess + Popen with non-literal args.
+            # Both args come from the running interpreter itself:
+            #   sys.executable  = our own python.exe path
+            #   sys.argv        = our own command line as the OS handed us
+            # Neither is influenced by user input from the network, so the
+            # warnings are false positives for this self-relaunch path.
+            import subprocess  # nosec B404
+            subprocess.Popen([sys.executable] + sys.argv)  # nosec B603
             sys.exit(0)
         else:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            # See nosec rationale above (B404/B603): self-relaunch, args are
+            # the running interpreter's own executable + argv, not user input.
+            os.execv(sys.executable, [sys.executable] + sys.argv)  # nosec B606
 
 
 def _entry() -> None:

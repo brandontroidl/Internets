@@ -9,6 +9,11 @@ import re
 import requests
 from .base import BotModule
 
+# Bandit B311 false-positive — picking which scraped quote to print is
+# not security-relevant, but routing through SystemRandom keeps scans
+# clean without per-line ``# nosec``.
+_rng = random.SystemRandom()
+
 log = logging.getLogger("internets.fml")
 
 # Match an FML article's BODY anchor on the random page.  The site
@@ -77,7 +82,7 @@ def _lookup_sync(ua: str) -> str:
             qid, raw = raw_matches[0]
             candidates = [(qid, _strip_tags(raw))]
 
-        qid, text = random.choice(candidates)
+        qid, text = _rng.choice(candidates)
         if len(text) > 400:
             text = text[:397] + "..."
         return f"[fml #{qid}] {text}"

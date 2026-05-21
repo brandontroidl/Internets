@@ -263,7 +263,10 @@ class MetricsRegistry:
             log.info("metrics.expose: refused — registry not enabled "
                      "(call registry.enable() first)")
             return
-        if host in ("0.0.0.0", "::", ""):
+        # Defensive REFUSAL of all-interfaces binds — these literals appear
+        # as a guard, never as a target.  Bandit B104 grep-matches the
+        # strings regardless of context (false positive); suppress it here.
+        if host in ("0.0.0.0", "::", ""):  # nosec B104
             raise ValueError(
                 f"refusing to bind metrics endpoint to {host!r} — "
                 "this endpoint must remain loopback-only")

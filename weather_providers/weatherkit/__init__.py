@@ -102,7 +102,9 @@ class WeatherKitProvider:
         # retain the key text — _headers() re-reads on each refresh.
         _read_private_key(p)
         self._key_path = p
-        self._token = ""; self._token_exp = 0.0
+        # nosec B105: empty-string init for the JWT cache (not a hardcoded
+        # password; _headers() regenerates the token on first use).
+        self._token = ""; self._token_exp = 0.0  # nosec B105
     def _headers(self):
         now = time.time()
         if not self._token or now >= self._token_exp - 60:

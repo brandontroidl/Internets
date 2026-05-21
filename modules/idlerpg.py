@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from xml.etree import ElementTree
+from defusedxml import ElementTree  # XML from a 3rd-party HTTP endpoint — defuse XXE/billion-laughs.
 
 import requests
 from .base import BotModule

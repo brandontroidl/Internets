@@ -1,6 +1,6 @@
 """Tests for secret_store.py — tiered keyring/env/file secret backend.
 
-These tests never touch the real secrets.ini or the user's keyring; each
+These tests never touch the real config.ini or the user's keyring; each
 test that exercises the file backend monkey-patches secret_store.SECRETS_FILE
 to a temp path, and the keyring tests stub out the optional ``keyring``
 module via secret_store._keyring.
@@ -24,7 +24,7 @@ import secret_store
 @pytest.fixture
 def temp_secrets(tmp_path, monkeypatch):
     """Point SECRETS_FILE at a temp location and clear our env namespace."""
-    fake = tmp_path / "secrets.ini"
+    fake = tmp_path / "config.ini"
     monkeypatch.setattr(secret_store, "SECRETS_FILE", fake)
     # Force the env-lookup path to miss for the bot's namespace.
     for k in list(os.environ):
@@ -131,7 +131,7 @@ class TestFileBackend:
 
 class TestPlaceholderFilter:
     def test_get_returns_empty_for_placeholder(self, temp_secrets, no_keyring):
-        # Write a placeholder value directly into the secrets.ini.
+        # Write a placeholder value directly into config.ini's [secrets].
         temp_secrets.write_text(
             "[secrets]\nweatherapi_key = changeme\nlastfm_key = your-key-here\n"
         )
@@ -255,10 +255,13 @@ class TestStatus:
 # ── migrate() ───────────────────────────────────────────────────────────
 
 class TestMigrate:
-    def test_migrate_moves_plaintext_and_scrubs(
-        self, temp_secrets, no_keyring, tmp_path
+    def test_migrate_moves_plaintext_into_secrets_section(
+        self, temp_secrets, no_keyring, tmp_path, monkeypatch
     ):
-        cfg_path = tmp_path / "config.ini"
+        # config.ini IS the destination now — plaintext in non-[secrets]
+        # sections moves into [secrets] within the same file, and the
+        # original section gets blanked.
+        cfg_path = temp_secrets
         cfg_path.write_text(
             "[weather_providers]\n"
             "weatherapi_key = real-secret-1\n"
@@ -273,25 +276,37 @@ class TestMigrate:
         assert results["tomorrowio_key"] == "stored:file"
         assert results["openweathermap_key"] == "skipped:empty"
         assert results["omdb_key"] == "skipped:empty"
-        # Values now in secret store.
+        # Values now retrievable via the secret store ([secrets] section).
         assert secret_store.get("weatherapi_key") == "real-secret-1"
         assert secret_store.get("tomorrowio_key") == "real-secret-2"
-        # And the source config.ini has had the values blanked.
-        scrubbed = cfg_path.read_text()
-        assert "real-secret-1" not in scrubbed
-        assert "real-secret-2" not in scrubbed
-        # Untouched placeholder remains.
-        assert "changeme" in scrubbed
+        # Verify by section: plaintext gone from [weather_providers],
+        # present in [secrets].
+        parser = configparser.ConfigParser()
+        parser.read(cfg_path)
+        assert parser.get("weather_providers", "weatherapi_key").strip() == ""
+        assert parser.get("weather_providers", "tomorrowio_key").strip() == ""
+        assert parser.get("secrets", "weatherapi_key") == "real-secret-1"
+        assert parser.get("secrets", "tomorrowio_key") == "real-secret-2"
+        # Untouched placeholder remains in its original section.
+        assert parser.get("weather_providers", "openweathermap_key") == "changeme"
+        # File should now be 0o600 (auto-tightened by migrate).
+        if os.name != "nt":
+            assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
 
-    def test_migrate_no_scrub_leaves_config_alone(
-        self, temp_secrets, no_keyring, tmp_path
+    def test_migrate_no_scrub_leaves_other_sections_alone(
+        self, temp_secrets, no_keyring
     ):
-        cfg_path = tmp_path / "config.ini"
+        # With scrub=False, the original plaintext stays put while the
+        # value is *also* added to [secrets].
+        cfg_path = temp_secrets
         cfg_path.write_text(
             "[weather_providers]\nweatherapi_key = keepme\n"
         )
         secret_store.migrate(cfg_path, backend="file", scrub=False)
-        assert "keepme" in cfg_path.read_text()
+        text = cfg_path.read_text()
+        assert "keepme" in text
+        # Value should also be retrievable via the secret store now.
+        assert secret_store.get("weatherapi_key") == "keepme"
 
     def test_migrate_missing_config_raises(self, temp_secrets, no_keyring, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -305,12 +320,12 @@ class TestInit:
         self, temp_secrets, no_keyring, tmp_path, monkeypatch
     ):
         # Stage a tiny template next to the test workdir.  The CLI resolves
-        # secrets.ini.example from cwd, so chdir into tmp_path first.
-        tmpl = tmp_path / "secrets.ini.example"
+        # config.ini.example from cwd, so chdir into tmp_path first.
+        tmpl = tmp_path / "config.ini.example"
         tmpl.write_text("[secrets]\nweatherapi_key =\n")
         monkeypatch.chdir(tmp_path)
         # Re-point SECRETS_FILE under the chdir.
-        target = tmp_path / "secrets.ini"
+        target = tmp_path / "config.ini"
         monkeypatch.setattr(secret_store, "SECRETS_FILE", target)
         ns = type("NS", (), {"force": False})()
         rc = secret_store._cmd_init(ns)
@@ -323,10 +338,10 @@ class TestInit:
     def test_init_refuses_overwrite_without_force(
         self, temp_secrets, no_keyring, tmp_path, monkeypatch
     ):
-        tmpl = tmp_path / "secrets.ini.example"
+        tmpl = tmp_path / "config.ini.example"
         tmpl.write_text("[secrets]\nweatherapi_key =\n")
         monkeypatch.chdir(tmp_path)
-        existing = tmp_path / "secrets.ini"
+        existing = tmp_path / "config.ini"
         existing.write_text("[secrets]\nweatherapi_key = keepme\n")
         if os.name != "nt":
             os.chmod(existing, 0o600)
@@ -337,15 +352,18 @@ class TestInit:
         # Existing value preserved.
         assert "keepme" in existing.read_text()
 
-    def test_init_with_force_merges_new_keys(
+    def test_init_with_force_overwrites(
         self, temp_secrets, no_keyring, tmp_path, monkeypatch
     ):
-        tmpl = tmp_path / "secrets.ini.example"
+        # --force is now a wholesale overwrite (no merge).  After the rewrite,
+        # the user's old value is gone and the template's empty key is in
+        # its place.
+        tmpl = tmp_path / "config.ini.example"
         tmpl.write_text(
             "[secrets]\nweatherapi_key =\ntomorrowio_key =\nbrand_new_key =\n"
         )
         monkeypatch.chdir(tmp_path)
-        existing = tmp_path / "secrets.ini"
+        existing = tmp_path / "config.ini"
         existing.write_text(
             "[secrets]\nweatherapi_key = keepme\n"
         )
@@ -355,8 +373,12 @@ class TestInit:
         ns = type("NS", (), {"force": True})()
         rc = secret_store._cmd_init(ns)
         assert rc == 0
-        merged = existing.read_text()
-        # Existing value preserved.
-        assert "keepme" in merged
-        # New key from template added.
-        assert "brand_new_key" in merged
+        rewritten = existing.read_text()
+        # Old value blown away.
+        assert "keepme" not in rewritten
+        # New keys from template present.
+        assert "brand_new_key" in rewritten
+        assert "tomorrowio_key" in rewritten
+        # File still 0o600 after the atomic rewrite.
+        if os.name != "nt":
+            assert stat.S_IMODE(existing.stat().st_mode) == 0o600

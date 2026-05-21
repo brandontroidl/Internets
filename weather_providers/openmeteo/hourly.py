@@ -33,7 +33,7 @@ async def fetch(lat: float, lon: float, location: str, hours: int = 12) -> Hourl
     for i, t in enumerate(times):
         try:
             if datetime.fromisoformat(t) >= now: start = i; break
-        except Exception: pass
+        except Exception: pass  # nosec B110: best-effort cleanup
     entries = []
     for i in range(start, min(start + hours, len(times))):
         code = _at(codes, i)

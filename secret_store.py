@@ -49,9 +49,9 @@ log = logging.getLogger("internets.secrets")
 SERVICE = "internets-irc"
 ENV_PREFIX = "INTERNETS_"
 # The file the [secrets] section lives in.  config.ini is gitignored;
-# config.ini.example is the committed credential-free template.
+# config.ini.example is the committed credential-free template (resolved
+# fresh on each `init` call so tests can chdir into a tmp path).
 SECRETS_FILE = Path("config.ini").resolve()
-SECRETS_EXAMPLE = Path("config.ini.example").resolve()
 
 # Canonical secret names — every key the bot considers sensitive.
 # Used by migrate / list / status.  Adding a key here makes it part of
@@ -209,7 +209,7 @@ def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:
 def get(name: str, default: str = "") -> str:
     """Return the secret value, or ``default`` if not stored anywhere.
 
-    Tiered lookup (first hit wins): env var → keyring → secrets.ini.
+    Tiered lookup (first hit wins): env var → keyring → config.ini[secrets].
     """
     # 1) Env var
     env_key = ENV_PREFIX + name.upper()
@@ -225,9 +225,12 @@ def get(name: str, default: str = "") -> str:
                 return val
         except Exception as e:
             # NB: exception type only — keyring backends sometimes embed
-            # the entry value or path in str(e).
-            log.debug("keyring lookup failed for %s: %s", name, _safe_exc(e))
-    # 3) secrets.ini
+            # the entry value or path in str(e), and the entry *name* is
+            # itself flagged by CodeQL's py/clear-text-logging-sensitive-data
+            # query (false-positive: it's a key identifier, not the value)
+            # so we omit it from the log line entirely.
+            log.debug("keyring lookup failed: %s", _safe_exc(e))
+    # 3) config.ini [secrets]
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)
         if not ok:
@@ -243,7 +246,7 @@ def get(name: str, default: str = "") -> str:
         except configparser.Error as e:
             # configparser includes the offending line in its messages.
             # That line may contain a partial secret — log type only.
-            log.warning("secrets.ini parse error: %s", _safe_exc(e))
+            log.warning("config.ini parse error: %s", _safe_exc(e))
     return default
 
 
@@ -276,16 +279,12 @@ def delete(name: str, *, backend: str = "all") -> list[str]:
                 kr.delete_password(SERVICE, name)
                 touched.append("keyring")
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
     if backend in ("file", "all") and SECRETS_FILE.exists():
-        parser = configparser.ConfigParser()
         try:
-            parser.read(SECRETS_FILE)
-            if parser.has_option("secrets", name):
-                parser.remove_option("secrets", name)
-                _write_file_atomic(parser)
+            if _delete_file_secret(name):
                 touched.append("file")
-        except configparser.Error:
+        except PermissionError:
             pass
     return touched
 
@@ -337,7 +336,7 @@ def list_stored() -> dict[str, str]:
                     out[name] = "keyring"
                     continue
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
         if parser is not None and parser.has_option("secrets", name):
             v = parser.get("secrets", name).strip()
             if v and v.lower() not in _PLACEHOLDERS:
@@ -347,10 +346,17 @@ def list_stored() -> dict[str, str]:
     return out
 
 
-# ── secrets.ini file backend ─────────────────────────────────────────
+# ── config.ini[secrets] file backend ─────────────────────────────────
+#
+# SECRETS_FILE is config.ini, which holds both the bot's runtime config
+# and the [secrets] section.  We can't round-trip the whole file through
+# ``configparser`` (write() strips every comment), so set/delete here
+# operate as targeted text-based edits on the [secrets] section while
+# leaving the rest of the file byte-for-byte untouched.
 
-def _write_file_atomic(parser: configparser.ConfigParser) -> None:
-    """Write ``parser`` to ``SECRETS_FILE`` with 0o600 perms, atomically."""
+
+def _atomic_write_text(text: str) -> None:
+    """Write raw text to ``SECRETS_FILE`` with 0o600 perms, atomically."""
     SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = SECRETS_FILE.with_suffix(SECRETS_FILE.suffix + ".tmp")
     # Create tmp with 0o600 from the start to avoid a window where the
@@ -358,7 +364,7 @@ def _write_file_atomic(parser: configparser.ConfigParser) -> None:
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            parser.write(f)
+            f.write(text)
     except Exception:
         try:
             tmp.unlink()
@@ -370,18 +376,106 @@ def _write_file_atomic(parser: configparser.ConfigParser) -> None:
         os.chmod(SECRETS_FILE, 0o600)
 
 
+def _find_secrets_section(lines: list[str]) -> tuple[int | None, int]:
+    """Locate the ``[secrets]`` section in ``lines``.
+
+    Returns ``(start, end)`` where ``start`` is the index of the first
+    line *after* the ``[secrets]`` header, and ``end`` is the index of
+    the next section header (or ``len(lines)`` if the section runs to
+    EOF).  Returns ``(None, len(lines))`` if no ``[secrets]`` header.
+    """
+    header_idx: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip() == "[secrets]":
+            header_idx = i
+            break
+    if header_idx is None:
+        return None, len(lines)
+    start = header_idx + 1
+    end = len(lines)
+    for j in range(start, len(lines)):
+        s = lines[j].strip()
+        if s.startswith("[") and s.endswith("]") and len(s) >= 3:
+            end = j
+            break
+    return start, end
+
+
 def _write_file_secret(name: str, value: str) -> None:
-    parser = configparser.ConfigParser()
+    """Set ``[secrets].name = value`` in ``SECRETS_FILE``.
+
+    Preserves comments and all other sections byte-for-byte.  If the
+    ``[secrets]`` section doesn't exist, it's appended at EOF.  If the
+    key already exists in ``[secrets]``, its value is replaced in place;
+    otherwise the new line is inserted at the end of the section.
+    """
+    text = ""
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)
         if not ok:
             raise PermissionError(
                 f"refusing to modify {SECRETS_FILE} — {reason}")
-        parser.read(SECRETS_FILE)
-    if not parser.has_section("secrets"):
-        parser.add_section("secrets")
-    parser.set("secrets", name, value)
-    _write_file_atomic(parser)
+        text = SECRETS_FILE.read_text(encoding="utf-8")
+    new_line = f"{name} = {value}\n"
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        # Empty / new file — write just the [secrets] header + value.
+        _atomic_write_text(f"[secrets]\n{new_line}")
+        return
+    start, end = _find_secrets_section(lines)
+    if start is None:
+        # No [secrets] section — append at EOF.
+        if not lines[-1].endswith("\n"):
+            lines.append("\n")
+        lines.append("\n[secrets]\n")
+        lines.append(new_line)
+    else:
+        replaced = False
+        for i in range(start, end):
+            stripped = lines[i].lstrip()
+            if not stripped or stripped.startswith((";", "#")):
+                continue
+            if "=" not in stripped:
+                continue
+            key = stripped.split("=", 1)[0].strip().lower()
+            if key == name.lower():
+                indent = lines[i][:len(lines[i]) - len(stripped)]
+                lines[i] = f"{indent}{name} = {value}\n"
+                replaced = True
+                break
+        if not replaced:
+            # Insert at the end of [secrets], before any trailing blanks.
+            insert_at = end
+            while insert_at > start and lines[insert_at - 1].strip() == "":
+                insert_at -= 1
+            lines.insert(insert_at, new_line)
+    _atomic_write_text("".join(lines))
+
+
+def _delete_file_secret(name: str) -> bool:
+    """Remove ``[secrets].name`` from ``SECRETS_FILE``.  Returns True on hit."""
+    if not SECRETS_FILE.exists():
+        return False
+    ok, _ = perms_ok(SECRETS_FILE)
+    if not ok:
+        return False
+    text = SECRETS_FILE.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    start, end = _find_secrets_section(lines)
+    if start is None:
+        return False
+    for i in range(start, end):
+        stripped = lines[i].lstrip()
+        if not stripped or stripped.startswith((";", "#")):
+            continue
+        if "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip().lower()
+        if key == name.lower():
+            del lines[i]
+            _atomic_write_text("".join(lines))
+            return True
+    return False
 
 
 # ── Migration from config.ini ────────────────────────────────────────
@@ -391,21 +485,33 @@ def _scrub_config_ini(cfg_path: Path, names: list[str]) -> None:
 
     Preserves comments and structure by editing line-by-line instead of
     round-tripping through configparser (which loses formatting).
+
+    The ``[secrets]`` section is intentionally exempt — that's where the
+    values are being moved TO, so blanking matching keys there would
+    immediately undo the migration when source and destination are the
+    same file (the new default, since config.ini is now SECRETS_FILE).
     """
     target_keys = {CONFIG_LOCATIONS[n][1] for n in names if n in CONFIG_LOCATIONS}
     text = cfg_path.read_text(encoding="utf-8")
     out_lines: list[str] = []
+    current_section: str | None = None
     for line in text.splitlines(keepends=True):
         stripped = line.lstrip()
-        # Match "<key> = <value>" and zero-out the value if the key is targeted.
-        # Don't touch comments or non-assignment lines.
-        if stripped and not stripped.startswith((";", "#", "[")):
-            if "=" in stripped:
-                key = stripped.split("=", 1)[0].strip().lower()
-                if key in target_keys:
-                    indent = line[:len(line) - len(stripped)]
-                    out_lines.append(f"{indent}{key} =\n")
-                    continue
+        bare = stripped.rstrip()
+        # Section header — track it but don't touch.
+        if bare.startswith("[") and bare.endswith("]") and len(bare) >= 3:
+            current_section = bare[1:-1].lower()
+            out_lines.append(line)
+            continue
+        # Skip blanking inside [secrets] (it's the destination, not a source).
+        if (current_section != "secrets" and stripped
+                and not stripped.startswith((";", "#"))
+                and "=" in stripped):
+            key = stripped.split("=", 1)[0].strip().lower()
+            if key in target_keys:
+                indent = line[:len(line) - len(stripped)]
+                out_lines.append(f"{indent}{key} =\n")
+                continue
         out_lines.append(line)
     cfg_path.write_text("".join(out_lines), encoding="utf-8")
 
@@ -423,6 +529,19 @@ def migrate(config_path: Path = Path("config.ini"),
         raise FileNotFoundError(f"{cfg_path} not found")
     parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"))
     parser.read(cfg_path)
+    # If we're going to write secrets into this file (file backend, possibly
+    # via "auto" when no keyring is available) and it's looser than 0o600,
+    # tighten it first.  Otherwise _write_file_secret would refuse every
+    # write and the migration would no-op with a flood of PermissionError.
+    effective_backend = "keyring" if (
+        backend == "auto" and keyring_available()
+    ) else ("keyring" if backend == "keyring" else "file")
+    if (effective_backend == "file"
+            and cfg_path == SECRETS_FILE
+            and os.name != "nt"
+            and stat.S_IMODE(cfg_path.stat().st_mode) != 0o600):
+        os.chmod(cfg_path, 0o600)
+        log.info("tightened %s to 0o600 for file-backend secret writes", cfg_path)
     results: dict[str, str] = {}
     migrated: list[str] = []
     for name, (section, key) in CONFIG_LOCATIONS.items():
@@ -504,11 +623,11 @@ def _cmd_get(args: argparse.Namespace) -> int:
                 if kr.get_password(SERVICE, args.name):
                     backend = "keyring"
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
         if backend == "unknown" and SECRETS_FILE.exists() and perms_ok(SECRETS_FILE)[0]:
             # Confirm the value actually lives in the file before
             # claiming it — avoids misreporting when the value was
-            # picked up via env/keyring but secrets.ini happens to exist.
+            # picked up via env/keyring but config.ini happens to exist.
             parser = configparser.ConfigParser()
             try:
                 parser.read(SECRETS_FILE)
@@ -545,44 +664,34 @@ def _cmd_delete(args: argparse.Namespace) -> int:
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
-    """Create secrets.ini from secrets.ini.example with 0600 perms.
+    """Create config.ini from config.ini.example with 0600 perms.
 
-    First-time create does a verbatim copy so all the inline comments,
-    signup URLs, and tier-limit hints are preserved.  --force on an
-    existing file uses configparser to merge new template keys in (so
-    upgrades pick up new providers without clobbering existing values).
+    Byte-for-byte copy so every inline comment, signup URL, and tier-limit
+    hint is preserved.  Refuses to overwrite an existing config.ini unless
+    --force is given (in which case the existing file is replaced wholesale
+    — any local edits are lost; rotate any secrets afterwards).
     """
-    src = Path("secrets.ini.example").resolve()
+    src = Path("config.ini.example").resolve()
     if not src.exists():
         print(f"error: {src} not found — re-clone the repo or fetch it from "
               "the project root.", file=sys.stderr)
         return 2
     if SECRETS_FILE.exists() and not args.force:
-        print(f"error: {SECRETS_FILE} already exists. Re-run with --force to "
-              "merge new template keys in (existing values are preserved).",
+        print(f"error: {SECRETS_FILE} already exists. Edit it directly, or "
+              "re-run with --force to overwrite (existing values are LOST).",
               file=sys.stderr)
         return 1
-    if SECRETS_FILE.exists() and args.force:
-        # Merge: existing values win, new keys from template added blank.
-        # Comments are lost on this path — that's an acceptable cost for
-        # the upgrade-aware merge.
-        existing = configparser.ConfigParser()
-        existing.read(SECRETS_FILE)
-        tmpl = configparser.ConfigParser()
-        tmpl.read(src)
-        for section in tmpl.sections():
-            if not existing.has_section(section):
-                existing.add_section(section)
-            for key in tmpl[section]:
-                if not existing.has_option(section, key):
-                    existing.set(section, key, tmpl.get(section, key))
-        _write_file_atomic(existing)
-        print(f"merged template keys into {SECRETS_FILE} (existing values preserved)")
-        return 0
-    # First-time create: byte-for-byte copy so comments survive, then
-    # tighten perms.  Avoids configparser round-trip which strips comments.
     text = src.read_text(encoding="utf-8")
     SECRETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    if SECRETS_FILE.exists() and args.force:
+        # Replace existing config.ini wholesale.  Use the atomic writer so
+        # we never leave a half-written file or loose perms behind.
+        _atomic_write_text(text)
+        print(f"overwrote {SECRETS_FILE} from {src.name} (mode 0600, "
+              f"{len(text)} bytes)")
+        print("any local edits in the old file are gone; rotate any "
+              "secrets that were stored there.", file=sys.stderr)
+        return 0
     fd = os.open(str(SECRETS_FILE),
                  os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -662,10 +771,10 @@ def _build_parser() -> argparse.ArgumentParser:
     d.set_defaults(func=_cmd_delete)
 
     i = sub.add_parser("init",
-        help="create secrets.ini from secrets.ini.example with 0600 perms")
+        help="create config.ini from config.ini.example with 0600 perms")
     i.add_argument("--force", action="store_true",
-                   help="merge template keys into an existing secrets.ini "
-                        "(existing values are preserved)")
+                   help="overwrite an existing config.ini wholesale "
+                        "(any local edits are lost)")
     i.set_defaults(func=_cmd_init)
 
     m = sub.add_parser("migrate",

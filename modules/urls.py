@@ -260,7 +260,7 @@ class _PinnedHostHTTPAdapter(HTTPAdapter):
         try:
             resp.url = original_url
         except Exception:  # pragma: no cover - defensive
-            pass
+            pass  # nosec B110: best-effort cleanup
         return resp
 
     def get_connection_with_tls_context(self, request, verify, proxies=None, cert=None):  # type: ignore[override]
@@ -279,7 +279,7 @@ class _PinnedHostHTTPAdapter(HTTPAdapter):
             if hasattr(conn, "server_hostname"):
                 conn.server_hostname = self._original_host
         except Exception:  # pragma: no cover - defensive
-            pass
+            pass  # nosec B110: best-effort cleanup
         return conn
 
 

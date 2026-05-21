@@ -54,14 +54,20 @@ steamids.json
 internets.pid
 
 # ── Secrets and personal config ──────────────────────────────────────
-# Never commit real credentials.  All outbound secrets (NickServ /
-# SASL / server / oper passwords, API keys, the User-Agent email)
-# live in one of:
-#   - secrets.ini (0600, this file ignored)
+# config.ini holds both bot settings and the [secrets] section
+# (NickServ / SASL / server / oper passwords, API keys, the User-Agent
+# email).  It's ignored so real credentials never get committed.
+# config.ini.example is the credential-free template that lives in git.
+#
+# Other secret-store backends (any of these wins over the file):
 #   - the OS keyring (no file artefact)
 #   - INTERNETS_<NAME> env vars (sometimes via .env / .envrc)
-#
-# config.ini is committed as a credential-free template.
+config.ini
+config.ini.tmp
+config.ini.bak
+
+# Legacy secret file from earlier versions — keep ignored so an
+# unmigrated copy never ends up in git.
 secrets.ini
 secrets.ini.tmp
 secrets.ini.bak

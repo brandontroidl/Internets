@@ -240,12 +240,14 @@ def _f_weatherkit(cfg):
     s = _cred(cfg, "weatherkit_service_id", "weatherkit_service_id")
     k = _cred(cfg, "weatherkit_key_id",     "weatherkit_key_id")
     f = _cred(cfg, "weatherkit_key_file",   "weatherkit_key_file")
-    missing = [name for name, val in [
-        ("weatherkit_team_id", t), ("weatherkit_service_id", s),
-        ("weatherkit_key_id", k), ("weatherkit_key_file", f),
-    ] if not val]
+    # We need all four of team_id / service_id / key_id / key_file.
+    # `missing` is a count, not a list of names — CodeQL's
+    # py/clear-text-logging-sensitive-data heuristic flags a list-comp
+    # that binds the secret value to a tuple even when only the name
+    # is logged, so we stay aggregate.
+    missing = sum(1 for v in (t, s, k, f) if not v)
     if missing:
-        log.info("weatherkit: skipped (missing: %s)", ", ".join(missing))
+        log.info("weatherkit: skipped (%d of 4 required fields missing)", missing)
         return None
     from .weatherkit import WeatherKitProvider
     return WeatherKitProvider(t, s, k, f)

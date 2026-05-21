@@ -1,10 +1,62 @@
 from __future__ import annotations
 
+import json as _json
 from configparser import ConfigParser, Error as ConfigParserError
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from internets import IRCBot
+
+
+# Default per-response byte cap for the shared fetch_json helper.  Most
+# JSON APIs the bot talks to fit comfortably under 256 KB; modules with
+# legitimately larger payloads (poke at ~1 MB, numberfact's Wikipedia
+# OnThisDay feed at ~4 MB) pass an explicit ``max_bytes=``.
+_DEFAULT_MAX_JSON_BYTES = 256 * 1024
+
+
+class ResponseTooLarge(Exception):
+    """Raised by ``fetch_json`` when the response body exceeds ``max_bytes``.
+
+    The bot enforces per-call byte caps on every outbound HTTP call so
+    a malicious or misconfigured upstream can't OOM the process with a
+    JSON-bomb or accidental large payload.
+    """
+
+
+def fetch_json(
+    url: str,
+    *,
+    ua: str,
+    params: dict | None = None,
+    headers: dict | None = None,
+    timeout: int = 10,
+    max_bytes: int = _DEFAULT_MAX_JSON_BYTES,
+) -> Any:
+    """Fetch a JSON response with a hard size cap.
+
+    Streams the body, caps at ``max_bytes + 1`` raw bytes, and raises
+    :class:`ResponseTooLarge` if the cap is exceeded — before the body
+    is decoded or parsed.  Use this in module ``_fetch_sync`` helpers
+    instead of ``requests.get(...).json()`` so JSON-bomb / OOM attacks
+    against a compromised upstream stay bounded.
+
+    Raises:
+        requests.RequestException — on transport / HTTP error
+        ResponseTooLarge          — body exceeded ``max_bytes``
+        json.JSONDecodeError      — body wasn't valid JSON
+    """
+    import requests  # noqa: PLC0415 — lazy import keeps base.py importable in test envs
+    hdrs = {"User-Agent": ua}
+    if headers:
+        hdrs.update(headers)
+    r = requests.get(url, params=params, headers=hdrs, timeout=timeout, stream=True)
+    r.raise_for_status()
+    body = r.raw.read(max_bytes + 1, decode_content=True)
+    if len(body) > max_bytes:
+        raise ResponseTooLarge(
+            f"response from {url} exceeded {max_bytes} bytes")
+    return _json.loads(body.decode("utf-8", errors="replace"))
 
 
 _PLACEHOLDER_MARKERS = (

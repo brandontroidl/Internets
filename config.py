@@ -6,8 +6,9 @@ used by the bot core, modules, and logging.
 Outbound credentials (NickServ/SASL/server/oper passwords, API keys) are
 pulled from ``secret_store`` first and fall back to the matching field
 in ``config.ini`` only if the secret store has no value.  Run
-``python -m secret_store migrate`` once to move plaintext out of
-``config.ini`` into the OS keyring (or gitignored ``secrets.ini``).
+``python -m secret_store migrate`` once to move plaintext out of the
+non-secret sections of ``config.ini`` into the OS keyring (or into the
+``[secrets]`` section of the same file).
 """
 
 from __future__ import annotations

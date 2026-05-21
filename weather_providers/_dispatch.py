@@ -341,7 +341,7 @@ class Dispatcher:
                 from . import record_call as _record_call  # noqa: PLC0415
                 _record_call(pid)
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
 
             start = time.monotonic()
             try:

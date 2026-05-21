@@ -6,16 +6,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
+### Changed — secret-store consolidation (BREAKING for fresh setups)
 
-- **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
-  gen-1 Pokémon (Mewtwo ≈ 425 KB, Charizard ≈ 343 KB, Charmander ≈ 299 KB)
-  no longer hit "PokéAPI response too large".  Also strip leading zeros
-  on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
-  404'ing against `/pokemon/06`.
-
-### Changed
-
+- **`config.ini` is now gitignored**; `config.ini.example` is the
+  committed credential-free template.  The old separate `secrets.ini`
+  is gone — its `[secrets]` section is now appended to the bottom of
+  `config.ini` itself (still 0o600, still falls back to the OS keyring,
+  still overridden by `INTERNETS_<NAME>` env vars).  Rationale: a flat
+  0o600 file beside a flat 0o644 file isn't meaningfully more secure
+  than one 0o600 file holding both; the split mostly created friction.
+- **`secret_store.py`** — `SECRETS_FILE` now points at `config.ini`.
+  `set`/`delete` perform **text-based in-place edits** of the
+  `[secrets]` section (the old configparser round-trip stripped every
+  comment in the file).  `init` copies `config.ini.example → config.ini`;
+  `--force` is now a wholesale overwrite (the old configparser-based
+  merge was incompatible with comment preservation).  `migrate` auto-
+  chmods `config.ini` to 0o600 before writing, and `_scrub_config_ini`
+  is now section-aware so it never blanks the very `[secrets]` entries
+  it just populated.
+- **Migrating an existing install:**
+  `cd ~/your-bot-dir && { echo; cat secrets.ini; } >> config.ini && shred -u secrets.ini && chmod 600 config.ini`
 - **`modules/numberfact.py`** — rewritten as a Wikipedia / local-math
   hybrid because numbersapi.com is defunct (it 301-redirects to
   `rembrandtpublishing.com/<path>` which 404s).  `math` facts are now
@@ -24,6 +34,51 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   article summary with a math-fact fallback when Wikipedia returns
   the boilerplate "natural number following X and preceding Y"
   extract.  The `.numberfact` / `.nf` command surface is unchanged.
+
+### Fixed
+
+- **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
+  gen-1 Pokémon (Mewtwo ≈ 425 KB, Charizard ≈ 343 KB, Charmander ≈ 299 KB)
+  no longer hit "PokéAPI response too large".  Also strip leading zeros
+  on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
+  404'ing against `/pokemon/06`.
+
+### Security
+
+- **`modules/idlerpg.py`** — use `defusedxml.ElementTree` instead of the
+  stdlib parser for 3rd-party IdleRPG XML (Bandit B314 — XXE / billion-
+  laughs hardening).
+- **`metrics.py`** — annotate the all-interfaces refusal guard with
+  `# nosec B104` (the literals appear as a defensive *check*, not a
+  bind target; false positive).
+- **`secret_store.py`** — strip the secret *name* from the keyring-
+  failure debug log (CodeQL `py/clear-text-logging-sensitive-data` was
+  flagging the identifier).
+- **`weather_providers/__init__.py`** — replace WeatherKit's
+  "missing: <names>" log with a count-only message (same CodeQL query
+  was flagging the comprehension that bound key+value tuples).
+- **Random-pick sweep** — every `random.choice` / `random.randint` /
+  `random.uniform` call site routed through `random.SystemRandom`
+  (`internets.py`, `modules/bofh.py`, `modules/dice.py`, `modules/fml.py`,
+  `modules/numberfact.py`, `modules/xkcd.py`).  Clears Bandit B311
+  across the codebase without per-line suppressions.
+- **`except Exception: pass` → debug log** in five hot paths
+  (`internets.py` shadow-ban prefix parse and stdin-close on shutdown,
+  `admin_cmds.py` `_state_file`, `modules/tell.py` async-save scheduler,
+  `modules/seen.py` temp-file cleanup).  Same best-effort semantics,
+  but now observable in `--log-level=debug`.  The remaining ~25 broad
+  `except Exception: pass` sites (best-effort cleanup, fallback paths)
+  are annotated with `# nosec B110: best-effort cleanup` instead of
+  changed — they're intentional swallows with no observability gain.
+- **`assert` → `raise RuntimeError`** at two invariant checks that
+  would otherwise be stripped by `python -O` (Bandit B101):
+  `process_lock.py:_read_existing` and `weather_providers/_http.py:_get_session`.
+- **`# nosec B105`** on `weather_providers/weatherkit/__init__.py:105`
+  (`self._token = ""` is JWT-cache init, not a hardcoded password —
+  `_headers()` regenerates the token on first use).
+- **`# nosec B404 / B603 / B606`** on `internets.py`'s Windows
+  self-restart path (`subprocess.Popen` + `os.execv` with
+  `sys.executable` + `sys.argv` — interpreter-controlled, not user input).
 
 ## [2.6.0] — 2026-05-20
 

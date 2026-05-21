@@ -28,6 +28,13 @@ from .base import BotModule
 
 log = logging.getLogger("internets.numberfact")
 
+# Use the OS-level cryptographic PRNG even though this module's randomness
+# is non-security-sensitive (picking which fun fact / event to display).
+# Bandit's B311 query flags the plain ``random`` module across the codebase;
+# routing through SystemRandom avoids per-line ``# nosec`` annotations at
+# no perceptible cost.
+_rng = random.SystemRandom()
+
 _WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
 _WIKI_ONTHISDAY = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/{mm}/{dd}"
 _TYPES = {"trivia", "math", "date", "year"}
@@ -371,7 +378,7 @@ def _fetch_date_sync(mm: int, dd: int, ua: str) -> str:
         events = d.get("events") or []
         if not events:
             return f"no recorded events for {_MONTHS[mm - 1]} {dd}"
-        ev = random.choice(events)
+        ev = _rng.choice(events)
         year = ev.get("year", "?")
         text = (ev.get("text") or "").strip().rstrip(".")
         if not text:
@@ -404,8 +411,8 @@ def _parse_date(s: str) -> tuple[int, int] | None:
 
 
 def _random_date() -> tuple[int, int]:
-    mm = random.randint(1, 12)
-    dd = random.randint(1, _DAYS_IN_MONTH[mm - 1])
+    mm = _rng.randint(1, 12)
+    dd = _rng.randint(1, _DAYS_IN_MONTH[mm - 1])
     return mm, dd
 
 
@@ -475,7 +482,7 @@ class NumberfactModule(BotModule):
         # ---- year ----
         if t == "year":
             if q_raw == "random":
-                year = random.randint(1500, 2026)
+                year = _rng.randint(1500, 2026)
             else:
                 try:
                     year = int(q_raw)
@@ -489,7 +496,7 @@ class NumberfactModule(BotModule):
         # ---- math ----
         if t == "math":
             if q_raw == "random":
-                n = random.randint(1, 2000)
+                n = _rng.randint(1, 2000)
             else:
                 try:
                     n = int(q_raw)
@@ -501,7 +508,7 @@ class NumberfactModule(BotModule):
 
         # ---- trivia (default) ----
         if q_raw == "random":
-            n = random.randint(1, 2000)
+            n = _rng.randint(1, 2000)
         else:
             try:
                 n = int(q_raw)

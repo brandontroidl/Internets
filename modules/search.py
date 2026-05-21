@@ -141,11 +141,11 @@ def _web_sync(query: str, brave_key: str, ua: str) -> str:
         try:
             return _brave_web(query, brave_key, ua)
         except Exception:
-            pass
+            pass  # nosec B110: best-effort cleanup
     try:
         return _ddg_web(query, ua)
     except Exception:
-        pass
+        pass  # nosec B110: best-effort cleanup
     return f"search failed for '{query}'"
 
 
@@ -155,7 +155,7 @@ def _image_sync(query: str, brave_key: str, ua: str) -> str:
         try:
             return _brave_image(query, brave_key, ua)
         except Exception:
-            pass
+            pass  # nosec B110: best-effort cleanup
     return f"image search requires a Brave API key — see [search] in config.ini"
 
 

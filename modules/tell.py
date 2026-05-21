@@ -119,7 +119,7 @@ class TellModule(BotModule):
                 try:
                     os.unlink(tmp)
                 except Exception:
-                    pass
+                    pass  # nosec B110: best-effort cleanup
                 raise
         except Exception as e:
             log.warning(f"tell: failed to save {self._file}: {e}")
@@ -195,8 +195,11 @@ class TellModule(BotModule):
             try:
                 loop.create_task(asyncio.to_thread(self._save_sync))
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                # Async schedule failed — fall through to the synchronous
+                # write path below.  Visibility helps if scheduling ever
+                # breaks systematically.
+                log.debug("tell: async save schedule failed: %s", type(e).__name__)
         # Fallback: synchronous write (rare — only at startup/shutdown).
         try:
             self._save_sync()

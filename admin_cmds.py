@@ -581,7 +581,7 @@ class AdminCommandsMixin:
             try:
                 q_depth = sender._q.qsize()
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
 
         with self._mod_lock:
             mod_total = len(self._modules)
@@ -703,7 +703,7 @@ class AdminCommandsMixin:
                 if tlow in {u.lower() for u in users}:
                     chans.append(ch)
         except Exception:
-            pass
+            pass  # nosec B110: best-effort cleanup
         lines.append(f"  in channels     {', '.join(chans) if chans else '(none currently tracked)'}")
 
         # Shadow-ban status
@@ -981,8 +981,10 @@ def _state_file(cfg, section: str, default: str):
     try:
         if section in cfg:
             return _Path(cfg[section].get("file", default))
-    except Exception:
-        pass
+    except Exception as e:
+        # configparser raising at this layer would be unusual but not
+        # fatal — admin commands can fall back to the default path.
+        log.debug("_state_file %s lookup failed: %s", section, type(e).__name__)
     return _Path(default)
 
 

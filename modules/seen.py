@@ -98,7 +98,7 @@ class SeenModule(BotModule):
             try:
                 t.cancel()
             except Exception:
-                pass
+                pass  # nosec B110: best-effort cleanup
         # Final synchronous flush
         try:
             self._flush_sync()
@@ -229,8 +229,12 @@ class SeenModule(BotModule):
             try:
                 if tmp.exists():
                     tmp.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                # Cleanup-of-cleanup — the outer flush already failed and
+                # we just want to leave no orphan .tmp around.  If even
+                # the unlink fails, log and move on; the next flush will
+                # overwrite it.
+                log.debug("seen: temp cleanup failed: %s", type(e).__name__)
 
     async def _periodic_flush(self) -> None:
         try:
