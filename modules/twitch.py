@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.twitch")
 
@@ -47,14 +47,17 @@ class _TwitchAPI:
         }
 
     def get(self, endpoint: str, params: dict | None = None) -> dict[str, Any]:
-        r = requests.get(
+        # Use the shared size-capped helper to defend against an OOM via a
+        # tampered upstream — even Twitch responses get a 256 KB ceiling.
+        hdrs = self._headers()
+        ua = hdrs.pop("User-Agent")
+        return fetch_json(
             f"https://api.twitch.tv/helix/{endpoint}",
             params=params or {},
-            headers=self._headers(),
+            ua=ua,
+            headers=hdrs,
             timeout=10,
         )
-        r.raise_for_status()
-        return r.json()
 
     # ── convenience methods ──────────────────────────────────────────
 

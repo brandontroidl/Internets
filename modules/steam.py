@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.steam")
 
@@ -39,14 +39,12 @@ def _timeago(ts: int) -> str:
 def _resolve_vanity(vanity: str, key: str, ua: str) -> str | None:
     """Resolve a Steam vanity URL name to a 64-bit Steam ID."""
     try:
-        r = requests.get(
+        d = fetch_json(
             "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v0001/",
             params={"key": key, "vanityurl": vanity},
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
-        )
-        r.raise_for_status()
-        d = r.json().get("response", {})
+        ).get("response", {})
         if d.get("success") == 1:
             return d["steamid"]
     except Exception as e:
@@ -55,30 +53,29 @@ def _resolve_vanity(vanity: str, key: str, ua: str) -> str | None:
 
 
 def _get_status(steamid: str, key: str, ua: str) -> dict[str, Any]:
-    r = requests.get(
+    players = fetch_json(
         "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/",
         params={"key": key, "steamids": steamid},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
-    )
-    r.raise_for_status()
-    players = r.json().get("response", {}).get("players", [])
+    ).get("response", {}).get("players", [])
     if not players:
         raise ValueError("no user found")
     return players[0]
 
 
 def _get_games(steamid: str, key: str, ua: str) -> dict[str, Any]:
-    r = requests.get(
+    # Owned-games payloads can be large for power users — bump the cap
+    # to 1 MB to fit accounts with hundreds of titles + appinfo metadata.
+    return fetch_json(
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/",
         params={"key": key, "steamid": steamid,
                 "include_played_free_games": "1",
                 "include_appinfo": "1", "format": "json"},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
-    )
-    r.raise_for_status()
-    return r.json().get("response", {})
+        max_bytes=1024 * 1024,
+    ).get("response", {})
 
 
 def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:

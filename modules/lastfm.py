@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.lastfm")
 
@@ -31,29 +31,25 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
     base = "https://ws.audioscrobbler.com/2.0/"
     try:
         # Get user info
-        r = requests.get(
+        data = fetch_json(
             base,
             params={"method": "user.getinfo", "user": username,
                     "api_key": key, "format": "json"},
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
         )
-        r.raise_for_status()
-        data = r.json()
         if "error" in data:
             return f"{data.get('message', 'user not found')}"
         user = data["user"]
 
         # Get recent tracks
-        r2 = requests.get(
+        recent = fetch_json(
             base,
             params={"method": "user.getrecenttracks", "user": username,
                     "limit": "1", "api_key": key, "format": "json"},
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
         )
-        r2.raise_for_status()
-        recent = r2.json()
 
         # Build user info string
         parts: list[str] = []

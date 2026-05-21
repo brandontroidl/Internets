@@ -32,6 +32,7 @@ def fetch_json(
     headers: dict | None = None,
     timeout: int = 10,
     max_bytes: int = _DEFAULT_MAX_JSON_BYTES,
+    allow_404: bool = False,
 ) -> Any:
     """Fetch a JSON response with a hard size cap.
 
@@ -41,8 +42,12 @@ def fetch_json(
     instead of ``requests.get(...).json()`` so JSON-bomb / OOM attacks
     against a compromised upstream stay bounded.
 
+    If ``allow_404=True``, returns ``None`` on a 404 response instead of
+    raising — useful for "lookup-or-miss" semantics (e.g. dictionary
+    word, pokémon name) where 404 is an expected miss, not an error.
+
     Raises:
-        requests.RequestException — on transport / HTTP error
+        requests.RequestException — on transport / non-404 HTTP error
         ResponseTooLarge          — body exceeded ``max_bytes``
         json.JSONDecodeError      — body wasn't valid JSON
     """
@@ -51,6 +56,8 @@ def fetch_json(
     if headers:
         hdrs.update(headers)
     r = requests.get(url, params=params, headers=hdrs, timeout=timeout, stream=True)
+    if allow_404 and r.status_code == 404:
+        return None
     r.raise_for_status()
     body = r.raw.read(max_bytes + 1, decode_content=True)
     if len(body) > max_bytes:

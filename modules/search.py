@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote_plus, unquote
 
 import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.search")
 
@@ -80,18 +80,16 @@ def _ddg_web(query: str, ua: str) -> str:
 
 def _brave_web(query: str, key: str, ua: str) -> str:
     try:
-        r = requests.get(
+        results = fetch_json(
             "https://api.search.brave.com/res/v1/web/search",
             params={"q": query, "count": "3"},
+            ua=ua,
             headers={
-                "User-Agent": ua,
                 "Accept": "application/json",
                 "X-Subscription-Token": key,
             },
             timeout=10,
-        )
-        r.raise_for_status()
-        results = r.json().get("web", {}).get("results", [])
+        ).get("web", {}).get("results", [])
         if not results:
             return f"[Brave] no results for '{query}'"
         top = results[0]
@@ -108,18 +106,16 @@ def _brave_web(query: str, key: str, ua: str) -> str:
 
 def _brave_image(query: str, key: str, ua: str) -> str:
     try:
-        r = requests.get(
+        results = fetch_json(
             "https://api.search.brave.com/res/v1/images/search",
             params={"q": query, "count": "3"},
+            ua=ua,
             headers={
-                "User-Agent": ua,
                 "Accept": "application/json",
                 "X-Subscription-Token": key,
             },
             timeout=10,
-        )
-        r.raise_for_status()
-        results = r.json().get("results", [])
+        ).get("results", [])
         if not results:
             return f"[Brave Image] no results for '{query}'"
         top = results[0]
