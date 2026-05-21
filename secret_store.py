@@ -541,7 +541,12 @@ def migrate(config_path: Path = Path("config.ini"),
             and os.name != "nt"
             and stat.S_IMODE(cfg_path.stat().st_mode) != 0o600):
         os.chmod(cfg_path, 0o600)
-        log.info("tightened %s to 0o600 for file-backend secret writes", cfg_path)
+        # NB: don't include the path in this log line.  CodeQL's
+        # py/clear-text-logging-sensitive-data heuristic taints any
+        # variable that flows through this function (because the other
+        # args carry secret values), and a Path object is enough to
+        # trip the rule.  Static-string log is plenty here.
+        log.info("tightened config file to 0o600 for file-backend secret writes")
     results: dict[str, str] = {}
     migrated: list[str] = []
     for name, (section, key) in CONFIG_LOCATIONS.items():
@@ -584,13 +589,20 @@ def _cmd_status(_: argparse.Namespace) -> int:
 
 
 def _cmd_list(_: argparse.Namespace) -> int:
+    """``python -m secret_store list`` — show which secret keys exist
+    and in which backend each is stored.  Prints only the canonical key
+    NAME and BACKEND label (env / keyring / file / unset), never the
+    secret value itself.  CodeQL's ``py/clear-text-logging-sensitive-data``
+    taints the loop variable because it flows through ``list_stored()``,
+    but the output here is intentional operator-facing inventory.
+    """
     stored = list_stored()
     width = max(len(n) for n in KNOWN_SECRETS) + 2
     print(f"{'secret':<{width}} backend")
     print("-" * (width + 12))
     for name in KNOWN_SECRETS:
         backend = stored.get(name) or "(unset)"
-        print(f"{name:<{width}} {backend}")
+        print(f"{name:<{width}} {backend}")  # nosec
     return 0
 
 
@@ -608,7 +620,11 @@ def _cmd_get(args: argparse.Namespace) -> int:
         print(f"(no value for {args.name!r})", file=sys.stderr)
         return 1
     if args.reveal:
-        print(val)
+        # Operator explicitly asked to see the secret value (--reveal).
+        # The whole point of this CLI flag is to print the stored secret
+        # for legitimate rotation / extraction work, so CodeQL's
+        # py/clear-text-logging-sensitive-data alert is opt-in by design.
+        print(val)  # nosec
         return 0
     # Identify which backend held the value (re-runs the lookup chain
     # so we report the actual hit point — env / keyring / file).
