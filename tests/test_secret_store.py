@@ -138,6 +138,67 @@ class TestEnvLookup:
         assert stored["omdb_key"] == "env"
 
 
+# ── [secrets] section sitting BETWEEN other sections ────────────────────
+
+class TestSecretsSectionMidFile:
+    """The text-based editor must edit a [secrets] section that is not the
+    first/only section without corrupting neighbours or duplicating the
+    header — config.ini holds [irc], [bot], … then [secrets] at the end."""
+
+    @staticmethod
+    def _write(path, text):
+        path.write_text(text, encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+
+    def test_set_into_midfile_secrets_preserves_neighbours(self, temp_secrets):
+        self._write(temp_secrets,
+            "[irc]\nserver = irc.example.org\n\n"
+            "[secrets]\nomdb_key = existing\n\n"
+            "[logging]\nlevel = INFO\n")
+        secret_store.set_value("weatherapi_key", "newval")
+        text = temp_secrets.read_text(encoding="utf-8")
+        assert text.count("[secrets]") == 1          # no duplicate header
+        assert "server = irc.example.org" in text    # section before intact
+        assert "level = INFO" in text                # section after intact
+        assert secret_store.get("omdb_key") == "existing"
+        assert secret_store.get("weatherapi_key") == "newval"
+
+    def test_update_existing_key_in_place(self, temp_secrets):
+        self._write(temp_secrets,
+            "[irc]\nserver = x\n\n[secrets]\nomdb_key = old\n\n"
+            "[logging]\nlevel = INFO\n")
+        secret_store.set_value("omdb_key", "updated")
+        text = temp_secrets.read_text(encoding="utf-8")
+        assert secret_store.get("omdb_key") == "updated"
+        assert "old" not in text
+        assert "level = INFO" in text
+        assert text.count("[secrets]") == 1
+
+    def test_delete_from_midfile_secrets(self, temp_secrets):
+        self._write(temp_secrets,
+            "[irc]\nserver = x\n\n[secrets]\nomdb_key = gone\n"
+            "lastfm_key = stay\n\n[logging]\nlevel = INFO\n")
+        secret_store.delete("omdb_key")
+        text = temp_secrets.read_text(encoding="utf-8")
+        assert secret_store.get("omdb_key") == ""
+        assert secret_store.get("lastfm_key") == "stay"
+        assert "level = INFO" in text
+        assert "server = x" in text
+
+
+# ── set_value rejects newline injection ─────────────────────────────────
+
+class TestNewlineInjection:
+    def test_set_value_rejects_newline(self, temp_secrets):
+        with pytest.raises(ValueError):
+            secret_store.set_value("omdb_key", "abc\n[irc]\nserver = evil")
+
+    def test_set_value_rejects_carriage_return(self, temp_secrets):
+        with pytest.raises(ValueError):
+            secret_store.set_value("omdb_key", "abc\rdef")
+
+
 # ── Fail-closed perm check on read ──────────────────────────────────────
 
 class TestFailClosed:

@@ -133,6 +133,29 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **`audit_log.py` — HMAC-keyed hash chain.**  The tamper-evident audit
+  chain used plain SHA-256, which anyone with a copy of `audit.log`
+  could recompute to forge entries (the algorithm is in the repo).  It
+  is now HMAC-SHA-256 under a 32-byte key auto-generated into a 0600
+  sidecar (`audit.log.key`) — a leaked log alone can no longer be
+  forged.  Records carry `"v": 2`; pre-2.7.0 entries still verify
+  (legacy SHA-256 fallback).  The log also rotates to
+  `audit.log.<timestamp>` past 5 MB instead of growing unbounded.
+- **`modules/seen.py` — retention pruning.**  Passively-collected
+  last-seen entries were kept forever; now pruned past `max_age_days`
+  (default 180), on load and on every flush — mirrors `store.py`'s
+  user-tracking prune.
+- **`scripts/regen-lockfile.sh`** now requires Python 3.10 specifically
+  and fails loudly otherwise — the lock must resolve on the lowest
+  supported Python so `python_version < "3.11"` conditional transitives
+  (e.g. `async-timeout`) are captured; a lock built on 3.14 silently
+  omitted them.
+- **Test coverage** — new `tests/test_fetch_json.py` pins the
+  `fetch_json` size-cap boundary, the 404 paths, and malformed-JSON
+  handling; `tests/test_secret_store.py` gains mid-file `[secrets]`
+  edit + newline-injection tests; `tests/test_modules_base.py` covers
+  the `BotModule.forget` hook and the `__init_subclass__` `COMMANDS`
+  validator.
 - **HTTP response size caps everywhere** — added `fetch_json(url, *, ua,
   …, max_bytes=256 KB)` to `modules/base.py` and migrated every module
   that called `requests.get(...).json()` through it: `imdb`, `dictionary`,

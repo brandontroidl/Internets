@@ -63,6 +63,16 @@ class SeenModule(BotModule):
         path_str = sect.get("file", "seen.json") if hasattr(sect, "get") else "seen.json"
         self._file = Path(path_str)
 
+        # Retention: drop entries older than this many days (0 disables).
+        # "seen" is passively-collected last-seen tracking, so it is pruned
+        # like store.py's user-tracking rather than kept forever.
+        self._max_age_days = 180
+        if hasattr(sect, "get"):
+            try:
+                self._max_age_days = int(sect.get("max_age_days", 180))
+            except (ValueError, TypeError):
+                self._max_age_days = 180
+
         self._lock = threading.Lock()
         self._seen: dict[str, dict[str, Any]] = {}
         self._dirty = False
@@ -81,6 +91,9 @@ class SeenModule(BotModule):
         except Exception as e:
             log.warning(f"seen: failed to load {self._file}: {e!r}")
             self._seen = {}
+
+        # Prune stale entries on startup (single-threaded here).
+        self._prune_stale()
 
         # Schedule the periodic flush on the bot's running event loop
         self._flush_task: asyncio.Task[None] | None = None
@@ -209,9 +222,28 @@ class SeenModule(BotModule):
             log.debug(f"seen: on_raw parse error: {e!r}")
 
     # ------------------------------------------------------------- persistence
+    def _prune_stale(self) -> int:
+        """Drop entries older than ``max_age_days``.  Returns count removed.
+
+        Caller must hold ``self._lock`` OR run single-threaded (on_load).
+        """
+        if self._max_age_days <= 0:
+            return 0
+        cutoff = int(time.time()) - self._max_age_days * 86400
+        stale = [k for k, v in self._seen.items()
+                 if int(v.get("ts", 0)) < cutoff]
+        for k in stale:
+            del self._seen[k]
+        if stale:
+            self._dirty = True
+            log.info(f"seen: pruned {len(stale)} entries older than "
+                     f"{self._max_age_days}d")
+        return len(stale)
+
     def _flush_sync(self) -> None:
         """Atomic write of self._seen to disk.  Safe to call from any thread."""
         with self._lock:
+            self._prune_stale()
             if not self._dirty:
                 return
             snapshot = dict(self._seen)

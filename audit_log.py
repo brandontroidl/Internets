@@ -1,33 +1,48 @@
-"""Append-only, hash-chained audit log for privileged bot actions.
+"""Append-only, HMAC-chained audit log for privileged bot actions.
 
 This is intentionally separate from the main ``botlog`` stream.  Goals:
 
-  * **Tamper-evident**: each record carries a SHA-256 over the previous
-    record's hash plus the current record's fields, forming a chain.
-    Removing or editing any line breaks ``verify()`` from that point on.
+  * **Tamper-evident**: each record carries an HMAC-SHA-256 over the
+    previous record's hash plus the current record's fields, forming a
+    chain.  Editing or removing any record breaks ``verify()`` from that
+    point on.  The HMAC key lives in a 0600 sidecar (``audit.key``), so
+    an attacker who obtains only a *copy* of ``audit.log`` (a backup, an
+    accidental commit) cannot recompute the chain to forge entries —
+    plain SHA-256 (the pre-2.7.0 scheme) could be recomputed by anyone
+    who knew the algorithm, which is in this file.
   * **Append-only on disk**: every ``record()`` opens the file in
-    append-binary mode, writes one JSON line, then ``chmod 0o600`` to
-    mirror ``secret_store._write_file_atomic`` semantics (the audit log
-    may include hostmasks, which are PII).
+    append-binary mode, writes one JSON line, then ``chmod 0o600`` (the
+    log may include hostmasks, which are PII).
+  * **Bounded**: the log rotates to ``audit.log.<timestamp>`` once it
+    exceeds ``_MAX_BYTES``; each rotated segment is independently
+    verifiable.  Rotation starts a fresh chain (new genesis).
   * **Cheap**: stdlib only, one ``threading.Lock`` for in-process
     serialization.  Not designed for cross-process concurrent writers.
 
+Honest limitation: pure *tail* truncation by an attacker with write
+access to both ``audit.log`` and ``audit.key`` cannot be detected from
+the file alone — that needs an external append-only sink (remote
+syslog), which is out of scope for a single-host bot.  Editing,
+reordering, or deleting any non-tail record IS caught: it breaks the
+``prev_hash`` link and the HMAC.
+
+Backward compatibility: records written before 2.7.0 have no ``v`` field
+and were hashed with plain SHA-256.  ``verify()`` still accepts them
+(legacy mode); every new record is HMAC-chained (``v: 2``).
+
 Wire-up:
     Already integrated.  Every privileged handler in ``admin_cmds.py``
-    calls ``audit_log.default().record(nick, host, action, args)`` via
-    the ``_audit()`` helper on ``AdminCommandsMixin`` — see auth,
-    deauth, load, unload, reload, reloadall, restart, rehash, mode,
-    snomask, loglevel, debug, shutdown.  The ``modules/health.py``
-    ``.health`` command surfaces ``verify()`` so operators can confirm
-    the chain isn't tampered.
+    calls ``audit_log.default().record(nick, host, action, args)``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +51,8 @@ from typing import Any
 log = logging.getLogger("internets.audit")
 
 _GENESIS_HASH = "0" * 64
+_RECORD_VERSION = 2                  # 2 = HMAC-SHA-256; absent/1 = legacy SHA-256
+_MAX_BYTES = 5 * 1024 * 1024         # rotate the log once it exceeds this
 
 
 def _iso_utc_now() -> str:
@@ -61,32 +78,39 @@ def _stable_args_str(args: Any) -> str:
         return repr(args)
 
 
-def _hash_record(prev_hash: str, ts: str, actor: str, host: str,
+def _canonical(prev_hash: str, ts: str, actor: str, host: str,
+               action: str, args_str: str) -> bytes:
+    """NUL-separated canonical byte form of a record's hashed fields.
+
+    NUL separators mean a value containing the literal delimiter can't
+    collide with a different field layout.
+    """
+    return b"\x00".join(s.encode("utf-8") for s in
+                        (prev_hash, ts, actor, host, action, args_str))
+
+
+def _sha_record(prev_hash: str, ts: str, actor: str, host: str,
+                action: str, args_str: str) -> str:
+    """Legacy (pre-2.7.0) unkeyed SHA-256 digest — verify-only."""
+    return hashlib.sha256(
+        _canonical(prev_hash, ts, actor, host, action, args_str)).hexdigest()
+
+
+def _hmac_record(key: bytes, prev_hash: str, ts: str, actor: str, host: str,
                  action: str, args_str: str) -> str:
-    """SHA-256 over the canonical concatenation of the record's fields."""
-    h = hashlib.sha256()
-    # NUL separators so a value containing the literal delimiter can't
-    # collide with a different field layout.
-    h.update(prev_hash.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(ts.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(actor.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(host.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(action.encode("utf-8"))
-    h.update(b"\x00")
-    h.update(args_str.encode("utf-8"))
-    return h.hexdigest()
+    """HMAC-SHA-256 digest of a record under the audit key."""
+    return hmac.new(
+        key, _canonical(prev_hash, ts, actor, host, action, args_str),
+        hashlib.sha256).hexdigest()
 
 
 class AuditLog:
-    """Append-only, hash-chained audit log.
+    """Append-only, HMAC-chained audit log.
 
     Constructor:
         path: filesystem path (str or Path).  Resolved at instantiation.
-              Default ``./audit.log``.
+              Default ``./audit.log``.  The HMAC key sidecar is
+              ``<path>.key`` (e.g. ``audit.log`` → ``audit.log.key``).
 
     Threading:
         All public methods are guarded by ``self._lock``.  Safe for
@@ -96,12 +120,43 @@ class AuditLog:
 
     def __init__(self, path: str | Path = "./audit.log") -> None:
         self.path: Path = Path(path).resolve()
+        self._key_path: Path = self.path.with_name(self.path.name + ".key")
         self._lock = threading.Lock()
-        # Cached tail hash so we don't re-read the file on every record().
-        # Initialised lazily on first record() or verify() call.
+        # Cached tail hash + HMAC key — both initialised lazily.
         self._tip: str | None = None
+        self._key: bytes | None = None
 
     # ── internal helpers ────────────────────────────────────────────
+
+    def _load_key(self) -> bytes:
+        """Return the HMAC key, generating a 0600 sidecar on first use."""
+        if self._key is not None:
+            return self._key
+        if self._key_path.exists():
+            try:
+                self._key = bytes.fromhex(
+                    self._key_path.read_text(encoding="ascii").strip())
+                if len(self._key) >= 32:
+                    return self._key
+                log.warning("audit_log: key file too short — regenerating")
+            except (OSError, ValueError) as e:
+                log.warning("audit_log: key load failed (%s) — regenerating",
+                            type(e).__name__)
+        # Generate a fresh 32-byte key, written 0600 from creation.
+        key = secrets.token_bytes(32)
+        try:
+            self._key_path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(self._key_path),
+                         os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="ascii") as f:
+                f.write(key.hex())
+            if os.name != "nt":
+                os.chmod(self._key_path, 0o600)
+        except OSError as e:
+            log.error("audit_log: could not persist key (%s) — audit chain "
+                      "will not survive restart", type(e).__name__)
+        self._key = key
+        return key
 
     def _load_tip(self) -> str:
         """Return the last record's ``this_hash``, or the genesis hash."""
@@ -138,6 +193,28 @@ class AuditLog:
             log.warning("audit_log: chmod 0o600 failed on %s: %s",
                         self.path, type(e).__name__)
 
+    def _rotate_if_oversize(self) -> None:
+        """Rotate the log aside if it exceeds ``_MAX_BYTES``.
+
+        Caller must hold ``self._lock``.  The rotated segment keeps its
+        own chain; the new ``audit.log`` starts fresh from genesis.
+        """
+        try:
+            if not self.path.exists() or self.path.stat().st_size <= _MAX_BYTES:
+                return
+        except OSError:
+            return
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dest = self.path.with_name(f"{self.path.name}.{stamp}")
+        try:
+            self.path.rename(dest)
+            log.info("audit_log: rotated to %s", dest.name)
+        except OSError as e:
+            log.warning("audit_log: rotation failed: %s", type(e).__name__)
+            return
+        # Fresh chain for the new file.
+        self._tip = _GENESIS_HASH
+
     # ── public API ──────────────────────────────────────────────────
 
     def record(self, actor: str, host: str, action: str,
@@ -154,12 +231,15 @@ class AuditLog:
         args_str = _stable_args_str(args)
 
         with self._lock:
+            key = self._load_key()
+            self._rotate_if_oversize()
             if self._tip is None:
                 self._tip = self._load_tip()
             prev = self._tip
-            this_hash = _hash_record(prev, ts, actor_s, host_s,
+            this_hash = _hmac_record(key, prev, ts, actor_s, host_s,
                                      action_s, args_str)
             entry = {
+                "v":          _RECORD_VERSION,
                 "ts":         ts,
                 "actor":      actor_s,
                 "host":       host_s,
@@ -175,7 +255,6 @@ class AuditLog:
             line = json.dumps(entry, ensure_ascii=False,
                               separators=(",", ":")) + "\n"
             try:
-                # Mirror secret_store's approach: create with 0o600 if new.
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 if not self.path.exists():
                     # Create with restrictive perms from the start.
@@ -196,6 +275,10 @@ class AuditLog:
     def verify(self) -> tuple[bool, int]:
         """Re-walk the chain.
 
+        v2 records are verified with HMAC under the audit key; legacy
+        records (no ``v`` field) fall back to plain SHA-256 so a log that
+        predates 2.7.0 still verifies.
+
         Returns:
             ``(True, -1)`` if the chain is intact (including the empty
             case where the file does not exist).
@@ -206,6 +289,7 @@ class AuditLog:
         with self._lock:
             if not self.path.exists():
                 return True, -1
+            key = self._load_key()
             prev = _GENESIS_HASH
             idx = 0
             try:
@@ -228,8 +312,12 @@ class AuditLog:
                         host     = obj.get("host", "")
                         action   = obj.get("action", "")
                         args_str = _stable_args_str(obj.get("args"))
-                        expected = _hash_record(prev, ts, actor, host,
-                                                action, args_str)
+                        if obj.get("v") == _RECORD_VERSION:
+                            expected = _hmac_record(key, prev, ts, actor,
+                                                    host, action, args_str)
+                        else:  # legacy pre-2.7.0 record
+                            expected = _sha_record(prev, ts, actor, host,
+                                                   action, args_str)
                         if obj.get("this_hash") != expected:
                             return False, idx
                         prev = expected

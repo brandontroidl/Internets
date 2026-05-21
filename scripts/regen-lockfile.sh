@@ -15,8 +15,10 @@
 #     scripts/regen-lockfile.sh
 #
 # Requirements:
-#   * Python 3.10+ on PATH (we create an ephemeral venv to avoid
-#     touching the operator's system pip)
+#   * Python 3.10 SPECIFICALLY on PATH — the lock MUST be resolved on the
+#     lowest supported Python so conditional transitive deps gated
+#     `python_version < "3.11"` (e.g. async-timeout) are captured.  A lock
+#     generated on 3.14 silently omits them and breaks CI's 3.10 jobs.
 #   * Network access to PyPI for the resolve step
 
 set -euo pipefail
@@ -24,11 +26,29 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Locate a Python 3.10 interpreter — fail loudly rather than silently
+# producing a lock missing the < 3.11 conditional transitives.
+PYBIN=""
+for cand in python3.10 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+        ver="$("$cand" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+        if [ "$ver" = "3.10" ]; then PYBIN="$cand"; break; fi
+    fi
+done
+if [ -z "$PYBIN" ]; then
+    echo "ERROR: Python 3.10 is required to regenerate the lockfile." >&2
+    echo "  The lock must be resolved on the lowest supported Python so" >&2
+    echo "  conditional transitive deps (async-timeout, etc.) are captured." >&2
+    echo "  Install Python 3.10 and re-run." >&2
+    exit 1
+fi
+echo ">> Using $PYBIN ($("$PYBIN" --version 2>&1))"
+
 VENV="$(mktemp -d)/piptools-venv"
 trap 'rm -rf "$(dirname "$VENV")"' EXIT
 
 echo ">> Creating ephemeral venv at $VENV"
-python3 -m venv "$VENV"
+"$PYBIN" -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip pip-tools
 
 echo ">> Generating requirements.lock with hashes"
