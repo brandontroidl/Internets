@@ -45,7 +45,6 @@ from pathlib import Path
 
 log = logging.getLogger("internets.secrets")
 
-SERVICE = "internets-irc"
 ENV_PREFIX = "INTERNETS_"
 # The file the [secrets] section lives in.  config.ini is gitignored;
 # config.ini.example is the committed credential-free template (resolved
@@ -131,59 +130,17 @@ _PLACEHOLDERS = frozenset({
 })
 
 
-# ── Backend detection ────────────────────────────────────────────────
-
-def _keyring():
-    """Import keyring lazily; return module or None."""
-    try:
-        import keyring  # noqa: PLC0415  (intentional lazy import — optional dep)
-        return keyring
-    except ImportError:
-        return None
-
+# ── Backend helpers ──────────────────────────────────────────────────
 
 def _safe_exc(e: BaseException) -> str:
     """Return ``ExceptionType`` without the message.
 
-    Exception messages from configparser / keyring / argon2 / bcrypt
-    occasionally echo back fragments of the offending value (e.g.
-    configparser includes the bad line, argon2 includes the hash in
-    some error paths).  We never want those in our logs.
+    Exception messages from configparser / argon2 / bcrypt occasionally
+    echo back fragments of the offending value (e.g. configparser
+    includes the bad line, argon2 includes the hash in some error
+    paths).  We never want those in our logs.
     """
     return type(e).__name__
-
-
-# Backends we explicitly REFUSE to treat as "available".  The Fail
-# backend is keyring's "nothing usable" sentinel.  Plaintext / Null /
-# Memory backends store secrets without encryption — accepting them
-# would silently downgrade our security posture, so we treat them the
-# same as "no keyring at all" and let the 0600 file backend take over.
-_UNSAFE_KEYRING_BACKENDS = frozenset({
-    "fail",       # keyring.backends.fail.Keyring
-    "plaintext",  # keyring.backends.plaintext (if any third-party adds one)
-    "null",       # explicit no-op backend
-    "memory",     # process-memory only, never persisted
-})
-
-
-def keyring_available() -> bool:
-    """True iff ``keyring`` is importable AND the active backend
-    actually encrypts at rest.
-
-    Rejects Fail / Plaintext / Null / Memory backends explicitly —
-    accepting any of those would silently downgrade secret storage
-    to "no encryption", which is worse than the 0600 config.ini
-    fallback (which is at least file-perm protected).
-    """
-    kr = _keyring()
-    if kr is None:
-        return False
-    try:
-        backend = kr.get_keyring()
-    except Exception:
-        return False
-    name = type(backend).__name__.lower()
-    return not any(unsafe in name for unsafe in _UNSAFE_KEYRING_BACKENDS)
 
 
 def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:
@@ -208,28 +165,14 @@ def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:
 def get(name: str, default: str = "") -> str:
     """Return the secret value, or ``default`` if not stored anywhere.
 
-    Tiered lookup (first hit wins): env var → keyring → config.ini[secrets].
+    Tiered lookup (first hit wins): env var → config.ini[secrets].
     """
     # 1) Env var
     env_key = ENV_PREFIX + name.upper()
     val = os.environ.get(env_key)
     if val:
         return val
-    # 2) Keyring
-    kr = _keyring()
-    if kr is not None:
-        try:
-            val = kr.get_password(SERVICE, name)
-            if val:
-                return val
-        except Exception as e:
-            # NB: exception type only — keyring backends sometimes embed
-            # the entry value or path in str(e), and the entry *name* is
-            # itself flagged by CodeQL's py/clear-text-logging-sensitive-data
-            # query (false-positive: it's a key identifier, not the value)
-            # so we omit it from the log line entirely.
-            log.debug("keyring lookup failed: %s", _safe_exc(e))
-    # 3) config.ini [secrets]
+    # 2) config.ini [secrets]
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)
         if not ok:
@@ -249,37 +192,21 @@ def get(name: str, default: str = "") -> str:
     return default
 
 
-def set_value(name: str, value: str, *, backend: str = "auto") -> str:
-    """Store ``value`` for ``name``.  Returns the backend actually used."""
-    backend = backend.lower()
-    if backend == "auto":
-        backend = "keyring" if keyring_available() else "file"
-    if backend == "keyring":
-        kr = _keyring()
-        if kr is None:
-            raise RuntimeError("keyring backend requested but not installed "
-                               "(pip install keyring)")
-        kr.set_password(SERVICE, name, value)
-        return "keyring"
-    if backend == "file":
-        _write_file_secret(name, value)
-        return "file"
-    raise ValueError(f"unknown backend {backend!r}; use auto/keyring/file")
+def set_value(name: str, value: str) -> str:
+    """Store ``value`` for ``name`` in ``config.ini[secrets]``.
+
+    Returns the backend label (always ``"file"`` — the only backend left
+    after v2.7.0's keyring removal).  Signature retains the return value
+    so existing callers / tests continue to work unchanged.
+    """
+    _write_file_secret(name, value)
+    return "file"
 
 
-def delete(name: str, *, backend: str = "all") -> list[str]:
-    """Remove ``name`` from one or all backends.  Returns backends touched."""
-    backend = backend.lower()
+def delete(name: str) -> list[str]:
+    """Remove ``name`` from ``config.ini[secrets]``.  Returns backends touched."""
     touched: list[str] = []
-    if backend in ("keyring", "all"):
-        kr = _keyring()
-        if kr is not None:
-            try:
-                kr.delete_password(SERVICE, name)
-                touched.append("keyring")
-            except Exception:
-                pass  # nosec B110: best-effort cleanup
-    if backend in ("file", "all") and SECRETS_FILE.exists():
+    if SECRETS_FILE.exists():
         try:
             if _delete_file_secret(name):
                 touched.append("file")
@@ -290,31 +217,20 @@ def delete(name: str, *, backend: str = "all") -> list[str]:
 
 def status() -> dict[str, object]:
     """Diagnostic snapshot of the secret store environment."""
-    kr = _keyring()
-    backend_name = ""
-    if kr is not None:
-        try:
-            backend_name = type(kr.get_keyring()).__name__
-        except Exception as e:
-            backend_name = f"<error: {e}>"
     perms, perms_reason = perms_ok(SECRETS_FILE)
     return {
-        "keyring_installed":   kr is not None,
-        "keyring_available":   keyring_available(),
-        "keyring_backend":     backend_name,
         "secrets_file":        str(SECRETS_FILE),
         "secrets_file_exists": SECRETS_FILE.exists(),
         "secrets_file_perms":  perms_reason,
         "perms_ok":            perms,
         "env_prefix":          ENV_PREFIX,
-        "service":             SERVICE,
     }
 
 
 def list_stored() -> dict[str, str]:
     """Return ``{secret_name: backend}`` for every known secret currently stored.
 
-    Backend may be ``"env"``, ``"keyring"``, ``"file"``, or ``""`` (none).
+    Backend may be ``"env"``, ``"file"``, or ``""`` (none).
     """
     out: dict[str, str] = {}
     parser: configparser.ConfigParser | None = None
@@ -324,18 +240,10 @@ def list_stored() -> dict[str, str]:
             parser.read(SECRETS_FILE, encoding="utf-8")
         except configparser.Error:
             parser = None
-    kr = _keyring()
     for name in KNOWN_SECRETS:
         if os.environ.get(ENV_PREFIX + name.upper()):
             out[name] = "env"
             continue
-        if kr is not None:
-            try:
-                if kr.get_password(SERVICE, name):
-                    out[name] = "keyring"
-                    continue
-            except Exception:
-                pass  # nosec B110: best-effort cleanup
         if parser is not None and parser.has_option("secrets", name):
             v = parser.get("secrets", name).strip()
             if v and v.lower() not in _PLACEHOLDERS:

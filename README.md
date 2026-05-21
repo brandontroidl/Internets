@@ -1,6 +1,4 @@
-# Internets
-
-**v2.7.0** — `[secrets]` merged into `config.ini`, `--reveal` removed, `fetch_json` size-cap helper across all HTTP modules, `numberfact` rewritten on Wikipedia + local math, Windows UTF-8 fix, ~50 Bandit / CodeQL findings cleared (2026-05-20)
+# Internets v2.7.0
 
 A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups — plus stateful IRC-native tools (seen, tell, remind, notes), API-driven entertainment modules (PokéAPI, MTG, D&D, ISS tracker, xkcd, APOD, recipes, cocktails, HN, Reddit, …), pure-local dev utilities, and a full admin toolkit. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
 
