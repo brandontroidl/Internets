@@ -6,6 +6,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+(No unreleased changes.)
+
+## [2.7.0] — 2026-05-20
+
 ### Changed — secret-store consolidation (BREAKING for fresh setups)
 
 - **`config.ini` is now gitignored**; `config.ini.example` is the
@@ -35,6 +39,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the boilerplate "natural number following X and preceding Y"
   extract.  The `.numberfact` / `.nf` command surface is unchanged.
 
+### Removed (BREAKING)
+
+- **`python -m secret_store get --reveal`** — the `--reveal` flag is
+  gone.  Printing a stored secret to stdout was a real exposure surface
+  (terminal scrollback, shell history, screen recording) and CodeQL's
+  `py/clear-text-logging-sensitive-data` query correctly flagged the
+  data flow — closing the alert by suppression would have been hiding
+  a finding that wasn't actually a false positive.  The same operator
+  use case (manual key rotation) is now explicit at the call site:
+
+      python -c "import secret_store; print(secret_store.get('omdb_key'))"
+
+  The CLI's `get <name>` still prints `(set, N chars, backend=...)`.
+
 ### Fixed
 
 - **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
@@ -42,6 +60,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer hit "PokéAPI response too large".  Also strip leading zeros
   on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
   404'ing against `/pokemon/06`.
+- **Windows: `UnicodeDecodeError` reading `config.ini`** — pin
+  `encoding="utf-8"` on every `configparser.read()` call site
+  (`config.py:reload_config`, `secret_store.py` ×4).  Python's default
+  on Windows is cp1252, which choked on the em-dashes / box-drawing
+  in `config.ini.example`'s section headers — broke every Windows test
+  job at import-time.
 
 ### Security
 
@@ -89,6 +113,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`# nosec B404 / B603 / B606`** on `internets.py`'s Windows
   self-restart path (`subprocess.Popen` + `os.execv` with
   `sys.executable` + `sys.argv` — interpreter-controlled, not user input).
+- **`secret_store._cmd_list` rewritten** with explicit if/elif branches
+  mapping the (taint-tracked) backend code to a literal display label —
+  CodeQL's data-flow analysis now sees `print(label)` as printing one
+  of four constants, breaking the `py/clear-text-logging-sensitive-data`
+  false positive that fired on the previous `print(f"{name} {backend}")`.
+- **`.github/workflows/security.yml`** —
+  `pip-audit -r requirements.lock` (audit only third-party deps, not
+  the local editable `internets-irc` install which has no PyPI entry),
+  `--ignore-vuln PYSEC-2025-183` (disputed pyjwt CVE; the alleged weak
+  encryption is the application's key-length choice, not the library —
+  Apple WeatherKit picks the key for our usage).
+- **`gitleaks-action`** — `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`
+  opts into Node 24 early; v2.3.9 still ships Node 20 and GitHub
+  retires Node 20 in Sep 2026.
 
 ## [2.6.0] — 2026-05-20
 

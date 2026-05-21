@@ -91,7 +91,7 @@ password_hash =
 ; Geocoder + weather APIs require a User-Agent with a real contact.
 ; The actual identifier lives in [secrets].weather_user_agent below
 ; (Nominatim and several weather APIs require a real URL or email).
-user_agent = Internets/2.6.0 (set-in-[secrets])
+user_agent = Internets/2.7.0 (set-in-[secrets])
 units = us
 
 [weather_providers]
@@ -179,7 +179,7 @@ oper_password =
 ; ── PII / contact identifier ────────────────────────────────────────
 ; Nominatim and several weather APIs require a real contact in the
 ; User-Agent.  Prefer a URL over an email when possible, e.g.
-; "Internets/2.6.0 (https://github.com/youruser/yourrepo)".
+; "Internets/2.7.0 (https://github.com/youruser/yourrepo)".
 
 weather_user_agent =
 

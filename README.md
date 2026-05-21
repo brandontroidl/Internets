@@ -1,6 +1,6 @@
 # Internets
 
-**v2.6.0** — Progressive-disclosure help, audit / fingerprint / shadow-ban admin tools, +24 entertainment / dev / live-data modules (2026-05-20)
+**v2.7.0** — `[secrets]` merged into `config.ini`, `--reveal` removed, `fetch_json` size-cap helper across all HTTP modules, `numberfact` rewritten on Wikipedia + local math, Windows UTF-8 fix, ~50 Bandit / CodeQL findings cleared (2026-05-20)
 
 A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups — plus stateful IRC-native tools (seen, tell, remind, notes), API-driven entertainment modules (PokéAPI, MTG, D&D, ISS tracker, xkcd, APOD, recipes, cocktails, HN, Reddit, …), pure-local dev utilities, and a full admin toolkit. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
 
@@ -254,14 +254,14 @@ Admin session (via PM):
 <Internets> 'weather' unloaded. 'weather' loaded (19 commands).
 
 <alice> .version
-<Internets> Internets 2.6.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
+<Internets> Internets 2.7.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
 ```
 
 CLI startup:
 
 ```
 $ python internets.py --version
-Internets 2.6.0
+Internets 2.7.0
 
 $ python internets.py
 2026-05-20 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
@@ -271,7 +271,7 @@ $ python internets.py
 2026-05-20 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
 2026-05-20 14:00:03 [INFO] internets.conn: Joined #mychannel
 > status
-  version  = 2.6.0
+  version  = 2.7.0
   nick     = Internets
   channels = #mychannel
   modules  = advice, apod, bofh, bored, calc, catfact, channels, chuck, cocktail, cowsay, crypto, dadjoke, devutils, dice, dictionary, dnd, fact, fml, fx, games, hn, httpcode, idlerpg, imdb, ipinfo, iss, lastfm, location, mtg, notes, numberfact, poke, qdb, qr, recipe, reddit, remind, search, seen, spacex, steam, stocks, tell, translate, twitch, urbandictionary, urls, weather, xkcd, youtube

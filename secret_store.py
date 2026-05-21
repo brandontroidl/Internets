@@ -1,4 +1,4 @@
-"""Tiered secret store — keyring > env var > config.ini[secrets].
+"""Two-tier secret store — env var > config.ini[secrets].
 
 Outbound credentials (NickServ password, SASL password, server password,
 oper password, weather API keys, etc.) MUST be reversible — the bot has
@@ -7,16 +7,15 @@ not hashing.  Hashing is one-way and would break authentication.
 
 Lookup order for ``get(name)``:
     1. Environment variable ``INTERNETS_<NAME_UPPER>`` if set.
-    2. OS keyring entry under service ``internets-irc``, user=<name>,
-       via the optional ``keyring`` library.  Encrypted by the OS
-       (macOS Keychain, Linux Secret Service/kwallet, Windows CredMan).
-    3. ``config.ini`` ``[secrets]`` section, file mode strictly 0o600.
-    4. Empty string default.
+    2. ``config.ini`` ``[secrets]`` section, file mode strictly 0o600.
+    3. Empty string default.
 
-The keyring backend is the most secure: the secret never lives on disk
-in plaintext and is unlocked per user session.  The config.ini fallback
-exists for headless servers without a session keyring; ``perms_ok()``
-fails closed if the file is group- or world-readable.
+OS keyring support was removed in v2.7.0: this bot's primary target is
+headless deployments where ``keyring`` has no usable backend, and the
+optional desktop-session integration brought in ~10 transitive deps
+(jeepney, secretstorage, jaraco-*, importlib-metadata, zipp, …) for no
+practical benefit.  The 0o600 file backend is the only secret store;
+``perms_ok()`` fails closed if the file is group- or world-readable.
 
 config.ini is gitignored — it holds both the non-secret settings and
 the ``[secrets]`` section.  ``config.ini.example`` is the committed
@@ -25,9 +24,9 @@ credential-free template.
 CLI::
 
     python -m secret_store status
-    python -m secret_store set <name> [--value <v>] [--backend keyring|file]
+    python -m secret_store set <name> [--value <v>]
     python -m secret_store get <name>
-    python -m secret_store delete <name> [--backend keyring|file|all]
+    python -m secret_store delete <name>
     python -m secret_store migrate           # scrub plaintext from non-[secrets] sections
     python -m secret_store list              # show which keys are stored where
     python -m secret_store init              # bootstrap config.ini from config.ini.example

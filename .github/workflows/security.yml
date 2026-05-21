@@ -104,9 +104,9 @@ jobs:
       # --strict fails the job on any CVE so triage is forced.
       # `-r requirements.lock` scans only the hash-pinned third-party
       # deps — NOT the local editable install (`pip install -e .` adds
-      # internets-irc 2.6.0 to the env, which has no PyPI entry and
-      # makes a default `pip-audit` invocation fail with "Dependency
-      # not found on PyPI").
+      # internets-irc to the env, which has no PyPI entry and makes a
+      # default `pip-audit` invocation fail with "Dependency not found
+      # on PyPI").
       #
       # --ignore-vuln PYSEC-2025-183 (pyjwt 2.10.1+):
       #   The CVE is DISPUTED by the pyjwt maintainers — the alleged
