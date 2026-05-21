@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
 from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.steam")

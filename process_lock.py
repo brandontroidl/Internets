@@ -1,7 +1,5 @@
 """PID-based process lock with stale-detection.
 
-# TODO(internets.py): wrap _main in `with ProcessLock(...)`.
-
 Prevents two instances of the bot from running concurrently against the
 same on-disk state.  Two concurrent writers would race on the JSON
 state files (locations / channels / users / secrets) and silently

@@ -19,16 +19,14 @@
 ;
 ;  Secret lookup order (first hit wins):
 ;    1. environment variable:   INTERNETS_<NAME_UPPER>=value
-;    2. OS keyring (preferred): pip install keyring
-;                               python -m secret_store set <name> --backend keyring
-;    3. [secrets] section in this file (0o600 enforced)
+;    2. [secrets] section in this file (0o600 enforced)
 ;
 ;  Visibility guarantees:
 ;    - The bot never logs values from [secrets].
 ;    - Outbound IRC messages are scrubbed for credential prefixes
 ;      (PASS, IDENTIFY, OPER, AUTHENTICATE) before being logged.
-;    - `python -m secret_store get <name>` confirms presence only;
-;      requires `--reveal` to print the actual value.
+;    - `python -m secret_store get <name>` confirms presence only —
+;      it never prints the value (no flag does).
 ;    - `python -m secret_store list` shows backend per secret, not the
 ;      values themselves.
 ; ────────────────────────────────────────────────────────────────────
@@ -48,7 +46,7 @@ realname = IRC Bot
 ; Joined channels are saved to channels.json and rejoined on restart.
 ;
 ; NickServ / SASL / server / oper passwords live in [secrets] below
-; (or in the OS keyring / INTERNETS_* env vars).
+; (or in INTERNETS_* environment variables).
 
 oper_name =
 
@@ -88,10 +86,10 @@ autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,
 password_hash =
 
 [weather]
-; Geocoder + weather APIs require a User-Agent with a real contact.
-; The actual identifier lives in [secrets].weather_user_agent below
-; (Nominatim and several weather APIs require a real URL or email).
-user_agent = Internets/2.7.0 (set-in-[secrets])
+; Default unit system: "us" (°F, mph, inHg) or "metric" (°C, km/h, hPa).
+; The geocoder / weather-API User-Agent contact identifier is NOT set
+; here — it lives in [secrets].weather_user_agent at the bottom of this
+; file (Nominatim and several weather APIs require a real URL or email).
 units = us
 
 [weather_providers]
@@ -145,13 +143,12 @@ debug_file =
 ;
 ;                         [secrets]  — sensitive
 ;
-; Everything below is read by secret_store.py (file backend) when no
-; keyring / env-var value is found.  Strict 0o600 enforced — the bot
-; refuses to read this file if perms are looser.
+; Everything below is read by secret_store.py when no INTERNETS_* env
+; var overrides it.  Strict 0o600 enforced — the bot refuses to read
+; this file if perms are looser.
 ;
-; Any of these can be moved to the OS keyring instead:
-;     python -m secret_store set <name> --backend keyring
-; or to an env var (which always wins):
+; Any of these can instead be supplied via an environment variable,
+; which always wins over the file:
 ;     export INTERNETS_<NAME_UPPER>=value
 ;
 ; ════════════════════════════════════════════════════════════════════

@@ -6,9 +6,8 @@ used by the bot core, modules, and logging.
 Outbound credentials (NickServ/SASL/server/oper passwords, API keys) are
 pulled from ``secret_store`` first and fall back to the matching field
 in ``config.ini`` only if the secret store has no value.  Run
-``python -m secret_store migrate`` once to move plaintext out of the
-non-secret sections of ``config.ini`` into the OS keyring (or into the
-``[secrets]`` section of the same file).
+``python -m secret_store migrate`` once to move any plaintext out of the
+non-secret sections of ``config.ini`` into its ``[secrets]`` section.
 """
 
 from __future__ import annotations
@@ -66,6 +65,16 @@ def reload_config() -> list[str]:
 
 
 read_files = reload_config()
+
+# Fail loud and actionable if config.ini is absent/unreadable.  Without
+# this, the first `cfg["irc"]["server"]` access below raises a bare
+# `KeyError: 'irc'` that gives the operator no idea the file is missing.
+if not read_files:
+    raise SystemExit(
+        f"config.ini not found or unreadable at {CONFIG_PATH}\n"
+        "Run `python -m secret_store init` to create it from "
+        "config.ini.example, then edit in your settings + [secrets]."
+    )
 
 # ── IRC settings ─────────────────────────────────────────────────────
 

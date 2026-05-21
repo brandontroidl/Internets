@@ -48,8 +48,13 @@ audit.log.*
 locations.json
 channels.json
 users.json
-# Per-module state file (modules/steam.py).
+# Per-module state files — all hold user PII (nicks, hostmasks,
+# message snippets, notes, reminders).  Never commit.
 steamids.json
+seen.json
+tells.json
+notes.json
+reminders.json
 # Process lockfile from process_lock.py — never commit.
 internets.pid
 

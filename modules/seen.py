@@ -105,6 +105,15 @@ class SeenModule(BotModule):
         except Exception as e:
             log.warning(f"seen: final flush failed: {e!r}")
 
+    def forget(self, nick: str) -> int:
+        """Erase the .seen record for ``nick`` (privacy right-to-erasure)."""
+        with self._lock:
+            removed = self._seen.pop(nick.lower(), None)
+        if removed is None:
+            return 0
+        self._flush_sync()
+        return 1
+
     # ----------------------------------------------------------------- helpers
     def _own_nick(self) -> str:
         n = getattr(self.bot, "_nick", None)

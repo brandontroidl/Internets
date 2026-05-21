@@ -38,6 +38,11 @@ _rng = random.SystemRandom()
 _WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/{slug}"
 _WIKI_ONTHISDAY = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/{mm}/{dd}"
 _TYPES = {"trivia", "math", "date", "year"}
+# Upper bound on a user-supplied number.  math_fact() runs O(√n) trial
+# division (primality, factorization, divisor count); without a ceiling
+# a 19-digit input burns ~90 s of CPU on a to_thread worker — a trivial
+# DoS.  10^12 keeps every path's √n ≤ 10^6 iterations (sub-millisecond).
+_MAX_ABS_N = 10 ** 12
 # Wikipedia's on-this-day endpoint returns large blobs — May 20 alone is
 # ~1.5 MB.  Cap generously; trivia/year summaries are tiny so a single
 # global ceiling is fine.
@@ -311,15 +316,17 @@ def _truncate(s: str, n: int = 300) -> str:
 def _fetch_trivia_sync(n: int, ua: str) -> str:
     """Wikipedia summary for ``<n>_(number)``; fall back to math_fact()."""
     try:
-        r = requests.get(
+        # `with` releases the socket on every exit path (the stream=True
+        # response would otherwise leak the connection / FD).
+        with requests.get(
             _WIKI_SUMMARY.format(slug=f"{n}_(number)"),
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=10, stream=True,
-        )
-        if r.status_code == 404:
-            return math_fact(n)
-        r.raise_for_status()
-        body = _read_capped(r)
+        ) as r:
+            if r.status_code == 404:
+                return math_fact(n)
+            r.raise_for_status()
+            body = _read_capped(r)
         if body is None:
             return "Wikipedia response too large"
         d = json.loads(body.decode("utf-8", errors="replace"))
@@ -338,15 +345,15 @@ def _fetch_trivia_sync(n: int, ua: str) -> str:
 def _fetch_year_sync(year: int, ua: str) -> str:
     """Wikipedia summary for ``<year>``; fall back to math_fact() on 404."""
     try:
-        r = requests.get(
+        with requests.get(
             _WIKI_SUMMARY.format(slug=str(year)),
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=10, stream=True,
-        )
-        if r.status_code == 404:
-            return math_fact(year)
-        r.raise_for_status()
-        body = _read_capped(r)
+        ) as r:
+            if r.status_code == 404:
+                return math_fact(year)
+            r.raise_for_status()
+            body = _read_capped(r)
         if body is None:
             return "Wikipedia response too large"
         d = json.loads(body.decode("utf-8", errors="replace"))
@@ -365,13 +372,13 @@ def _fetch_year_sync(year: int, ua: str) -> str:
 def _fetch_date_sync(mm: int, dd: int, ua: str) -> str:
     """Random event from Wikipedia's on-this-day endpoint."""
     try:
-        r = requests.get(
+        with requests.get(
             _WIKI_ONTHISDAY.format(mm=f"{mm:02d}", dd=f"{dd:02d}"),
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=10, stream=True,
-        )
-        r.raise_for_status()
-        body = _read_capped(r)
+        ) as r:
+            r.raise_for_status()
+            body = _read_capped(r)
         if body is None:
             return "Wikipedia response too large"
         d = json.loads(body.decode("utf-8", errors="replace"))
@@ -503,6 +510,9 @@ class NumberfactModule(BotModule):
                 except ValueError:
                     self.bot.privmsg(reply_to, f"{nick}: n must be an integer")
                     return
+                if abs(n) > _MAX_ABS_N:
+                    self.bot.privmsg(reply_to, f"{nick}: n too large (max {_MAX_ABS_N:,})")
+                    return
             self.bot.privmsg(reply_to, _strip_ctrl(math_fact(n)))
             return
 
@@ -514,6 +524,11 @@ class NumberfactModule(BotModule):
                 n = int(q_raw)
             except ValueError:
                 self.bot.privmsg(reply_to, f"{nick}: n must be an integer")
+                return
+            # trivia falls back to math_fact(n) on a boilerplate/404 Wikipedia
+            # result, so the same O(√n) ceiling applies here.
+            if abs(n) > _MAX_ABS_N:
+                self.bot.privmsg(reply_to, f"{nick}: n too large (max {_MAX_ABS_N:,})")
                 return
         text = await asyncio.to_thread(_fetch_trivia_sync, n, self._ua)
         self.bot.privmsg(reply_to, _strip_ctrl(text))

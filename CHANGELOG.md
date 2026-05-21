@@ -41,6 +41,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed (BREAKING)
 
+- **OS keyring backend removed.** `secret_store` is now two-tier:
+  `INTERNETS_<NAME>` env var → `config.ini[secrets]` (0600).  The bot
+  targets headless deployments where `keyring` has no usable backend
+  ("fail" backend), and the optional desktop-session integration
+  dragged in ~10 transitive dependencies (`keyring`, `jeepney`,
+  `secretstorage`, `jaraco-*`, `importlib-metadata`, `zipp`,
+  `more-itertools`) for no practical benefit.  `requirements.lock`
+  drops from 33 to 23 packages.  The `--backend` flag on
+  `secret_store set` / `delete` / `migrate` is gone (only one backend
+  remains).  If you stored secrets in the OS keyring, move them into
+  `config.ini[secrets]` before upgrading.
 - **`python -m secret_store get --reveal`** — the `--reveal` flag is
   gone.  Printing a stored secret to stdout was a real exposure surface
   (terminal scrollback, shell history, screen recording) and CodeQL's
@@ -60,6 +71,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer hit "PokéAPI response too large".  Also strip leading zeros
   on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
   404'ing against `/pokemon/06`.
+- **`modules/numberfact.py` — CPU-DoS via unbounded `n`.**  `.nf <n>
+  math` / `.nf <n>` parsed an arbitrarily large integer and ran O(√n)
+  trial division — a 19-digit input measured at ~90 s of CPU on a
+  worker thread.  Explicit `n` is now clamped to 10¹² (√n ≤ 10⁶).
+- **Streamed HTTP responses were never closed** — `fetch_json`
+  (`modules/base.py`) and the inline `stream=True` sites in `poke`,
+  `numberfact` (×3), `idlerpg`, `fml`, `search` left the socket open
+  on every path, leaking file descriptors over long uptimes.  All are
+  now wrapped in `with requests.get(...) as r:`.
+- **`config.py`** — a missing/unreadable `config.ini` now fails with an
+  actionable `SystemExit` ("run `python -m secret_store init`") instead
+  of a bare `KeyError: 'irc'` deep in import.
+- **`secret_store.delete()`** — no longer swallows `PermissionError`;
+  `_delete_file_secret` raises on a non-0600 file so a delete blocked
+  by bad perms is reported as an error, not silently as "not found".
+- **`modules/search.py`** — `_web_sync` / `_image_sync` logged provider
+  failures only at `debug`, so on a default `INFO` level a bad Brave
+  key or DDG markup drift produced no log line at all.  Both now
+  `log.warning` each provider failure; `_image_sync` distinguishes
+  "no key configured" from "the keyed call failed".
+- **`modules/units.py`** — km/h→mph used the imprecise divisor `1.609`;
+  now `1.609344` (exact), matching `km_mi`.
 - **Windows: `UnicodeDecodeError` reading `config.ini`** — pin
   `encoding="utf-8"` on every `configparser.read()` call site
   (`config.py:reload_config`, `secret_store.py` ×4).  Python's default
@@ -127,6 +160,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`gitleaks-action`** — `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`
   opts into Node 24 early; v2.3.9 still ships Node 20 and GitHub
   retires Node 20 in Sep 2026.
+- **`secret_store.set_value()`** rejects a CR/LF in the value — the
+  file backend writes `name = value` as one line, so an embedded
+  newline could inject a fake section/key into `config.ini`.
+- **`.gitignore`** — added `seen.json`, `tells.json`, `notes.json`,
+  `reminders.json` (per-module PII state files that were not ignored).
+- Removed 7 now-dead `import requests` lines left behind by the
+  `fetch_json` migration; removed the OS-keyring transitive deps from
+  `requirements.lock` (jeepney, secretstorage, jaraco-*, etc.).
 
 ## [2.6.0] — 2026-05-20
 

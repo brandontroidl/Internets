@@ -43,7 +43,9 @@ def _extract_ddg_url(href: str) -> str:
 def _ddg_web(query: str, ua: str) -> str:
     """Search DuckDuckGo via the HTML lite endpoint (no API key needed)."""
     try:
-        r = requests.post(
+        # `with` releases the socket on every exit path — a stream=True
+        # response left unclosed leaks the connection / FD.
+        with requests.post(
             "https://html.duckduckgo.com/html/",
             data={"q": query, "kl": "us-en"},
             headers={
@@ -52,10 +54,10 @@ def _ddg_web(query: str, ua: str) -> str:
             },
             timeout=10,
             stream=True,
-        )
-        r.raise_for_status()
-        # Cap the HTML at 512 KB to defend against a tampered response.
-        raw = r.raw.read(512 * 1024 + 1, decode_content=True)
+        ) as r:
+            r.raise_for_status()
+            # Cap the HTML at 512 KB to defend against a tampered response.
+            raw = r.raw.read(512 * 1024 + 1, decode_content=True)
         if len(raw) > 512 * 1024:
             return f"[DuckDuckGo] response too large for '{query}'"
         body = raw.decode("utf-8", errors="replace")
@@ -137,27 +139,34 @@ def _brave_image(query: str, key: str, ua: str) -> str:
 # ── Dispatcher ───────────────────────────────────────────────────────────────
 
 def _web_sync(query: str, brave_key: str, ua: str) -> str:
-    """Try Brave (if keyed), fall back to DuckDuckGo."""
+    """Try Brave (if keyed), fall back to DuckDuckGo.
+
+    Both provider failures are logged at ``warning`` (not swallowed
+    silently): without a log line an operator cannot tell a bad Brave
+    key from a 429 from DuckDuckGo markup drift when ``.g`` "just fails".
+    """
     if brave_key:
         try:
             return _brave_web(query, brave_key, ua)
-        except Exception:
-            pass  # nosec B110: best-effort cleanup
+        except Exception as e:
+            log.warning("search: Brave web failed (%s) — falling back to DuckDuckGo",
+                        type(e).__name__)
     try:
         return _ddg_web(query, ua)
-    except Exception:
-        pass  # nosec B110: best-effort cleanup
+    except Exception as e:
+        log.warning("search: DuckDuckGo web failed: %s", type(e).__name__)
     return f"search failed for '{query}'"
 
 
 def _image_sync(query: str, brave_key: str, ua: str) -> str:
-    """Image search — requires Brave API key."""
-    if brave_key:
-        try:
-            return _brave_image(query, brave_key, ua)
-        except Exception:
-            pass  # nosec B110: best-effort cleanup
-    return f"image search requires a Brave API key — see [search] in config.ini"
+    """Image search — requires a Brave API key."""
+    if not brave_key:
+        return "image search requires a Brave API key — see [search] in config.ini"
+    try:
+        return _brave_image(query, brave_key, ua)
+    except Exception as e:
+        log.warning("search: Brave image failed: %s", type(e).__name__)
+        return f"image search failed for '{query}'"
 
 
 # ── Module ───────────────────────────────────────────────────────────────────

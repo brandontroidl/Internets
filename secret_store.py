@@ -198,20 +198,32 @@ def set_value(name: str, value: str) -> str:
     Returns the backend label (always ``"file"`` — the only backend left
     after v2.7.0's keyring removal).  Signature retains the return value
     so existing callers / tests continue to work unchanged.
+
+    Raises ``ValueError`` if ``value`` contains a CR or LF: the file
+    backend writes ``name = value`` as a single line, so an embedded
+    newline would inject extra lines (a fake section or key) into
+    config.ini.  Secret values are single-token credentials — a newline
+    is always a mistake or an injection attempt.
     """
+    if "\n" in value or "\r" in value:
+        raise ValueError("secret value must not contain a newline")
     _write_file_secret(name, value)
     return "file"
 
 
 def delete(name: str) -> list[str]:
-    """Remove ``name`` from ``config.ini[secrets]``.  Returns backends touched."""
+    """Remove ``name`` from ``config.ini[secrets]``.
+
+    Returns ``["file"]`` if a key was removed, ``[]`` if the key was not
+    present.  Raises ``PermissionError`` (NOT swallowed) if config.ini
+    exists with perms looser than 0o600 — a failed delete must not be
+    reported as "not found", or an operator trying to remove a leaked
+    credential would believe it was already gone.
+    """
     touched: list[str] = []
     if SECRETS_FILE.exists():
-        try:
-            if _delete_file_secret(name):
-                touched.append("file")
-        except PermissionError:
-            pass
+        if _delete_file_secret(name):
+            touched.append("file")
     return touched
 
 
@@ -360,12 +372,17 @@ def _write_file_secret(name: str, value: str) -> None:
 
 
 def _delete_file_secret(name: str) -> bool:
-    """Remove ``[secrets].name`` from ``SECRETS_FILE``.  Returns True on hit."""
+    """Remove ``[secrets].name`` from ``SECRETS_FILE``.  Returns True on hit.
+
+    Raises ``PermissionError`` if the file exists with perms looser than
+    0o600 — mirrors ``_write_file_secret`` so a delete blocked by bad
+    perms surfaces loudly instead of looking like a no-op.
+    """
     if not SECRETS_FILE.exists():
         return False
-    ok, _ = perms_ok(SECRETS_FILE)
+    ok, reason = perms_ok(SECRETS_FILE)
     if not ok:
-        return False
+        raise PermissionError(f"refusing to modify {SECRETS_FILE} — {reason}")
     text = SECRETS_FILE.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     start, end = _find_secrets_section(lines)

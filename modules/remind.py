@@ -168,6 +168,24 @@ class RemindModule(BotModule):
     def is_configured(self) -> bool:
         return True
 
+    def forget(self, nick: str) -> int:
+        """Cancel and erase every pending reminder set by ``nick``
+        (privacy right-to-erasure)."""
+        target = nick.lower()
+        with self._lock:
+            ids = [rid for rid, r in self._reminders.items()
+                   if str(r.get("nick", "")).lower() == target]
+            for rid in ids:
+                del self._reminders[rid]
+            if ids:
+                self._save()   # _save documents "caller holds lock"
+        # Cancel the timer tasks outside the lock (event-loop thread).
+        for rid in ids:
+            task = self._tasks.pop(rid, None)
+            if task is not None and not task.done():
+                task.cancel()
+        return len(ids)
+
     # ---------- persistence ----------
 
     def _load(self) -> None:

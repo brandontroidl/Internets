@@ -206,6 +206,27 @@ class TellModule(BotModule):
         except Exception as e:
             log.debug(f"tell: sync save fallback failed: {e}")
 
+    def forget(self, nick: str) -> int:
+        """Erase every tell involving ``nick`` — both messages queued FOR
+        them and messages they SENT to others (privacy right-to-erasure)."""
+        target = nick.lower()
+        removed = 0
+        with self._lock:
+            # Messages queued for this nick as the recipient.
+            removed += len(self._tells.pop(target, []))
+            # Messages this nick sent to anyone else.
+            for key in list(self._tells):
+                kept = [e for e in self._tells[key]
+                        if str(e.get("from", "")).lower() != target]
+                removed += len(self._tells[key]) - len(kept)
+                if kept:
+                    self._tells[key] = kept
+                else:
+                    del self._tells[key]
+        if removed:
+            self._save_sync()
+        return removed
+
     # ---- commands --------------------------------------------------------
 
     async def cmd_tell(self, nick: str, reply_to: str, arg: str | None) -> None:

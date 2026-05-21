@@ -47,7 +47,9 @@ def _strip_tags(s: str) -> str:
 def _lookup_sync(ua: str) -> str:
     """Fetch a random FML quote — blocking, run via asyncio.to_thread."""
     try:
-        r = requests.get(
+        # `with` releases the socket on every exit path — a stream=True
+        # response left unclosed leaks the connection / FD.
+        with requests.get(
             "https://www.fmylife.com/random",
             headers={
                 "User-Agent": ua,
@@ -55,10 +57,10 @@ def _lookup_sync(ua: str) -> str:
             },
             timeout=15,
             stream=True,
-        )
-        r.raise_for_status()
-        # Cap the page at 512 KB — FML's /random is normally ~200 KB.
-        body = r.raw.read(512 * 1024 + 1, decode_content=True)
+        ) as r:
+            r.raise_for_status()
+            # Cap the page at 512 KB — FML's /random is normally ~200 KB.
+            body = r.raw.read(512 * 1024 + 1, decode_content=True)
         if len(body) > 512 * 1024:
             return "fmylife.com response too large"
         text = body.decode("utf-8", errors="replace")

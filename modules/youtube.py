@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import requests
 from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.youtube")

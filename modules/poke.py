@@ -31,13 +31,15 @@ def _strip_ctrl(s: str, max_len: int = 400) -> str:
 
 def _fetch_sync(name: str, ua: str) -> str:
     try:
-        r = requests.get(f"{_URL}/{name.lower()}",
-                         headers={"User-Agent": ua},
-                         timeout=10, stream=True)
-        if r.status_code == 404:
-            return f"no Pokémon called '{_strip_ctrl(name, 32)}'"
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+        # `with` releases the socket on every exit path (404, raise,
+        # success) — a stream=True response left open leaks the FD.
+        with requests.get(f"{_URL}/{name.lower()}",
+                          headers={"User-Agent": ua},
+                          timeout=10, stream=True) as r:
+            if r.status_code == 404:
+                return f"no Pokémon called '{_strip_ctrl(name, 32)}'"
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
         if len(body) > _MAX_BODY_BYTES:
             return "PokéAPI response too large"
         d = json.loads(body.decode("utf-8", errors="replace"))

@@ -5,7 +5,6 @@ import logging
 import time
 from typing import Any
 
-import requests
 
 from .base import BotModule, fetch_json
 

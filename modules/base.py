@@ -55,15 +55,19 @@ def fetch_json(
     hdrs = {"User-Agent": ua}
     if headers:
         hdrs.update(headers)
-    r = requests.get(url, params=params, headers=hdrs, timeout=timeout, stream=True)
-    if allow_404 and r.status_code == 404:
-        return None
-    r.raise_for_status()
-    body = r.raw.read(max_bytes + 1, decode_content=True)
-    if len(body) > max_bytes:
-        raise ResponseTooLarge(
-            f"response from {url} exceeded {max_bytes} bytes")
-    return _json.loads(body.decode("utf-8", errors="replace"))
+    # `with` guarantees the socket is released on every exit path (404
+    # short-circuit, raise_for_status, ResponseTooLarge, success) — a
+    # stream=True response left unclosed leaks the connection / FD.
+    with requests.get(url, params=params, headers=hdrs,
+                      timeout=timeout, stream=True) as r:
+        if allow_404 and r.status_code == 404:
+            return None
+        r.raise_for_status()
+        body = r.raw.read(max_bytes + 1, decode_content=True)
+        if len(body) > max_bytes:
+            raise ResponseTooLarge(
+                f"response from {url} exceeded {max_bytes} bytes")
+        return _json.loads(body.decode("utf-8", errors="replace"))
 
 
 _PLACEHOLDER_MARKERS = (
@@ -128,6 +132,30 @@ class BotModule:
 
     COMMANDS: dict[str, str] = {}
 
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Validate the COMMANDS → handler contract at class-definition time.
+
+        ``COMMANDS`` maps command words to *method-name strings*; nothing
+        in the type system ties those strings to real coroutine methods.
+        Checking here turns a typo (or a sync handler) into an ImportError
+        at startup instead of an ``AttributeError`` / ``TypeError`` the
+        first time a user runs the command in production.
+        """
+        super().__init_subclass__(**kwargs)
+        # inspect.iscoroutinefunction (not asyncio.*) — the asyncio alias
+        # is deprecated for removal in Python 3.16.
+        import inspect  # noqa: PLC0415 — local keeps base.py import-light
+        for word, method_name in cls.COMMANDS.items():
+            handler = getattr(cls, method_name, None)
+            if handler is None:
+                raise TypeError(
+                    f"{cls.__name__}.COMMANDS maps {word!r} → {method_name!r}, "
+                    f"but {cls.__name__} defines no such method")
+            if not inspect.iscoroutinefunction(handler):
+                raise TypeError(
+                    f"{cls.__name__}.{method_name} (command {word!r}) must be "
+                    f"`async def` — every command handler is a coroutine")
+
     def __init__(self, bot: IRCBot) -> None:
         self.bot = bot
 
@@ -159,3 +187,15 @@ class BotModule:
     def on_raw(self, line: str) -> None:
         """Called for every incoming IRC line.  Must be fast and sync."""
         pass
+
+    def forget(self, nick: str) -> int:
+        """Erase every record this module holds about ``nick``.
+
+        Called by the ``.forgetme`` privacy command for each loaded
+        module, so right-to-erasure covers the whole bot.  Modules that
+        persist user PII (seen, tell, notes, remind, …) MUST override
+        this — mutate their store, persist it, and return the number of
+        records removed.  The default no-op returns 0 for modules that
+        hold nothing personal.
+        """
+        return 0

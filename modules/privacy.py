@@ -173,6 +173,25 @@ class PrivacyModule(BotModule):
                 f"(scheduled for removal on next prune cycle)"
             )
 
+        # Right-to-erasure must cover EVERY module that persists user PII,
+        # not just location + user-tracking.  Call the BotModule.forget()
+        # hook on each loaded module — seen / tell / notes / remind
+        # override it; the rest no-op.  One module raising must not abort
+        # erasure of the others.
+        try:
+            with self.bot._mod_lock:  # type: ignore[attr-defined]
+                mods = list(self.bot._modules.values())  # type: ignore[attr-defined]
+        except AttributeError:
+            mods = []
+        for mod in mods:
+            try:
+                count = mod.forget(nick)
+            except Exception as e:  # noqa: BLE001 — one module must not abort the rest
+                log.warning(f"forgetme: {type(mod).__name__}.forget failed: {e!r}")
+                continue
+            if count:
+                deleted.append(f"{count} record(s) in {type(mod).__name__}")
+
         if not deleted:
             self.bot.privmsg(
                 nick,

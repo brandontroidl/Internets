@@ -30,7 +30,8 @@ def kph_from_ms(mps: Optional[float]) -> str:
 
 def kph(k: Optional[float]) -> str:
     """Format km/h as 'km/h / mph' string."""
-    return f"{k:.1f}km/h / {k / 1.609:.1f}mph" if k is not None else "N/A"
+    # 1 mile = 1.609344 km exactly (matches the divisor used in km_mi).
+    return f"{k:.1f}km/h / {k / 1.609344:.1f}mph" if k is not None else "N/A"
 
 
 def km_mi(m: Optional[float]) -> str:

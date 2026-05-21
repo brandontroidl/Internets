@@ -160,6 +160,7 @@ class IRCBot(AdminCommandsMixin):
     _READ_LIMIT          = 8192   # asyncio.open_connection buffer cap (bytes)
     _READ_TIMEOUT        = 300    # seconds — read inactivity → reconnect
     _PING_INTERVAL       = 90     # seconds between client-side PINGs
+    _PONG_TIMEOUT        = 240    # seconds without a PONG → link is dead
     _PONG_MAX_PAYLOAD    = 400    # bytes — guard against oversized PONGs
     _NICKSERV_WAIT_TICKS = 40     # 40 * _NICKSERV_TICK = 10 s total
     _NICKSERV_TICK       = 0.25   # seconds between identify polls
@@ -221,11 +222,13 @@ class IRCBot(AdminCommandsMixin):
         self._modules: dict[str, Any]  = {}
         self._commands: dict[str, tuple[str, str]] = {}
         self._mod_lock       = threading.Lock()
-        self._auth_lock      = threading.Lock()
+        self._auth_lock      = threading.Lock()   # guards _authed AND _nick_hosts
+        self._chanops_lock   = threading.Lock()   # guards _chanops
         self._authed: dict[str, str] = {}
         self._auth_fails: dict[str, tuple[int, float]] = {}
         self._nick: str    = NICKNAME
         self._chanops: dict[str, set[str]] = {}
+        self._last_pong: float = 0.0   # monotonic ts of last inbound PONG
         self._ns_identified = False
         self._sasl_in_progress = False
         self._cap_busy = False
@@ -344,7 +347,11 @@ class IRCBot(AdminCommandsMixin):
             return True
 
     def is_chanop(self, channel: str, nick: str) -> bool:
-        return nick.lower() in self._chanops.get(channel.lower(), set())
+        # Called from to_thread workers; _chanops is mutated on the event
+        # loop thread — the lock prevents a torn read / "dict changed
+        # size during iteration" against a concurrent membership update.
+        with self._chanops_lock:
+            return nick.lower() in self._chanops.get(channel.lower(), set())
 
     def flood_limited(self, nick: str) -> bool:
         return self._rate.flood_check(nick, self.is_admin(nick))
@@ -699,7 +706,11 @@ class IRCBot(AdminCommandsMixin):
             SERVER, PORT, ssl=ssl_ctx, limit=8192)
         self._nick = NICKNAME
         self._cap_busy = self._sasl_in_progress = self._ns_identified = False
-        self._caps = set(); self._chanops = {}
+        self._caps = set()
+        # Reset the keepalive liveness clock for the fresh connection.
+        self._last_pong = time.monotonic()
+        with self._chanops_lock:
+            self._chanops = {}
         if self._sender: await self._sender.stop()
         self._sender = Sender(self._loop)
         self._sender.start(self._writer)
@@ -711,6 +722,20 @@ class IRCBot(AdminCommandsMixin):
     async def _keepalive(self) -> None:
         while True:
             await asyncio.sleep(self._PING_INTERVAL)
+            # Dead-link detection: if the server hasn't answered any of our
+            # recent PINGs the TCP connection is half-open — close the
+            # transport to force a reconnect now instead of waiting out the
+            # full _READ_TIMEOUT.
+            silent = time.monotonic() - self._last_pong
+            if silent > self._PONG_TIMEOUT:
+                _LOG_CONN.warning(
+                    "event=pong_timeout silent=%.0fs — forcing reconnect", silent)
+                if self._writer is not None:
+                    try:
+                        self._writer.close()
+                    except Exception:  # noqa: BLE001
+                        pass  # nosec B110: best-effort — reconnect proceeds regardless
+                return  # end keepalive; the read loop sees the closed transport
             self.send(f"PING :{SERVER}", priority=0)
 
     _INVITE_COOLDOWN = 5.0
@@ -733,7 +758,8 @@ class IRCBot(AdminCommandsMixin):
 
     def _on_part(self, channel: str) -> None:
         self.active_channels.discard(channel.lower())
-        self._chanops.pop(channel.lower(), None)
+        with self._chanops_lock:
+            self._chanops.pop(channel.lower(), None)
         self._save_channels()
         log.info(f"Left {channel}")
 
@@ -763,6 +789,12 @@ class IRCBot(AdminCommandsMixin):
             # Test BUG-050 inspects the source for the literal [:400] slice —
             # keep it; _MAX_PONG_LEN documents the value for humans.
             self.send(f"PONG :{payload[:400]}", priority=0); return
+        # Inbound PONG — the server answered our keepalive PING; mark the
+        # link live.  Command is at index 0 (`PONG ...`) or 1 (`:srv PONG`).
+        _p = line.split(" ", 2)
+        if _p[0] == "PONG" or (len(_p) > 1 and _p[1] == "PONG"):
+            self._last_pong = time.monotonic()
+            return
         line = strip_tags(line)
         # Shadow-ban filter: if the line's prefix nick is shadow-banned,
         # skip the module on_raw fanout so .seen / .tell / etc. don't
@@ -881,21 +913,24 @@ class IRCBot(AdminCommandsMixin):
         m = self._RE_353.match(line)
         if m:
             chan, names_str = m.group(1).lower(), m.group(2).strip()
-            ops = self._chanops.setdefault(chan, set())
-            for entry in names_str.split():
-                nc, is_op = parse_names_entry(entry)
-                if nc and is_op: ops.add(nc.lower())
+            with self._chanops_lock:
+                ops = self._chanops.setdefault(chan, set())
+                for entry in names_str.split():
+                    nc, is_op = parse_names_entry(entry)
+                    if nc and is_op: ops.add(nc.lower())
             return True
         m = self._RE_MODE.match(line)
         if m and m.group(1).startswith(("#", "&", "+", "!")):
-            ops = self._chanops.setdefault(m.group(1).lower(), set())
             op_modes = {"o", "a", "q"} & self._prefix_modes
-            for adding, ch, param in parse_mode_changes(
+            changes = parse_mode_changes(
                 m.group(2), m.group(3).strip().split() if m.group(3).strip() else [],
                 self._prefix_modes, self._chanmode_types
-            ):
-                if ch in op_modes and param:
-                    (ops.add if adding else ops.discard)(param.lower())
+            )
+            with self._chanops_lock:
+                ops = self._chanops.setdefault(m.group(1).lower(), set())
+                for adding, ch, param in changes:
+                    if ch in op_modes and param:
+                        (ops.add if adding else ops.discard)(param.lower())
             return True
         return False
 
@@ -915,7 +950,8 @@ class IRCBot(AdminCommandsMixin):
             # Touch the user record so we keep an up-to-date last_seen even
             # if no PRIVMSG/JOIN follows.  user_rename(old, old, hostmask)
             # is the existing way to refresh metadata in-place.
-            cached_hm = self._nick_hosts.get(acct_nick.lower())
+            with self._auth_lock:
+                cached_hm = self._nick_hosts.get(acct_nick.lower())
             if cached_hm:
                 self._store.user_rename(acct_nick, acct_nick, cached_hm)
             return True
@@ -933,8 +969,9 @@ class IRCBot(AdminCommandsMixin):
             if nick.lower() == self._nick.lower(): self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
-                ops = self._chanops.get(chan.lower())
-                if ops: ops.discard(nick.lower())
+                with self._chanops_lock:
+                    ops = self._chanops.get(chan.lower())
+                    if ops: ops.discard(nick.lower())
             return True
         m = self._RE_KICK.match(line)
         if m:
@@ -942,26 +979,43 @@ class IRCBot(AdminCommandsMixin):
             if nick.lower() == self._nick.lower(): self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
-                ops = self._chanops.get(chan.lower())
-                if ops: ops.discard(nick.lower())
+                with self._chanops_lock:
+                    ops = self._chanops.get(chan.lower())
+                    if ops: ops.discard(nick.lower())
             return True
         m = self._RE_QUIT.match(line)
         if m:
             nl = m.group(1).lower(); self._store.user_quit(m.group(1))
-            for ops in self._chanops.values(): ops.discard(nl)
+            with self._chanops_lock:
+                for ops in self._chanops.values(): ops.discard(nl)
+            # User left the network: drop the cached hostmask (bounds
+            # _nick_hosts growth) and revoke any admin session bound to
+            # that nick — a later reconnector reusing the nick must
+            # re-authenticate.
+            with self._auth_lock:
+                self._nick_hosts.pop(nl, None)
+                if self._authed.pop(nl, None) is not None:
+                    log.warning("Auth revoked: %s quit — re-auth required", m.group(1))
             return True
         m = self._RE_NICK.match(line)
         if m:
             old, hm, new = m.group(1), m.group(2), m.group(3)
             if old.lower() == self._nick.lower(): self._nick = new
             self._store.user_rename(old, new, hm)
-            self._nick_hosts.pop(old.lower(), None); self._nick_hosts[new.lower()] = hm
-            with self._auth_lock:
-                if old.lower() in self._authed:
-                    self._authed.pop(old.lower()); self._authed[new.lower()] = hm
             ol, nl = old.lower(), new.lower()
-            for ops in self._chanops.values():
-                if ol in ops: ops.discard(ol); ops.add(nl)
+            with self._auth_lock:
+                self._nick_hosts.pop(ol, None)
+                self._nick_hosts[nl] = hm
+                # Security: a NICK change is an identity change — DROP any
+                # admin session rather than migrating it.  Migrating let a
+                # malicious server (or a nick-takeover) launder an authed
+                # session onto an attacker-chosen nick.
+                if self._authed.pop(ol, None) is not None:
+                    log.warning("Auth revoked: %s changed nick to %s — re-auth required",
+                                old, new)
+            with self._chanops_lock:
+                for ops in self._chanops.values():
+                    if ol in ops: ops.discard(ol); ops.add(nl)
             return True
         return False
 
@@ -971,7 +1025,8 @@ class IRCBot(AdminCommandsMixin):
         nick, hostmask, target, text = m.groups()
         text = text.strip()
         self._stats_msg_in += 1
-        self._nick_hosts[nick.lower()] = hostmask
+        with self._auth_lock:
+            self._nick_hosts[nick.lower()] = hostmask
         if text.startswith("\x01"): return
         is_pm = target.lower() == self._nick.lower()
         reply_to = nick if is_pm else target
@@ -1142,7 +1197,7 @@ class IRCBot(AdminCommandsMixin):
                         _LOG_CONN.info("event=auth_sessions_cleared count=%d",
                                        len(self._authed))
                         self._authed.clear()
-                self._nick_hosts.clear()
+                    self._nick_hosts.clear()
                 identified = registered = False
                 if permanent:
                     _LOG_CONN.critical(
