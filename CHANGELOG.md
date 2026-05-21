@@ -64,6 +64,37 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   The CLI's `get <name>` still prints `(set, N chars, backend=...)`.
 
+### Fixed — concurrency, auth lifecycle & privacy (14-discipline audit)
+
+- **Admin-session laundering on identity change.**  A `NICK` change
+  *migrated* the authenticated session to the new nick (and `QUIT` left
+  it dangling).  A malicious server or a nick-takeover could launder an
+  admin session onto an attacker-chosen identity.  Auth is now
+  **revoked** on both `NICK` and `QUIT` — re-authentication required.
+- **Cross-thread races on `_nick_hosts` / `_chanops`.**  Both dicts were
+  mutated on the event-loop thread but read from `to_thread` workers
+  (`is_admin`, `is_chanop`) with no lock — a torn read or "dict changed
+  size during iteration" crash.  `_nick_hosts` is now guarded by
+  `_auth_lock`, `_chanops` by a new `_chanops_lock`.
+- **`_nick_hosts` grew unbounded** — every nick that ever spoke was
+  retained forever (no eviction on `QUIT`).  Now dropped on `QUIT`.
+- **No dead-connection detection.**  The bot sent keepalive `PING`s but
+  never tracked the `PONG` reply; a half-open TCP link sat idle for the
+  full 300 s read-timeout.  `_keepalive` now records inbound `PONG`s and
+  forces a reconnect after 240 s of silence.
+- **`.forgetme` was an incomplete right-to-erasure** — it wiped only the
+  saved location and channel user-tracking, leaving `.seen`, `.tell`,
+  `.notes`, and `.remind` data intact.  A `forget(nick)` hook was added
+  to `BotModule` and implemented by all four PII modules; `.forgetme`
+  now calls it on every loaded module.
+- **`BotModule.__init_subclass__`** validates the `COMMANDS` → handler
+  contract at class-definition time — a typo'd method name or a
+  non-coroutine handler is now an ImportError at startup, not an
+  `AttributeError` the first time a user runs the command.
+- **`modules/calc.py`** — `**` capped only the exponent, so a huge base
+  (`(10**300)**9999`) could still build a 100k-digit integer.  The
+  estimated result bit-length is now bounded too.
+
 ### Fixed
 
 - **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
