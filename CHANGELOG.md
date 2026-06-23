@@ -6,6 +6,57 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added: STEM, developer, network, and reference command modules
+
+New command modules (each follows the standard BotModule contract; `.help`
+groups them by category and `.modules` lists them). README User Commands is
+regrouped to mirror those `.help` categories.
+
+- **Science and math:** `mathx` (`.isprime` `.factor` `.gcd` `.base` `.stats`
+  `.roman` `.pct` `.bignum` `.const`), `physcalc` (`.ly` `.sr` `.escape`
+  `.ohm` `.rc` `.baud`), `scinews` (`.sci` STEM-feed aggregator plus a
+  keyless article reader).
+- **Developer and encoding:** `netcalc` (`.cidr` `.subnet` `.port`), `encode`
+  (`.unicode` `.hash` `.crc` `.b32` `.slug` `.ulid` `.ascii` `.ds` `.defang`
+  `.entropy` `.pw` `.lorem`), `devtools` (`.jwt` `.semver` `.uuid5` `.tz`
+  `.unix` `.color` `.cron`), `pkginfo` (`.pypi` `.npm` `.crates`), `ghinfo`
+  (`.gh`).
+- **Network and security:** `dnsutils` (`.dns` `.rdns` `.caa` `.whois`
+  `.asn`), `secinfo` (`.cve` `.pwn` `.hashid` `.cvss` `.cipher`), `probe`
+  (`.headers` `.ssl` `.tcp` `.down`, all SSRF-guarded).
+- **Reference:** `reflookup` (`.wiki` `.doi` `.isbn` `.so` `.rfc` `.arxiv`
+  `.element`).
+- **Space:** `astro2` (`.solar` `.neo` `.launches` `.moon` `.sky`), `satpass`
+  (`.passes`, needs `n2yo_api_key`).
+
+### Security
+
+- **SSRF DNS-rebinding TOCTOU closed** in `probe` (`.headers`/`.down`),
+  `scinews` (article reader), and `urls` (`.expand`/`.shorten`). New shared
+  `modules/_netsafe.py` validates every DNS answer and pins the connection to
+  the validated IP via thread-local DNS pinning. The previous IP-literal
+  pinned adapter failed TLS SNI under urllib3 2.7 (so `urls` `.expand`
+  silently broke on https); DNS pinning keeps the hostname for SNI/Host/cert.
+  Single SSRF source of truth now, covered by `tests/test_netsafe.py`.
+
+### Fixed
+
+- **`.cron` event-loop DoS:** field bounds are validated before the integer
+  range is built, so a huge range (e.g. `0-999999999`) is rejected at once
+  instead of freezing the loop or risking OOM.
+- **Command handlers now time out** (`asyncio.wait_for`), so a wedged handler
+  cannot permanently hold a task slot and eventually block every command,
+  including admin ones.
+- **`.cc` (calc)** strips IRC control codes from the echoed expression and
+  honors the rate-limit gate.
+- **Weather HTTP** caps the aiohttp response body incrementally (it was
+  buffered before the size check) and bounds error-snippet reads on both
+  transports.
+- **`.b32`** no longer re-encodes valid-but-binary base32 (dead-branch fix);
+  a forced weather provider on an open circuit now warns instead of failing
+  silently; `scinews` evicts stale last-list entries; dropped sends increment
+  the drop metric; shadow-ban saves run off the event loop.
+
 ### Added — two air-quality providers (AirNow, PurpleAir)
 
 - **`weather_providers/airnow/`** — US EPA official Air Quality Index via

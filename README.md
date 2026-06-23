@@ -310,50 +310,194 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 
 ### User Commands
 
+`.help` lists these grouped by the categories below (it shows only modules whose `is_configured()` passes, so users see commands they can actually run). `.modules` lists every loaded module plus unloaded ones available on disk. Grouping here mirrors the in-bot `.help` categories.
+
+**Meta**
+
 | Command | Description |
 |---------|-------------|
-| `.help` | Show available commands (admin commands visible only when authed) |
-| `.modules` | List loaded modules (with command counts) and unloaded ones available on disk |
-| `.weather` / `.w [-flag] [location]` | Current conditions — worldwide (multi-provider) |
-| `.forecast` / `.f [-flag] [location]` | Multi-day forecast — worldwide (multi-provider) |
-| `.hourly` / `.h [location]` | Hourly forecast — next 12 hours |
-| `.alerts` / `.al [location]` | Active weather alerts and warnings |
-| `.aqi` / `.air [location]` | Air quality index and pollutants |
-| `.astro` / `.sun [location]` | Sunrise, sunset, moon phase |
-| `.history` / `.hist [YYYY-MM-DD] [location]` | Weather on a past date |
-| `.marine` / `.sea [location]` | Ocean conditions — waves, swell, water temp |
-| `.nowcast` / `.nc [location]` | Precipitation nowcast — next 1-2 hours |
+| `.help` | List commands by category (admin commands shown only when authed) |
+| `.modules` | Loaded modules (with command counts) and unloaded ones on disk |
+
+**Weather and space**
+
+| Command | Description |
+|---------|-------------|
+| `.weather` / `.w [-flag] [loc]` | Current conditions, worldwide multi-provider |
+| `.forecast` / `.f [-flag] [loc]` | Multi-day forecast |
+| `.hourly` / `.h [loc]` | Next 12 hours |
+| `.nowcast` / `.nc [loc]` | Precipitation nowcast, next 1-2 hours |
+| `.aqi` / `.air [loc]` | Air quality index and pollutants |
+| `.uv` / `.uvi [loc]` | UV index |
+| `.pollen` / `.allergy [loc]` | Pollen and allergy index |
+| `.astro` / `.sun [loc]` | Sunrise, sunset, moon phase |
+| `.alerts` / `.al [loc]` | Active weather alerts |
+| `.wildfire` / `.fire [loc]` | Wildfire activity |
+| `.space` / `.aurora [loc]` | Space weather and aurora |
+| `.marine` / `.sea [loc]` | Ocean waves, swell, water temp |
+| `.tides` / `.tide [loc]` | Tide predictions |
+| `.history` / `.hist [YYYY-MM-DD] [loc]` | Weather on a past date |
 | `.providers` | Provider health and capability status (admin only) |
+| `.iss` | ISS location and current crew |
+| `.spacex` | Next scheduled SpaceX launch |
+| `.apod` | NASA Astronomy Picture of the Day |
+| `.solar` | NOAA space weather: X-ray flare class and SSN |
+| `.neo` | NASA near-earth objects today and closest |
+| `.launches [n]` | Next 1-3 rocket launches |
+| `.moon [YYYY-MM-DD]` | Moon phase, illumination, age |
+| `.sky <M#\|name>` | Messier catalog lookup |
+| `.passes <sat> <lat,lon>` | Next visible satellite pass (needs n2yo key) |
+
+**Science and math**
+
+| Command | Description |
+|---------|-------------|
+| `.sci [topic]` | STEM headlines (physics/cs/math/bio/astro/space) |
+| `.sci read <N>` | Read item N from the last list (lead and link) |
+| `.sci sources` | List feed topics |
+| `.isprime <n>` | Primality test and next prime |
+| `.factor <n>` | Prime factorization |
+| `.gcd <a> <b> [..]` | GCD and LCM |
+| `.base <n> <from> <to>` | Convert between bases 2..36 |
+| `.stats <n1 n2 ...>` | Mean/median/stdev/min/max/sum |
+| `.roman <n\|numeral>` | Arabic to/from Roman (1..3999) |
+| `.pct <expr>` | Percentages: `20% of 150`, `50 to 75`, `30 of 120` |
+| `.bignum <expr>` | Exact `n!` / `fib(n)` / `2^n` |
+| `.const <name>` | Physical constant value and unit |
+| `.ly <distance>` | Light time to/from distance (ly/au/km/min) |
+| `.sr <v>` | Special-relativity gamma for v as fraction of c |
+| `.escape <body\|m r>` | Escape velocity and surface gravity |
+| `.ohm <two of V,I,R,P>` | Ohm-law and power solver |
+| `.rc <bands\|ohms>` | Resistor color code to/from value |
+| `.baud <bytes> <bps>` | Serial transfer time (`-fmt 8N1`) |
+| `.numberfact` / `.nf [n] [type]` | Number trivia (trivia/math/date/year) |
+
+**Developer, encoding, network, security**
+
+| Command | Description |
+|---------|-------------|
+| `.cc <expression>` | Calculator (math functions, implicit multiplication) |
+| `.cidr <ip/prefix>` | Network/broadcast/mask/hosts/range |
+| `.subnet <ip/prefix> <newlen>` | Split a block into subnets |
+| `.port <number\|name>` | Port number to/from service name |
+| `.b64` / `.unb64 <text>` | Base64 encode / decode |
+| `.hex <text>` | Hex encode/decode (auto) |
+| `.b32 <text>` | Base32 encode/decode (auto) |
+| `.morse <text>` | Morse encode/decode (auto) |
+| `.hash <algo> <text>` | md5/sha1/sha256/sha512/blake2b digest |
+| `.crc <text>` | CRC32 and Adler-32 |
+| `.unicode <char\|U+hex\|name>` | Codepoint / name / UTF-8 / block |
+| `.ascii [dec\|hex\|char]` | ASCII dec/hex/oct/char/name |
+| `.slug <text>` | Slugify text |
+| `.uuid` / `.ulid` | Random UUID4 / ULID |
+| `.uuid5 <ns> <name>` | Deterministic UUIDv5 |
+| `.ds <value> <unit>` | Data-size convert (decimal and binary) |
+| `.defang <url>` | Defang/refang URL/IP/email (auto) |
+| `.entropy <password>` | Estimate password entropy |
+| `.pw [len] [-s]` | Random password / passphrase |
+| `.lorem [words]` | Lorem ipsum text |
+| `.epoch [arg]` | Epoch to/from ISO 8601 UTC |
+| `.jwt <token>` | Decode JWT header and payload (no sig check) |
+| `.semver <a> <b>` | Compare two semantic versions |
+| `.tz <time> <from> <to>` | Convert a clock time between zones |
+| `.unix <signal\|errno>` | Look up a Unix signal or errno |
+| `.color <value>` | hex/rgb/hsl convert and nearest CSS name |
+| `.cron <expr>` | Validate/explain cron and next fire times |
+| `.http <code>` | HTTP status code lookup |
+| `.qr <text>` | QR-code image URL |
+| `.pypi` / `.npm` / `.crates <name>` | Package registry lookup |
+| `.gh <owner/repo>` | GitHub repo info |
+| `.dns <host> [type]` | DNS lookup (A/AAAA/MX/TXT/NS/CNAME) |
+| `.rdns <ip>` | Reverse PTR lookup |
+| `.caa <domain>` | CAA records (and SPF/DMARC) |
+| `.whois <domain>` | RDAP domain registration info |
+| `.asn <ip\|ASn>` | RDAP network / AS info |
+| `.headers <url>` | HTTP status/server/type/redirect/security headers |
+| `.ssl <host[:port]>` | TLS cert issuer/CN/days-to-expiry |
+| `.tcp <host> <port>` | TCP connect probe and latency |
+| `.down <host\|url>` | Reachability check (up/down) |
+| `.cve <CVE-ID>` | NVD CVSS score, summary, date |
+| `.pwn <password>` | HIBP breach count (PM-only) |
+| `.hashid <hash>` | Identify likely hash type |
+| `.cvss <vector>` | Compute CVSS v3.1 base score |
+| `.cipher <name>` | Cipher reference (size/status) |
+| `.ipinfo <ip/host>` | IP/hostname geolocation |
+
+**Reference and language**
+
+| Command | Description |
+|---------|-------------|
+| `.dict <word> [/N]` / `.dictionary` | English dictionary definition |
+| `.u <word> [/N]` / `.urbandictionary` | Urban Dictionary lookup |
+| `.wiki <query>` | Wikipedia summary and link |
+| `.doi <doi>` | Crossref work metadata |
+| `.isbn <isbn>` | Open Library book lookup |
+| `.so <query>` | Top Stack Overflow question |
+| `.rfc <number>` | RFC title/status/date |
+| `.arxiv <id\|query>` | arXiv paper lookup |
+| `.element <name\|symbol\|Z>` | Periodic-table entry (offline) |
+| `.t [src] <tgt> <text>` / `.translate` | Translate text |
+| `.sw` / `.g <query>` | Web search (DuckDuckGo) |
+| `.si` / `.gi <query>` | Image search (Brave API key required) |
 | `.regloc <location>` | Save your default location |
 | `.myloc` | Show your saved location |
 | `.delloc` | Delete your saved location |
-| `.cc <expression>` | Calculator (supports math functions, implicit multiplication) |
-| `.d [X]dN[+/-M]` | Dice roller |
-| `.t [src] <tgt> <text>` | Translate text |
-| `.u <word> [/N]` | Urban Dictionary lookup |
-| `.stock <symbol>` / `.s <symbol>` | Stock quote (price, change, open/high/low, volume) |
+
+**Media and finance**
+
+| Command | Description |
+|---------|-------------|
+| `.imdb <title>` | Movie/TV lookup (rating, genre, cast, plot) |
+| `.lastfm <user>` | Last.fm profile and now-playing |
+| `.yt` / `.youtube <search>` | YouTube video search |
+| `.xkcd [num]` | xkcd comic (random or specific) |
+| `.mtg <card>` | Magic: the Gathering card (Scryfall) |
+| `.poke <name\|id>` | Pokemon info (PokeAPI) |
+| `.dnd <name>` | D&D 5e SRD spell or monster |
+| `.recipe` / `.meal <name>` | Recipe lookup (TheMealDB) |
+| `.cocktail <name>` | Cocktail recipe (TheCocktailDB) |
+| `.steam [user/-g/-n nick]` / `.regsteam <id>` | Steam status / register ID |
+| `.tw [-s\|-c\|-g]` / `.twitch` | Twitch streams / channel / game |
+| `.irpg <player>` / `.idlerpg` | IdleRPG player lookup |
+| `.hn [rank]` | Top Hacker News story (1-30) |
+| `.reddit` / `.r <sub> [period]` | Top post from a subreddit |
+| `.stock` / `.s <symbol>` | Stock quote |
 | `.crypto <symbol>` | Cryptocurrency price in USD |
-| `.imdb <title>` | Movie/TV lookup (rating, genre, director, actors, plot) |
-| `.lastfm <user>` | Last.fm profile with play count and now-playing track |
-| `.yt <search>` / `.youtube <search>` | YouTube video search with stats |
-| `.dict <word> [/N]` / `.dictionary` | English dictionary definition |
-| `.ipinfo <ip/host>` | IP/hostname geolocation lookup |
+| `.fx <from> <to> [amount]` | FX conversion (frankfurter.dev / ECB) |
+
+**Fun**
+
+| Command | Description |
+|---------|-------------|
+| `.d [X]dN[+/-M]` | Dice roller |
+| `.coin` / `.8ball` / `.rps` / `.choose` | Coin flip, magic 8-ball, RPS, pick one |
+| `.bofh` / `.excuse` | Random BOFH excuse |
+| `.fml` | Random FMyLife quote |
+| `.qdb [id]` | Random or specific QDB quote |
+| `.advice` | Random piece of advice |
+| `.bored` | Random activity suggestion |
+| `.fact` | Random useless fact |
+| `.catfact` / `.cat` | Random cat fact |
+| `.chuck` | Random Chuck Norris joke |
+| `.dadjoke` / `.joke` | Random dad joke |
+| `.cowsay <text>` | ASCII cow speaks your text |
+
+**Personal and social**
+
+| Command | Description |
+|---------|-------------|
+| `.remind <when> <msg>` | Schedule a reminder (`30s`, `5m`, `1h30m`, `14:30 UTC`, ISO) |
+| `.remind-list` / `.remind-cancel <N>` | List or cancel your reminders |
+| `.tell <nick> <msg>` | Leave a message for a nick |
+| `.tell-list` / `.tell-cancel` | List or cancel your pending tells |
+| `.notes <list\|add\|del\|show\|clear>` | Personal sticky notes |
+| `.seen <nick>` | When a nick was last seen |
 | `.shorten <url>` | Shorten a URL via is.gd |
 | `.expand <url>` / `.unshorten <url>` | Expand a shortened URL |
-| `.steam [user/-g/-n nick]` | Steam user status and game info |
-| `.regsteam <id/vanity>` | Register your Steam ID |
-| `.tw [-s query]` / `.twitch` | Search Twitch streams (default: top live) |
-| `.tw -c <channel>` | Twitch channel info |
-| `.tw -g <game>` | Search Twitch games |
-| `.irpg <player>` / `.idlerpg` | IdleRPG player lookup |
-| `.qdb [id]` | Random or specific quote from configured QDB |
-| `.fml` | Random FMyLife quote |
-| `.sw <query>` / `.g <query>` | Web search (DuckDuckGo) |
-| `.si <query>` / `.gi <query>` | Image search (Brave API key required) |
-| `.bofh` / `.excuse` | Random BOFH excuse |
-| `.join <#channel>` | Invite the bot — requires channel founder or admin |
-| `.part <#channel>` | Remove the bot — requires channel founder or admin |
+| `.privacy` / `.forgetme` / `.optout` / `.optin` | See, erase, or opt out of stored data (PM-only) |
+| `.join` / `.part <#channel>` | Invite or remove the bot (channel founder or admin) |
 | `.users [#channel]` | Show known users in a channel |
+| `.uptime` | Show bot uptime |
 
 All weather commands accept city names, zip codes, raw `lat,lon` pairs, or `-n nick` to look up another user's saved location.
 
