@@ -65,6 +65,7 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "STAT News":     ("https://www.statnews.com/feed/",                   {"bio"}),
     "Space.com":     ("https://www.space.com/feeds/all",                  {"space", "astro"}),
     "NASA":          ("https://www.nasa.gov/feed/",                       {"space", "astro"}),
+    "APS Physics":   ("https://feeds.aps.org/rss/recent/physics.xml",     {"physics"}),
 }
 _TOPICS = sorted({t for _u, tags in _FEEDS.values() for t in tags})
 
