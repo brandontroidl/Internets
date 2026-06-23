@@ -151,6 +151,8 @@ class IRCBot(AdminCommandsMixin):
     """
     _MAX_BODY = 400
     _MAX_TASKS = 50
+    _CMD_TIMEOUT = 60   # seconds — a command handler that exceeds this is timed
+                        # out so it can't permanently hold one of _MAX_TASKS slots
     _MAX_ARG_LEN = 400
     _AUTH_CLEANUP_THRESHOLD = 50
     _AUTH_MAX_FAILS = 5
@@ -629,10 +631,18 @@ class IRCBot(AdminCommandsMixin):
     async def _run_cmd(self, handler: Any, nick: str, reply_to: str,
                        arg: str | None, cmd: str) -> None:
         try:
-            await handler(nick, reply_to, arg)
-        except asyncio.CancelledError:
-            # Propagate cancellation cleanly during shutdown — don't notify.
+            # Bounded so a wedged handler (deadlocked lock, never-returning
+            # await, hung thread) can't permanently hold one of _MAX_TASKS
+            # slots and eventually block every command, including admin ones.
+            await asyncio.wait_for(handler(nick, reply_to, arg),
+                                   timeout=self._CMD_TIMEOUT)
+        except asyncio.TimeoutError:
             self._metrics["command_timeouts"] += 1
+            log.warning("event=command_timeout cmd=%s nick=%s timeout=%ds",
+                        cmd, nick, self._CMD_TIMEOUT)
+            self.notice(nick, f"{nick}: '{cmd}' timed out.")
+        except asyncio.CancelledError:
+            # Shutdown cancellation — propagate cleanly; not a command timeout.
             raise
         except Exception as e:
             self._metrics["unexpected_errors"] += 1

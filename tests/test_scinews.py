@@ -129,24 +129,17 @@ def test_read_article_refuses_internal():
     assert "non-public" in out or "can't read" in out
 
 
-def test_reader_blocks_redirect_to_internal(monkeypatch):
-    # A public article that 302-redirects to the cloud-metadata IP must be
-    # refused — the guard re-checks each hop, not just the initial host.
-    import socket
+def test_reader_handles_ssrf_block(monkeypatch):
+    # The reader fetches via _netsafe.safe_open, which raises SSRFBlocked on an
+    # unsafe host or redirect hop (re-validation tested in test_netsafe). The
+    # reader must surface that cleanly, not crash.
+    from contextlib import contextmanager
 
-    def fake_getaddrinfo(host, *a, **k):
-        ip = "93.184.216.34" if host == "example.com" else "169.254.169.254"
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))]
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    @contextmanager
+    def boom(method, url, ua, **kw):
+        raise sn.SSRFBlocked("refusing non-public or unresolvable host")
+        yield  # pragma: no cover
 
-    class Redir:
-        is_redirect = True
-        status_code = 302
-        headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def raise_for_status(self): pass
-    monkeypatch.setattr(sn.requests, "get", lambda *a, **k: Redir())
-
-    out = sn._read_article("https://example.com/article", "ua")
+    monkeypatch.setattr(sn, "safe_open", boom)
+    out = sn._read_article("https://example.com/a", "ua")
     assert "can't read" in out and "non-public" in out

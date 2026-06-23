@@ -172,11 +172,16 @@ def _b32(arg: str) -> str:
     if _B32_RE.fullmatch(candidate) and len(candidate) % 8 == 0:
         try:
             raw = base64.b32decode(candidate)
-            return raw.decode("utf-8")
         except (binascii.Error, ValueError):
-            pass
-        except UnicodeDecodeError:
-            return "decoded base32 is binary or invalid utf-8"
+            raw = None
+        if raw is not None:
+            # Split the utf-8 decode out: UnicodeDecodeError subclasses
+            # ValueError, so catching it in the b32decode try would wrongly
+            # fall through to re-encoding valid-but-binary base32.
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return "decoded base32 is binary or invalid utf-8"
     encoded = base64.b32encode(s.encode("utf-8")).decode("ascii")
     return encoded
 

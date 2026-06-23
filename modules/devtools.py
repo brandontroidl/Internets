@@ -361,14 +361,16 @@ def _cron_field(spec: str, lo: int, hi: int) -> set[int]:
             end = _cron_num(b, lo, hi)
         else:
             start = end = _cron_num(rng, lo, hi)
+        # Bound start/end to the field BEFORE materializing range(): without
+        # this, '0-999999999' would build a billion-element set (event-loop
+        # freeze / OOM) before any post-loop bounds check could reject it.
+        if not (lo <= start <= hi and lo <= end <= hi):
+            raise ValueError("value out of range")
         if start > end:
             raise ValueError("range start > end")
         out.update(range(start, end + 1, step))
     if not out:
         raise ValueError("empty field")
-    for v in out:
-        if not (lo <= v <= hi):
-            raise ValueError("value out of range")
     return out
 
 

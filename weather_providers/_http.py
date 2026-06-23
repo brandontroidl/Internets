@@ -240,10 +240,12 @@ async def _get_json_aiohttp(
         ) as resp:
             status = resp.status
             if status >= 400:
-                # Best-effort body for log context; don't bubble it.
+                # Best-effort, BOUNDED body for log context (never buffer a
+                # huge error body).
                 body_snip = ""
                 try:
-                    body_snip = (await resp.text())[:200]
+                    body_snip = (await resp.content.read(2048)).decode(
+                        "utf-8", "replace")[:200]
                 except Exception:  # noqa: BLE001
                     pass  # nosec B110: best-effort cleanup
                 raise HTTPError(
@@ -252,11 +254,17 @@ async def _get_json_aiohttp(
                     provider_hint=provider_hint,
                     is_rate_limit=(status == 429),
                 )
-            # SEC-WP-001: Cap response body to prevent OOM.
-            body = await resp.read()
-            if len(body) > max_bytes:
-                raise ResponseTooLargeError(
-                    len(body), max_bytes, provider_hint=provider_hint)
+            # SEC-WP-001: stream + cap INCREMENTALLY so an oversize body can't
+            # be fully buffered into memory (OOM) before the cap fires.
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.content.iter_chunked(65536):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ResponseTooLargeError(
+                        total, max_bytes, provider_hint=provider_hint)
+                chunks.append(chunk)
+            body = b"".join(chunks)
             try:
                 return _json.loads(body)
             except ValueError as e:
@@ -304,7 +312,8 @@ def _requests_get(
     if status >= 400:
         body_snip = ""
         try:
-            body_snip = r.text[:200]
+            body_snip = r.raw.read(2048, decode_content=True).decode(
+                "utf-8", "replace")[:200]
         except Exception:  # noqa: BLE001
             pass  # nosec B110: best-effort cleanup
         try:

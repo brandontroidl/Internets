@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 import requests
 from .base import BotModule, cred, help_row, resolve_public, strip_ctrl
+from ._netsafe import SSRFBlocked, safe_open
 
 log = logging.getLogger("internets.probe")
 
@@ -105,23 +106,22 @@ def _headers(url: str, ua: str) -> str:
     if p.scheme not in ("http", "https") or not p.hostname:
         return "usage: .headers <url>"
     try:
-        resolve_public(p.hostname, p.port or (443 if p.scheme == "https" else 80))
-    except ValueError as e:
-        return f"{strip_ctrl(p.hostname, 60)}: {e}"
-    try:
-        with requests.get(u, allow_redirects=False, stream=True, timeout=_TIMEOUT,
-                          headers={"User-Agent": ua}) as r:
+        # follow_redirects=False: report the redirect rather than chase it.
+        # safe_open pins the connection to the validated IP (no DNS-rebind TOCTOU).
+        with safe_open("GET", u, ua, follow_redirects=False, timeout=_TIMEOUT) as r:
             h = r.headers
             parts = [f"HTTP {r.status_code}"]
             if h.get("Server"):
                 parts.append(f"server {strip_ctrl(h['Server'], 40)}")
             if h.get("Content-Type"):
                 parts.append(f"type {strip_ctrl(h['Content-Type'].split(';')[0], 40)}")
-            if r.is_redirect and h.get("Location"):
+            if (r.is_redirect or r.is_permanent_redirect) and h.get("Location"):
                 parts.append(f"-> {strip_ctrl(h['Location'], 80)}")
             present = [v for k, v in _SEC_HEADERS.items() if k in (n.lower() for n in h)]
             parts.append("sec: " + (",".join(present) if present else "none"))
             return strip_ctrl(" :: ".join(parts))
+    except SSRFBlocked as e:
+        return f"{strip_ctrl(p.hostname, 60)}: {e}"
     except requests.RequestException:
         return f"{strip_ctrl(p.hostname, 60)}: request failed"
 
@@ -137,13 +137,10 @@ def _down(arg: str, ua: str) -> str:
     if not host:
         return "usage: .down <host|url>"
     try:
-        resolve_public(host)
-    except ValueError as e:
-        return f"{strip_ctrl(host, 60)}: {e}"
-    try:
-        with requests.head(url, allow_redirects=False, stream=True, timeout=_TIMEOUT,
-                          headers={"User-Agent": ua}) as r:
+        with safe_open("HEAD", url, ua, follow_redirects=False, timeout=_TIMEOUT) as r:
             return f"{strip_ctrl(host, 60)} is UP (HTTP {r.status_code})"
+    except SSRFBlocked as e:
+        return f"{strip_ctrl(host, 60)}: {e}"
     except requests.RequestException:
         # HTTP failed — fall back to a bare TCP connect on 443/80.
         for port in (443, 80):
