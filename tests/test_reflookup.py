@@ -190,7 +190,10 @@ class TestRfc:
         assert "June 1999" in out
 
     def test_non_numeric(self, monkeypatch):
-        assert "usage" in reflookup._rfc_sync("abc", "UA")
+        # non-numeric arg now triggers a datatracker title search (not a usage
+        # error); with no search hits it reports no match.
+        _patch_fetch(monkeypatch, None)
+        assert "no RFC matching" in reflookup._rfc_sync("abc", "UA")
 
     def test_not_found(self, monkeypatch):
         _patch_fetch(monkeypatch, None)

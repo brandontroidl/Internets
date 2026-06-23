@@ -1,68 +1,35 @@
-"""SpaceX next-launch command — wraps the community api.spacexdata.com API.
+"""SpaceX next-launch command via Launch Library 2 (thespacedevs).
 
-No API key required.  Three calls per ``.spacex`` invocation:
-
-  1. ``GET /v5/launches/next`` — next-scheduled launch record
-  2. ``GET /v4/rockets/<rocket_id>`` — rocket display name
-  3. ``GET /v4/launchpads/<launchpad_id>`` — pad full name
+No API key required.  The old community api.spacexdata.com endpoint was
+abandoned and now returns HTTP 525 (Cloudflare-to-origin TLS failure), so
+this uses Launch Library 2 instead (the same source ``.launches`` uses).
+One request per call (rocket + pad come nested in the result), cached briefly
+because LL2's anonymous tier is rate-limited.
 
 Output (single IRC line)::
 
-    \\x02next SpaceX launch\\x02 — Falcon Heavy / Starlink Group 12-3
-    |  T-2d 4h 17m (2026-05-22 14:00 UTC)
-    |  pad: LC-39A, Kennedy Space Center
-    |  https://www.spacex.com/launches/
+    next SpaceX launch  |  Falcon 9 Block 5 / Starlink Group 12-3  |
+    T-2d 4h 17m (2026-05-22 14:00 UTC)  |  pad: LC-39A, Kennedy Space Center
 """
-
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
 
-import requests
-from .base import BotModule, help_row, strip_ctrl
+from .base import BotModule, ResponseTooLarge, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.spacex")
 
-_NEXT_URL = "https://api.spacexdata.com/v5/launches/next"
-_ROCKET_URL = "https://api.spacexdata.com/v4/rockets/{}"
-_PAD_URL = "https://api.spacexdata.com/v4/launchpads/{}"
-_LANDING = "https://www.spacex.com/launches/"
-_MAX_BODY_BYTES = 64 * 1024
-
-
-def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return strip_ctrl(s, max_len)
-
-
-def _get_json(url: str, ua: str) -> Any | None:
-    try:
-        with requests.get(
-            url,
-            headers={"User-Agent": ua, "Accept": "application/json"},
-            timeout=10, stream=True,
-        ) as r:
-            r.raise_for_status()
-            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-            if len(body) > _MAX_BODY_BYTES:
-                log.warning("spacex: response too large from %s", url)
-                return None
-            return json.loads(body.decode("utf-8", errors="replace"))
-    except requests.RequestException as e:
-        log.warning(f"spacex request {url}: {e}")
-        return None
-    except ValueError as e:
-        log.warning(f"spacex parse {url}: {e!r}")
-        return None
+_LL2_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
+_MAX_BODY_BYTES = 512 * 1024     # detailed launch records can be sizable
+_CACHE_TTL = 180.0               # LL2 anon tier is ~15 req/hr; cache to be gentle
+_cache: dict[str, object] = {"ts": 0.0, "val": ""}
 
 
 def _fmt_countdown(date_unix: int) -> str:
-    now = int(time.time())
-    delta = date_unix - now
+    delta = date_unix - int(time.time())
     prefix = "T-" if delta >= 0 else "T+"
     delta = abs(delta)
     days, rem = divmod(delta, 86400)
@@ -71,60 +38,69 @@ def _fmt_countdown(date_unix: int) -> str:
     return f"{prefix}{days}d {hours}h {minutes}m"
 
 
-def _fmt_utc(date_unix: int) -> str:
-    dt = datetime.fromtimestamp(date_unix, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+def _fmt_when(net: str | None) -> str:
+    if not net:
+        return "date TBD"
+    try:
+        dt = datetime.fromisoformat(str(net).replace("Z", "+00:00"))
+        unix = int(dt.timestamp())
+        utc = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return f"{_fmt_countdown(unix)} ({utc})"
+    except (ValueError, TypeError):
+        return strip_ctrl(str(net), 32)
 
 
 def _fetch_sync(ua: str) -> str:
-    nxt = _get_json(_NEXT_URL, ua)
-    if not isinstance(nxt, dict):
-        return "SpaceX API unavailable"
+    now = time.time()
+    if _cache["val"] and now - float(_cache["ts"]) < _CACHE_TTL:  # type: ignore[arg-type]
+        return str(_cache["val"])
+    try:
+        d = fetch_json(
+            _LL2_URL,
+            params={"search": "SpaceX", "limit": "1"},
+            ua=ua, timeout=12, max_bytes=_MAX_BODY_BYTES,
+        )
+    except (ResponseTooLarge, ValueError, TypeError) as e:
+        log.warning(f"spacex LL2: {e}")
+        return "SpaceX launch data unavailable"
+    except Exception as e:  # requests.RequestException
+        log.warning(f"spacex LL2: {e}")
+        return "SpaceX launch data unavailable"
 
-    name = nxt.get("name") or "unknown mission"
-    date_unix = nxt.get("date_unix")
-    rocket_id = nxt.get("rocket")
-    pad_id = nxt.get("launchpad")
-    details = nxt.get("details") or ""
+    results = d.get("results") if isinstance(d, dict) else None
+    if not results or not isinstance(results, list) or not isinstance(results[0], dict):
+        return "no upcoming SpaceX launch found"
+    r = results[0]
 
-    if not isinstance(date_unix, int):
-        try:
-            date_unix = int(date_unix) if date_unix is not None else 0
-        except (TypeError, ValueError):
-            date_unix = 0
+    # LL2 names are "Rocket | Mission"; keep the mission half so we don't repeat
+    # the rocket configuration we already show.
+    raw_name = str(r.get("name") or "unknown mission")
+    name = strip_ctrl(raw_name.split(" | ", 1)[-1], 120)
+    cfg = (r.get("rocket") or {}).get("configuration") or {}
+    rocket = strip_ctrl(str(cfg.get("full_name") or cfg.get("name") or ""), 60)
+    pad = r.get("pad") or {}
+    pad_bits = [str(pad.get("name") or ""),
+                str((pad.get("location") or {}).get("name") or "")]
+    pad_full = strip_ctrl(", ".join(x for x in pad_bits if x), 100)
+    status = strip_ctrl(str((r.get("status") or {}).get("abbrev") or ""), 24)
+    when = _fmt_when(r.get("net"))
 
-    rocket_name = "unknown rocket"
-    if isinstance(rocket_id, str) and rocket_id:
-        rd = _get_json(_ROCKET_URL.format(rocket_id), ua)
-        if isinstance(rd, dict) and rd.get("name"):
-            rocket_name = str(rd["name"])
-
-    pad_name = "unknown pad"
-    if isinstance(pad_id, str) and pad_id:
-        pd = _get_json(_PAD_URL.format(pad_id), ua)
-        if isinstance(pd, dict) and pd.get("full_name"):
-            pad_name = str(pd["full_name"])
-
-    if date_unix:
-        when = f"{_fmt_countdown(date_unix)} ({_fmt_utc(date_unix)})"
-    else:
-        when = "date TBD"
-
-    line = (
-        f"\x02next SpaceX launch\x02 — {rocket_name} / {name}  |  "
-        f"{when}  |  pad: {pad_name}  |  {_LANDING}"
-    )
-
-    if isinstance(details, str):
-        details = details.strip()
-        if details and len(details) < 80:
-            line += f" | {details}"
-
-    return _strip_ctrl(line)
+    bits = ["\x02next SpaceX launch\x02"]
+    head = " / ".join(x for x in (rocket, name) if x)
+    if head:
+        bits.append(head)
+    bits.append(when)
+    if pad_full:
+        bits.append(f"pad: {pad_full}")
+    if status:
+        bits.append(status)
+    out = strip_ctrl("  |  ".join(bits), 400)
+    _cache["ts"], _cache["val"] = now, out
+    return out
 
 
 class SpacexModule(BotModule):
-    """`.spacex` — next scheduled SpaceX launch."""
+    """`.spacex` — next scheduled SpaceX launch (Launch Library 2)."""
 
     COMMANDS: dict[str, str] = {"spacex": "cmd_spacex"}
 
