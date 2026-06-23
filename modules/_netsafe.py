@@ -113,6 +113,23 @@ def resolve_safe_ip(host: str) -> str | None:
     return picked
 
 
+def url_is_safe(url: str) -> bool:
+    """Scheme (http/https) + host validation for one URL — a pre-flight check
+    for handing a user-supplied URL to a third party (e.g. a shortener)."""
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return False
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    host = p.hostname
+    if "%" in host:
+        host = host.split("%", 1)[0]
+    if host.lower() in METADATA_HOSTS:
+        return False
+    return resolve_safe_ip(host) is not None
+
+
 @contextmanager
 def safe_open(method: str, url: str, ua: str, *, follow_redirects: bool = True,
               timeout: int = DEFAULT_TIMEOUT, max_redirects: int = DEFAULT_MAX_REDIRECTS):
