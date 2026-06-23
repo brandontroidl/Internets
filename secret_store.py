@@ -72,7 +72,7 @@ KNOWN_SECRETS: tuple[str, ...] = (
     "weatherkit_key_file",
     "airnow_key", "purpleair_key",
     "waqi_token", "openaq_key", "iqair_key", "tidecheck_key", "firms_key",
-    "google_pollen_key",
+    "google_pollen_key", "n2yo_api_key",
     # Other module keys
     "omdb_key", "lastfm_key", "youtube_key",
     "finnhub_key", "alphavantage_key", "twelvedata_key",
@@ -112,6 +112,7 @@ CONFIG_LOCATIONS: dict[str, tuple[str, str]] = {
     "tidecheck_key":          ("weather_providers", "tidecheck_key"),
     "firms_key":              ("weather_providers", "firms_key"),
     "google_pollen_key":      ("weather_providers", "google_pollen_key"),
+    "n2yo_api_key":           ("satpass", "n2yo_api_key"),
     "omdb_key":               ("imdb", "omdb_key"),
     "lastfm_key":              ("lastfm", "lastfm_key"),
     "youtube_key":             ("youtube", "youtube_key"),
