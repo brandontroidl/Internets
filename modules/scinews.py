@@ -66,6 +66,21 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "Space.com":     ("https://www.space.com/feeds/all",                  {"space", "astro"}),
     "NASA":          ("https://www.nasa.gov/feed/",                       {"space", "astro"}),
     "APS Physics":   ("https://feeds.aps.org/rss/recent/physics.xml",     {"physics"}),
+    # security: infosec news, advisories, and offensive (pentest) research
+    "TheHackerNews": ("https://feeds.feedburner.com/TheHackersNews",      {"sec"}),
+    "BleepingComp":  ("https://www.bleepingcomputer.com/feed/",           {"sec"}),
+    "Krebs":         ("https://krebsonsecurity.com/feed/",                {"sec"}),
+    "Dark Reading":  ("https://www.darkreading.com/rss.xml",              {"sec"}),
+    "SecurityWeek":  ("https://www.securityweek.com/feed/",               {"sec"}),
+    "Schneier":      ("https://www.schneier.com/feed/atom/",              {"sec"}),
+    "Reg Security":  ("https://www.theregister.com/security/headlines.atom", {"sec", "tech"}),
+    "SANS ISC":      ("https://isc.sans.edu/rssfeed.xml",                 {"sec", "pentest"}),
+    "CISA":          ("https://www.cisa.gov/cybersecurity-advisories/all.xml", {"sec"}),
+    "Exploit-DB":    ("https://www.exploit-db.com/rss.xml",               {"sec", "pentest"}),
+    "Project Zero":  ("https://googleprojectzero.blogspot.com/feeds/posts/summary?max-results=25", {"sec", "pentest"}),
+    "PortSwigger":   ("https://portswigger.net/research/rss",             {"sec", "pentest"}),
+    "The Record":    ("https://therecord.media/feed/",                    {"sec"}),
+    "Help Net Sec":  ("https://www.helpnetsecurity.com/feed/",            {"sec"}),
 }
 _TOPICS = sorted({t for _u, tags in _FEEDS.values() for t in tags})
 
@@ -340,7 +355,7 @@ class ScinewsModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            help_row(prefix, "sci [topic]", "STEM headlines (all/ai/cs/tech/physics/math/bio/astro/space); .sci sources"),
+            help_row(prefix, "sci [topic]", "Science + infosec headlines (all/ai/cs/sec/pentest/tech/physics/...); .sci sources"),
             help_row(prefix, "sci read <N>", "Read item N from the last list (lead + link)"),
             help_row(prefix, "sci sources", "List feed topics"),
         ]
