@@ -125,4 +125,28 @@ def test_sources():
 
 def test_read_article_refuses_internal():
     # SSRF guard wired into the reader.
-    assert "refusing" in sn._read_article("http://127.0.0.1/x", "ua")
+    out = sn._read_article("http://127.0.0.1/x", "ua")
+    assert "non-public" in out or "can't read" in out
+
+
+def test_reader_blocks_redirect_to_internal(monkeypatch):
+    # A public article that 302-redirects to the cloud-metadata IP must be
+    # refused — the guard re-checks each hop, not just the initial host.
+    import socket
+
+    def fake_getaddrinfo(host, *a, **k):
+        ip = "93.184.216.34" if host == "example.com" else "169.254.169.254"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+
+    class Redir:
+        is_redirect = True
+        status_code = 302
+        headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def raise_for_status(self): pass
+    monkeypatch.setattr(sn.requests, "get", lambda *a, **k: Redir())
+
+    out = sn._read_article("https://example.com/article", "ua")
+    assert "can't read" in out and "non-public" in out
