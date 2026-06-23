@@ -302,9 +302,9 @@ class TestProviderRegistration:
     def test_weatherbit_registered_as_factory(self):
         assert "weatherbit" in _PROVIDER_FACTORIES
 
-    def test_factory_count_is_30(self):
-        # Sanity guard for the doc claim "30 provider packages".
-        assert len(_PROVIDER_FACTORIES) == 30
+    def test_factory_count_is_32(self):
+        # Sanity guard for the doc claim "32 provider packages".
+        assert len(_PROVIDER_FACTORIES) == 32
 
     def test_known_provider_set(self):
         expected = {
@@ -321,6 +321,8 @@ class TestProviderRegistration:
             "sunrisesunset", "currentuvindex", "gdacs", "eccc",
             "nasapower", "nifc", "firms", "swpc",
             "tidecheck", "noaa_coops",
+            # Pollen providers (US / global).
+            "pollendotcom", "google_pollen",
         }
         assert set(_PROVIDER_FACTORIES) == expected
 

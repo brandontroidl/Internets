@@ -308,6 +308,8 @@ _NEW_PROVIDERS = [
     ("weather_providers.swpc", "SWPCProvider", None),
     ("weather_providers.tidecheck", "TideCheckProvider", "k"),
     ("weather_providers.noaa_coops", "NoaaCoopsProvider", None),
+    ("weather_providers.pollendotcom", "PollenDotComProvider", "ua"),
+    ("weather_providers.google_pollen", "GooglePollenProvider", "k"),
 ]
 
 
@@ -372,3 +374,69 @@ def test_get_methods_accept_kwargs(modpath, cls, key):
         sig = inspect.signature(getattr(inst, name))
         assert any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()), \
             f"{cls}.{name} must accept **kwargs (dispatcher forwards kwargs)"
+
+
+# ── pollen providers (Pollen.com US, Google global, Open-Meteo Europe) ─────
+
+class TestPollenProviders:
+    def test_pollendotcom_us(self, monkeypatch):
+        from weather_providers.pollendotcom import pollen
+        async def stub(url, **kw):
+            if "nominatim" in url:
+                return {"address": {"country_code": "us", "postcode": "91773"}}
+            return {"Location": {"periods": [
+                {"Type": "Today", "Index": 4.6,
+                 "Triggers": [{"Name": "Oak"}, {"Name": "Sagebrush"}]}]}}
+        _patch(monkeypatch, pollen, stub)
+        r = asyncio.run(pollen.fetch("ua", 34.1, -117.8, "San Dimas, CA"))
+        assert r.source == "Pollen.com"
+        assert r.overall_index == pytest.approx(4.6)
+        assert r.category == "Low-Med"
+        assert r.triggers == ("Oak", "Sagebrush")
+
+    def test_pollendotcom_non_us_returns_none(self, monkeypatch):
+        from weather_providers.pollendotcom import pollen
+        async def stub(url, **kw):
+            return {"address": {"country_code": "de", "postcode": "10115"}}
+        _patch(monkeypatch, pollen, stub)
+        assert asyncio.run(pollen.fetch("ua", 52.5, 13.4, "Berlin")) is None
+
+    def test_google_pollen(self, monkeypatch):
+        from weather_providers.google_pollen import pollen
+        async def stub(url, **kw):
+            return {"dailyInfo": [{"pollenTypeInfo": [
+                {"code": "TREE", "indexInfo": {"value": 3}},
+                {"code": "GRASS", "indexInfo": {"value": 1}},
+                {"code": "WEED", "indexInfo": {"value": 0}}]}]}
+        _patch(monkeypatch, pollen, stub)
+        r = asyncio.run(pollen.fetch("k", 34.1, -117.8, "x"))
+        assert r.source == "Google Pollen"
+        assert (r.tree_index, r.grass_index, r.weed_index) == (3.0, 1.0, 0.0)
+
+    def test_google_pollen_no_data_returns_none(self, monkeypatch):
+        from weather_providers.google_pollen import pollen
+        async def stub(url, **kw):
+            return {"dailyInfo": []}
+        _patch(monkeypatch, pollen, stub)
+        assert asyncio.run(pollen.fetch("k", 0.0, 0.0, "x")) is None
+
+    def test_openmeteo_empty_returns_none(self, monkeypatch):
+        from weather_providers.openmeteo import pollen
+        async def stub(url, **kw):
+            return {"current": {}}          # CAMS has no data outside Europe
+        _patch(monkeypatch, pollen, stub)
+        assert asyncio.run(pollen.fetch(34.1, -117.8, "x")) is None
+
+    def test_formatter_renders_each_model(self):
+        from modules.weather import _format_pollen
+        from weather_providers.base import PollenResult
+        com = _format_pollen(PollenResult(
+            source="Pollen.com", location="x", overall_index=4.6,
+            category="Low-Med", triggers=("Oak", "Sagebrush")))
+        assert "4.6/12" in com and "Low-Med" in com and "Oak" in com
+        goog = _format_pollen(PollenResult(
+            source="Google Pollen", location="x",
+            tree_index=3.0, grass_index=1.0, weed_index=0.0))
+        assert "Tree" in goog and "3/5" in goog
+        om = _format_pollen(PollenResult(source="Open-Meteo", location="x", grass=22.0))
+        assert "Grass 22" in om and "grains/m³" in om

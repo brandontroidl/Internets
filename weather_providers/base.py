@@ -230,15 +230,54 @@ class UVResult:
 
 @dataclass(frozen=True, slots=True)
 class PollenResult:
-    """Airborne pollen concentrations (grains/m³).  CCAMS covers Europe."""
+    """Pollen / allergy forecast.
+
+    Three provider data models are normalised here; the formatter renders
+    whichever fields a provider populated:
+
+    * Open-Meteo (CAMS, Europe): per-species concentrations in grains/m³
+      (``alder`` … ``ragweed``).
+    * Google Pollen (global): tree/grass/weed Universal Pollen Index (0-5).
+    * Pollen.com / IQVIA (US): a single overall index (0-12) + ``category``
+      and the dominant ``triggers`` (allergen names).
+    """
     source: str
     location: str
+    # Open-Meteo CAMS per-species, grains/m³
     alder: float | None        = None
     birch: float | None        = None
     grass: float | None        = None
     mugwort: float | None      = None
     olive: float | None        = None
     ragweed: float | None      = None
+    # Google Pollen — tree/grass/weed index (0-5 Universal Pollen Index)
+    tree_index: float | None   = None
+    grass_index: float | None  = None
+    weed_index: float | None   = None
+    # Pollen.com / IQVIA — overall index (0-12) + dominant allergens
+    overall_index: float | None = None
+    category: str              = ""
+    triggers: tuple[str, ...]  = ()
+
+
+def pollen_cat_12(idx: float | None) -> str:
+    """Category for the IQVIA / Pollen.com 0-12 allergy index."""
+    if idx is None:
+        return ""
+    if idx < 2.5:  return "Low"
+    if idx < 4.9:  return "Low-Med"
+    if idx < 7.3:  return "Medium"
+    if idx < 9.7:  return "Med-High"
+    return "High"
+
+
+def pollen_cat_5(idx: float | None) -> str:
+    """Category for Google's 0-5 Universal Pollen Index."""
+    if idx is None:
+        return ""
+    levels = ("None", "Very Low", "Low", "Moderate", "High", "Very High")
+    i = int(round(idx))
+    return levels[i] if 0 <= i < len(levels) else ""
 
 
 # ── Wildfire ─────────────────────────────────────────────────────────

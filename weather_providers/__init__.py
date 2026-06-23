@@ -432,6 +432,21 @@ def _f_tidecheck(cfg):
     from .tidecheck import TideCheckProvider
     return TideCheckProvider(key)
 
+def _f_pollendotcom(cfg):
+    # Keyless, but reverse-geocodes lat/lon → US ZIP via Nominatim, so it
+    # needs the configured User-Agent.
+    ua = _cred(cfg, "weather_user_agent", "weather_user_agent")
+    from .pollendotcom import PollenDotComProvider
+    return PollenDotComProvider(ua)
+
+def _f_google_pollen(cfg):
+    key = _cred(cfg, "google_pollen_key", "google_pollen_key")
+    if not key:
+        log.info("google_pollen: skipped (no google_pollen_key)")
+        return None
+    from .google_pollen import GooglePollenProvider
+    return GooglePollenProvider(key)
+
 
 _reg("nws",                 _f_nws)
 _reg("meteomatics",         _f_meteomatics)
@@ -463,6 +478,8 @@ _reg("firms",               _f_firms)
 _reg("swpc",                _f_swpc)
 _reg("tidecheck",           _f_tidecheck)
 _reg("noaa_coops",          _f_noaa_coops)
+_reg("pollendotcom",        _f_pollendotcom)
+_reg("google_pollen",       _f_google_pollen)
 
 
 # ── Global dispatcher ────────────────────────────────────────────────

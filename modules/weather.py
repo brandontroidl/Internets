@@ -232,14 +232,40 @@ def _format_uv(r: object) -> str:
 
 def _format_pollen(r: object) -> str:
     from weather_providers import PollenResult
+    from weather_providers.base import pollen_cat_5
     if not isinstance(r, PollenResult):
         raise TypeError(f"expected PollenResult, got {type(r).__name__}")
     source = _sanitize(r.source, 30)
+
+    # Google Pollen — tree/grass/weed Universal Pollen Index (0-5).
+    if any(v is not None for v in (r.tree_index, r.grass_index, r.weed_index)):
+        parts = [
+            f"{label} {pollen_cat_5(val)} ({val:.0f}/5)"
+            for label, val in (("Tree", r.tree_index), ("Grass", r.grass_index),
+                               ("Weed", r.weed_index)) if val is not None
+        ]
+        if r.triggers:
+            parts.append("Top: " + ", ".join(_sanitize(t, 20) for t in r.triggers))
+        parts.append(f"[{source}]")
+        return " :: ".join(parts)
+
+    # Pollen.com / IQVIA — overall index (0-12) + dominant allergens.
+    if r.overall_index is not None:
+        head = f"Pollen index {r.overall_index:.1f}/12"
+        if r.category:
+            head += f" ({_sanitize(r.category, 16)})"
+        parts = [head]
+        if r.triggers:
+            parts.append("Top: " + ", ".join(_sanitize(t, 20) for t in r.triggers))
+        parts.append(f"[{source}]")
+        return " :: ".join(parts)
+
+    # Open-Meteo — CAMS per-species concentrations (grains/m³).
     taxa = [("Alder", r.alder), ("Birch", r.birch), ("Grass", r.grass),
             ("Mugwort", r.mugwort), ("Olive", r.olive), ("Ragweed", r.ragweed)]
     parts = [f"{name} {val:.0f}" for name, val in taxa if val is not None]
     if not parts:
-        return f"No pollen data (CAMS covers Europe only). [{source}]"
+        return f"No pollen data for this location. [{source}]"
     parts.append("grains/m³")
     parts.append(f"[{source}]")
     return " :: ".join(parts)
@@ -371,6 +397,11 @@ _PROVIDER_FLAGS: dict[str, str] = {
     # TideCheck / NOAA CO-OPS (tides)
     "tidecheck":          "tidecheck",   "tc":            "tidecheck",
     "noaa_coops":         "noaa_coops",  "coops":         "noaa_coops",
+    # Pollen.com / IQVIA (US pollen) + Google Pollen (global pollen)
+    "pollendotcom":       "pollendotcom", "pollencom":    "pollendotcom",
+    "pc":                 "pollendotcom",
+    "googlepollen":       "google_pollen", "google_pollen": "google_pollen",
+    "gp":                 "google_pollen",
 }
 
 
