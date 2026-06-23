@@ -184,16 +184,40 @@ def element_lookup(query: str) -> str:
 
 
 # ── Wikipedia ─────────────────────────────────────────────────────────────
+def _wiki_summary(title: str, ua: str) -> dict | None:
+    """REST summary for an exact (URL-encoded) title, or None on 404."""
+    data = fetch_json(
+        f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
+        ua=ua, timeout=10, allow_404=True,
+    )
+    return data if (data and isinstance(data, dict)) else None
+
+
+def _wiki_search_title(query: str, ua: str) -> str | None:
+    """Resolve free text to the best article title via opensearch (forgiving of
+    case/punctuation), or None.  Returns [term, [titles], [descs], [urls]]."""
+    data = fetch_json(
+        "https://en.wikipedia.org/w/api.php",
+        params={"action": "opensearch", "search": query, "limit": "1",
+                "namespace": "0", "format": "json"},
+        ua=ua, timeout=10, allow_404=True,
+    )
+    if isinstance(data, list) and len(data) >= 2 and isinstance(data[1], list) and data[1]:
+        return data[1][0]
+    return None
+
+
 def _wiki_sync(query: str, ua: str) -> str:
     try:
-        title = quote(query.strip().replace(" ", "_"), safe="")
-        data = fetch_json(
-            f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
-            ua=ua,
-            timeout=10,
-            allow_404=True,
-        )
-        if not data or not isinstance(data, dict):
+        q = query.strip()
+        title = quote(q.replace(" ", "_"), safe="")
+        data = _wiki_summary(title, ua)
+        if data is None:
+            # Exact-title miss (wrong case/punctuation): resolve via search.
+            resolved = _wiki_search_title(q, ua)
+            if resolved:
+                data = _wiki_summary(quote(resolved.replace(" ", "_"), safe=""), ua)
+        if data is None:
             return f"no Wikipedia article for '{strip_ctrl(query, 60)}'"
         page_title = strip_ctrl(data.get("title", query), 120)
         url = strip_ctrl(
