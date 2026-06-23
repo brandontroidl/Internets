@@ -364,10 +364,10 @@ def _rfc_by_number(n: int, ua: str) -> str | None:
     )
     if not data or not isinstance(data, dict):
         return None
-    title = strip_ctrl(data.get("title", "(untitled)"), 200)
-    status = strip_ctrl(data.get("status", ""), 60)
-    month = strip_ctrl(data.get("month", ""), 20)
-    year = strip_ctrl(str(data.get("year", "")), 10)
+    title = strip_ctrl((data.get("title") or "(untitled)").strip(), 200)
+    status = strip_ctrl((data.get("status") or "").strip(), 60)
+    month = strip_ctrl((data.get("month") or "").strip(), 20)
+    year = strip_ctrl(str(data.get("year") or "").strip(), 10)
     date = " ".join(p for p in (month, year) if p)
     bits = [f"\x02RFC {n}\x02: {title}"]
     if status:
