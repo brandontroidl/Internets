@@ -1,6 +1,6 @@
 """Open-Meteo — hourly forecast endpoint."""
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
 from ._codes import WMO_CODES, deg_to_card
@@ -28,7 +28,11 @@ async def fetch(lat: float, lon: float, location: str, hours: int = 12) -> Hourl
     humid = h.get("relative_humidity_2m", [])
     wspd = h.get("wind_speed_10m", [])
     wdir = h.get("wind_direction_10m", [])
-    now = datetime.now()
+    # Times are location-local (timezone=auto); align "now" to the same zone
+    # via the response's utc_offset so the window isn't shifted by the bot
+    # host's timezone.
+    offset = data.get("utc_offset_seconds") or 0
+    now = (datetime.now(timezone.utc) + timedelta(seconds=offset)).replace(tzinfo=None)
     start = 0
     for i, t in enumerate(times):
         try:

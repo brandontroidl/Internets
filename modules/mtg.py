@@ -13,54 +13,50 @@ import json
 import logging
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.mtg")
 
 _URL = "https://api.scryfall.com/cards/named"
 _MAX_BODY_BYTES = 256 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _fetch_sync(name: str, ua: str) -> str:
     try:
-        r = requests.get(_URL, params={"fuzzy": name},
-                         headers={"User-Agent": ua, "Accept": "application/json"},
-                         timeout=10, stream=True)
-        if r.status_code == 404:
-            return f"no card matched '{_strip_ctrl(name, 60)}'"
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return "Scryfall response too large"
-        d = json.loads(body.decode("utf-8", errors="replace"))
+        with requests.get(_URL, params={"fuzzy": name},
+                          headers={"User-Agent": ua, "Accept": "application/json"},
+                          timeout=10, stream=True) as r:
+            if r.status_code == 404:
+                return f"no card matched '{_strip_ctrl(name, 60)}'"
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return "Scryfall response too large"
+            d = json.loads(body.decode("utf-8", errors="replace"))
 
-        nm = d.get("name", "?")
-        cost = d.get("mana_cost", "")
-        type_line = d.get("type_line", "?")
-        oracle = (d.get("oracle_text", "") or "").replace("\n", " | ")
-        pwr = d.get("power")
-        tgh = d.get("toughness")
-        loy = d.get("loyalty")
-        set_n = (d.get("set_name") or "?")
-        rarity = (d.get("rarity") or "?").title()
-        pt = ""
-        if pwr is not None and tgh is not None:
-            pt = f" {pwr}/{tgh}"
-        elif loy is not None:
-            pt = f" [{loy}]"
-        text = _strip_ctrl(
-            f"\x02{nm}\x02 {cost} | {type_line}{pt} | {oracle} | "
-            f"{set_n} ({rarity})"
-        )
-        return text
+            nm = d.get("name", "?")
+            cost = d.get("mana_cost", "")
+            type_line = d.get("type_line", "?")
+            oracle = (d.get("oracle_text", "") or "").replace("\n", " | ")
+            pwr = d.get("power")
+            tgh = d.get("toughness")
+            loy = d.get("loyalty")
+            set_n = (d.get("set_name") or "?")
+            rarity = (d.get("rarity") or "?").title()
+            pt = ""
+            if pwr is not None and tgh is not None:
+                pt = f" {pwr}/{tgh}"
+            elif loy is not None:
+                pt = f" [{loy}]"
+            text = _strip_ctrl(
+                f"\x02{nm}\x02 {cost} | {type_line}{pt} | {oracle} | "
+                f"{set_n} ({rarity})"
+            )
+            return text
     except requests.RequestException as e:
         log.warning(f"scryfall request: {e}")
         return "Scryfall unavailable"
@@ -94,7 +90,7 @@ class MtgModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}mtg <card>              Magic: the Gathering card via Scryfall"]
+        return [help_row(prefix, "mtg <card>", "Magic: the Gathering card via Scryfall")]
 
 
 def setup(bot: object) -> MtgModule:

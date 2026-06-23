@@ -18,6 +18,7 @@ MarineResult                  — wave height, swell, water temperature
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import asin, cos, radians, sin, sqrt
 from typing import Protocol, runtime_checkable
 
 
@@ -38,6 +39,19 @@ def ms_to_kph(v: float | None) -> float | None:
 def km_to_m(v: float | None) -> float | None:
     """Convert kilometers to meters."""
     return v * 1000 if v is not None else None
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two lat/lon points, in kilometers.
+
+    Clamps ``sqrt(a)`` to 1.0 so float rounding on near-antipodal points
+    can't push ``asin()`` out of domain (ValueError).  Shared by the
+    providers that pick the nearest sensor/station/event.
+    """
+    p1, p2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlmb = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(p1) * cos(p2) * sin(dlmb / 2) ** 2
+    return 2 * 6371.0 * asin(min(1.0, sqrt(a)))
 
 
 # ── Current conditions + daily forecast ──────────────────────────────
@@ -127,6 +141,7 @@ class AirQualityResult:
     no2: float | None          = None
     so2: float | None          = None
     co: float | None           = None
+    aod: float | None          = None   # aerosol optical depth (550nm) — smoke proxy
 
 
 # ── Astronomy ────────────────────────────────────────────────────────
@@ -199,6 +214,73 @@ class NowcastResult:
     entries: list[NowcastEntry] = field(default_factory=list)
 
 
+# ── UV index ─────────────────────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class UVResult:
+    """UV index now + today's peak."""
+    source: str
+    location: str
+    uv_index: float | None     = None   # current UV index
+    uv_max: float | None       = None   # today's max UV index
+    category: str              = ""     # Low / Moderate / High / Very High / Extreme
+
+
+# ── Pollen ───────────────────────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class PollenResult:
+    """Airborne pollen concentrations (grains/m³).  CCAMS covers Europe."""
+    source: str
+    location: str
+    alder: float | None        = None
+    birch: float | None        = None
+    grass: float | None        = None
+    mugwort: float | None      = None
+    olive: float | None        = None
+    ragweed: float | None      = None
+
+
+# ── Wildfire ─────────────────────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class WildfireResult:
+    """Active wildfire detections near a location."""
+    source: str
+    location: str
+    fire_count: int            = 0      # fires within the search radius
+    nearest_km: float | None   = None   # distance to nearest fire
+    nearest_name: str          = ""     # named incident (if known)
+    max_acres: float | None    = None   # largest nearby fire's size
+
+
+# ── Space weather / aurora ───────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class SpaceWeatherResult:
+    """Geomagnetic activity and aurora visibility chance."""
+    source: str
+    location: str
+    kp_index: float | None     = None   # planetary K index 0-9
+    kp_category: str           = ""     # Quiet / Unsettled / Storm (G1-G5)
+    aurora_pct: float | None   = None   # aurora probability at this lat/lon (0-100)
+
+
+# ── Tides ────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True, slots=True)
+class TideResult:
+    """Next high/low tide from the nearest station."""
+    source: str
+    location: str
+    station: str               = ""
+    next_high_time: str        = ""
+    next_high_m: float | None  = None
+    next_low_time: str         = ""
+    next_low_m: float | None   = None
+    water_temp_c: float | None = None
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 _AQI_THRESHOLDS: list[tuple[int, str]] = [
@@ -221,6 +303,29 @@ def aqi_category(aqi: int | None) -> str:
     return "Hazardous"
 
 
+def uv_category(uv: float | None) -> str:
+    """Return the WHO UV-index exposure category."""
+    if uv is None:
+        return ""
+    if uv < 3:   return "Low"
+    if uv < 6:   return "Moderate"
+    if uv < 8:   return "High"
+    if uv < 11:  return "Very High"
+    return "Extreme"
+
+
+def kp_category(kp: float | None) -> str:
+    """Return the NOAA geomagnetic activity label for a planetary K index."""
+    if kp is None:
+        return ""
+    if kp < 5:   return "Quiet"
+    if kp < 6:   return "Minor storm (G1)"
+    if kp < 7:   return "Moderate storm (G2)"
+    if kp < 8:   return "Strong storm (G3)"
+    if kp < 9:   return "Severe storm (G4)"
+    return "Extreme storm (G5)"
+
+
 # ── Provider protocol ────────────────────────────────────────────────
 
 @runtime_checkable
@@ -236,7 +341,8 @@ class WeatherProvider(Protocol):
     capabilities a provider supports:
 
         get_hourly, get_alerts, get_air_quality, get_astronomy,
-        get_historical, get_marine, get_nowcast
+        get_historical, get_marine, get_nowcast, get_uv, get_pollen,
+        get_wildfire, get_space_weather, get_tides
 
     Providers that don't support an optional method simply omit it.
     The registry skips providers that lack the requested method.

@@ -1,5 +1,6 @@
 """Visual Crossing — hourly forecast."""
 from __future__ import annotations
+import time
 from datetime import datetime
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
@@ -14,15 +15,18 @@ async def fetch(key: str, lat: float, lon: float, location: str, hours: int = 12
                 "include": "hours", "contentType": "json"},
     )
     entries = []
-    now = datetime.now()
+    now_epoch = time.time()
     for day in data.get("days", []):
         for h in day.get("hours", []):
             dt_str = f"{day.get('datetime', '')}T{h.get('datetime', '')}"
+            # datetimeEpoch is a TZ-safe unix timestamp; parsing the local
+            # datetime string and comparing to datetime.now() would be off by
+            # the host/location offset.
+            ep = h.get("datetimeEpoch")
+            if ep is not None and ep < now_epoch:
+                continue
             try:
-                dt = datetime.fromisoformat(dt_str)
-                if dt < now:
-                    continue
-                tm = dt.strftime("%I %p").lstrip("0")
+                tm = datetime.fromisoformat(dt_str).strftime("%I %p").lstrip("0")
             except Exception:
                 tm = h.get("datetime", "")
             if len(entries) >= hours:

@@ -12,20 +12,16 @@ import logging
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.dnd")
 
 _BASE = "https://www.dnd5eapi.co/api/2014"
 _MAX_BODY_BYTES = 256 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _slug(name: str) -> str:
@@ -35,15 +31,15 @@ def _slug(name: str) -> str:
 
 def _get(url: str, ua: str) -> dict | None:
     try:
-        r = requests.get(url, headers={"User-Agent": ua},
-                         timeout=10, stream=True)
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        with requests.get(url, headers={"User-Agent": ua},
+                         timeout=10, stream=True) as r:
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except (requests.RequestException, ValueError):
         return None
 
@@ -121,7 +117,7 @@ class DndModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}dnd <name>              D&D 5e SRD spell or monster"]
+        return [help_row(prefix, "dnd <name>", "D&D 5e SRD spell or monster")]
 
 
 def setup(bot: object) -> DndModule:

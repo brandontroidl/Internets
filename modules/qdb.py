@@ -20,7 +20,7 @@ import logging
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.qdb")
 
@@ -34,14 +34,8 @@ _MAX_BODY_BYTES = 256 * 1024
 
 # Same IRC-control-byte strip used elsewhere — defends against vandalised
 # quotes injecting CR/LF or IRC formatting/colour codes into the channel.
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
-
-
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 # HTML extractors anchored on bash-org-archive's stable markup:
@@ -70,44 +64,44 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
     base = base_url.rstrip("/")
     url = f"{base}/?{'random1' if qid is None else qid}"
     try:
-        r = requests.get(url, headers={"User-Agent": ua},
-                         timeout=10, stream=True)
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            log.warning("QDB response exceeded %d bytes — refusing to parse",
-                        _MAX_BODY_BYTES)
-            return ["QDB response too large — endpoint may be misbehaving"]
-        text = body.decode("utf-8", errors="replace")
+        with requests.get(url, headers={"User-Agent": ua},
+                          timeout=10, stream=True) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                log.warning("QDB response exceeded %d bytes — refusing to parse",
+                            _MAX_BODY_BYTES)
+                return ["QDB response too large — endpoint may be misbehaving"]
+            text = body.decode("utf-8", errors="replace")
 
-        m_body = _RE_QUOTE_BODY.search(text)
-        if not m_body:
-            return [f"quote {qid} not found" if qid else "no quote found"]
+            m_body = _RE_QUOTE_BODY.search(text)
+            if not m_body:
+                return [f"quote {qid} not found" if qid else "no quote found"]
 
-        # Tag = `[qdb #N]` if we can find a numeric ID (the permalink in
-        # the header block, or the explicitly-requested qid); otherwise
-        # plain `[qdb]`.  Falls through to plain on archive-side markup
-        # changes rather than emitting a placeholder string.
-        quote_id: str | None = qid
-        if quote_id is None:
-            m_hdr = _RE_QUOTE_HEADER.search(text)
-            if m_hdr:
-                m_id = _RE_QUOTE_ID.search(m_hdr.group(1))
-                if m_id:
-                    quote_id = m_id.group(1)
-        tag = f"[qdb #{quote_id}]" if quote_id else "[qdb]"
+            # Tag = `[qdb #N]` if we can find a numeric ID (the permalink in
+            # the header block, or the explicitly-requested qid); otherwise
+            # plain `[qdb]`.  Falls through to plain on archive-side markup
+            # changes rather than emitting a placeholder string.
+            quote_id: str | None = qid
+            if quote_id is None:
+                m_hdr = _RE_QUOTE_HEADER.search(text)
+                if m_hdr:
+                    m_id = _RE_QUOTE_ID.search(m_hdr.group(1))
+                    if m_id:
+                        quote_id = m_id.group(1)
+            tag = f"[qdb #{quote_id}]" if quote_id else "[qdb]"
 
-        # Split on <br> or newlines, strip residual tags, drop empties.
-        chunks = _RE_LINE_BREAK.split(m_body.group(1))
-        lines = [
-            _strip_ctrl(html.unescape(_RE_TAGS.sub("", chunk)).strip())
-            for chunk in chunks
-        ]
-        lines = [ln for ln in lines if ln]
+            # Split on <br> or newlines, strip residual tags, drop empties.
+            chunks = _RE_LINE_BREAK.split(m_body.group(1))
+            lines = [
+                _strip_ctrl(html.unescape(_RE_TAGS.sub("", chunk)).strip())
+                for chunk in chunks
+            ]
+            lines = [ln for ln in lines if ln]
 
-        if len(lines) > _MAX_LINES:
-            return [f"{tag} long quote — view at {url}"]
-        return [f"{tag} {ln}" for ln in lines]
+            if len(lines) > _MAX_LINES:
+                return [f"{tag} long quote — view at {url}"]
+            return [f"{tag} {ln}" for ln in lines]
     except requests.RequestException as e:
         log.warning(f"QDB request: {e}")
         return ["QDB endpoint unavailable"]
@@ -152,7 +146,7 @@ class QdbModule(BotModule):
             self.bot.privmsg(reply_to, line)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}qdb [id]               Random or specific bash.org-style quote"]
+        return [help_row(prefix, "qdb [id]", "Random or specific bash.org-style quote")]
 
 
 def setup(bot: object) -> QdbModule:

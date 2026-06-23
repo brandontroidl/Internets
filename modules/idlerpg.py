@@ -6,7 +6,7 @@ from datetime import timedelta
 from defusedxml import ElementTree  # XML from a 3rd-party HTTP endpoint — defuse XXE/billion-laughs.
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.idlerpg")
 
@@ -41,12 +41,15 @@ def _lookup_sync(player: str, base_url: str, ua: str) -> str:
             text = text.replace(ch, "")
 
         root = ElementTree.fromstring(text)
-        name = root.findtext("username", "")
+        # username/class are third-party XML fields spliced into a formatted
+        # IRC line — strip the full control range (the pre-parse loop above
+        # only drops 4 formatting codes, not CR/LF/ESC/etc).
+        name = strip_ctrl(root.findtext("username", ""))
         if not name:
-            return f"player '{player}' not found (\x02note:\x02 names are case sensitive)"
+            return f"player '{strip_ctrl(player)}' not found (\x02note:\x02 names are case sensitive)"
 
         level = root.findtext("level", "0")
-        classe = root.findtext("class", "?")
+        classe = strip_ctrl(root.findtext("class", "?"))
         ttl = int(root.findtext("ttl", "0"))
         idled = int(root.findtext("totalidled", "0"))
         online = root.findtext("online", "0") == "1"
@@ -94,7 +97,7 @@ class IdlerpgModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}irpg/.idlerpg <player>  IdleRPG player info"]
+        return [help_row(prefix, "irpg/.idlerpg <player>", "IdleRPG player info")]
 
 
 def setup(bot: object) -> IdlerpgModule:

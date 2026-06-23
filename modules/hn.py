@@ -14,32 +14,28 @@ import json
 import logging
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.hn")
 
 _TOP = "https://hacker-news.firebaseio.com/v0/topstories.json"
 _ITEM = "https://hacker-news.firebaseio.com/v0/item/{id}.json"
 _MAX_BODY_BYTES = 64 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
-def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+def _strip_ctrl(s, max_len=400):
+    return strip_ctrl(s, max_len)
 
 
 def _get_json(url: str, ua: str) -> object | None:
     try:
-        r = requests.get(url, headers={"User-Agent": ua},
-                         timeout=10, stream=True)
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        with requests.get(url, headers={"User-Agent": ua},
+                          timeout=10, stream=True) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except (requests.RequestException, ValueError):
         return None
 
@@ -94,7 +90,7 @@ class HnModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}hn [rank]               Top Hacker News story (1–30)"]
+        return [help_row(prefix, "hn [rank]", "Top Hacker News story (1–30)")]
 
 
 def setup(bot: object) -> HnModule:

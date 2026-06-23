@@ -1,17 +1,18 @@
 """WeatherAPI.com — hourly forecast."""
 from __future__ import annotations
+import time
 from datetime import datetime
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
 _B = "https://api.weatherapi.com/v1"
 async def fetch(key, lat, lon, location, hours=12):
     data = await get_json(f"{_B}/forecast.json", params={"key": key, "q": f"{lat},{lon}", "days": max(1,(hours+23)//24), "aqi": "no", "alerts": "no"})
-    now = datetime.now(); entries = []
+    now_epoch = time.time(); entries = []
     for fd in data.get("forecast",{}).get("forecastday",[]):
         for h in fd.get("hour",[]):
-            try:
-                if datetime.fromisoformat(h.get("time","")) < now: continue
-            except Exception: pass  # nosec B110: best-effort cleanup
+            # time_epoch is a TZ-safe unix timestamp; the local "time" string
+            # vs datetime.now() would be off by the host/location offset.
+            if (h.get("time_epoch") or 0) < now_epoch: continue
             if len(entries) >= hours: break
             try: tm = datetime.fromisoformat(h.get("time","")).strftime("%I %p").lstrip("0")
             except Exception: tm = h.get("time","")

@@ -22,19 +22,15 @@ import logging
 import re
 import time
 import uuid
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.devutils")
 
 _MAX_INPUT = 400
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 _HEX_RE = re.compile(r"^[a-fA-F0-9]+$")
@@ -191,12 +187,12 @@ class DevutilsModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}b64 <text>            Base64 encode",
-            f"  {prefix}unb64 <text>          Base64 decode",
-            f"  {prefix}hex <text>            Hex encode/decode (auto)",
-            f"  {prefix}morse <text>          Morse encode/decode (auto, / = word break)",
-            f"  {prefix}uuid                  Random UUID4",
-            f"  {prefix}epoch [arg]           Epoch <-> ISO 8601 UTC",
+            help_row(prefix, "b64 <text>", "Base64 encode"),
+            help_row(prefix, "unb64 <text>", "Base64 decode"),
+            help_row(prefix, "hex <text>", "Hex encode/decode (auto)"),
+            help_row(prefix, "morse <text>", "Morse encode/decode (auto, / = word break)"),
+            help_row(prefix, "uuid", "Random UUID4"),
+            help_row(prefix, "epoch [arg]", "Epoch <-> ISO 8601 UTC"),
         ]
 
 

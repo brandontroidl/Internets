@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import logging
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.bofh")
 
@@ -133,7 +133,7 @@ class BofhModule(BotModule):
         self.bot.privmsg(reply_to, f"[BOFH] Your excuse: {excuse}")
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}bofh/.excuse            Random BOFH excuse"]
+        return [help_row(prefix, "bofh/.excuse", "Random BOFH excuse")]
 
 
 def setup(bot: object) -> BofhModule:

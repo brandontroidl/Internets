@@ -5,7 +5,7 @@ import json
 import re
 import logging
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.translate")
 
@@ -26,24 +26,8 @@ _MAX_QUERY_CHARS = 500
 # experiment that ships an HTML interstitial) from blowing up memory.
 _MAX_BODY_BYTES = 256 * 1024
 
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
-
-
 def _strip_ctrl(s: object, max_len: int = 400) -> str:
-    """Coerce to str, drop IRC control bytes, cap length.
-
-    The Google Translate unofficial endpoint returns attacker-influenced
-    text (the user can put anything in ``q``; partners on shared infra can
-    sometimes inject too).  We must drop CR/LF before this hits the IRC
-    socket, else a malicious payload could break out of the PRIVMSG and
-    smuggle a second IRC command.
-    """
-    text = "" if s is None else str(s)
-    cleaned = "".join(ch for ch in text if ch not in _IRC_CTRL_BYTES)
-    return cleaned[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _translate_sync(src: str | None, tgt: str, text: str) -> str:
@@ -61,36 +45,36 @@ def _translate_sync(src: str | None, tgt: str, text: str) -> str:
     try:
         # ``requests`` will percent-encode params for us so ``text`` is safe
         # to pass through verbatim — but we still need to cap response size.
-        r = requests.get(
+        with requests.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": src or "auto", "tl": tgt, "dt": "t", "q": text},
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=10,
             stream=True,
-        )
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            log.warning("translate response exceeded size cap")
-            return "translation failed"
-        data = json.loads(body.decode("utf-8", errors="replace"))
+        ) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                log.warning("translate response exceeded size cap")
+                return "translation failed"
+            data = json.loads(body.decode("utf-8", errors="replace"))
 
-        # The response shape is loose JSON arrays — be defensive about every
-        # index and never assume any element is a string.
-        if not isinstance(data, list) or not data or not isinstance(data[0], list):
-            return "translation failed"
-        chunks = []
-        for part in data[0]:
-            if isinstance(part, list) and part and isinstance(part[0], str):
-                chunks.append(part[0])
-        translated = "".join(chunks)
-        detected_raw = data[2] if len(data) > 2 and isinstance(data[2], str) else (src or "auto")
-        # Re-validate detected language against the same conservative regex
-        # before splicing — otherwise upstream could return "xx\r\nQUIT" and
-        # bypass our PRIVMSG framing.
-        detected = detected_raw if _LANG_RE.match(detected_raw or "") else "??"
-        translated = _strip_ctrl(translated, 400)
-        return f"[t] [{detected}→{tgt}] {translated}" if translated else "empty result"
+            # The response shape is loose JSON arrays — be defensive about every
+            # index and never assume any element is a string.
+            if not isinstance(data, list) or not data or not isinstance(data[0], list):
+                return "translation failed"
+            chunks = []
+            for part in data[0]:
+                if isinstance(part, list) and part and isinstance(part[0], str):
+                    chunks.append(part[0])
+            translated = "".join(chunks)
+            detected_raw = data[2] if len(data) > 2 and isinstance(data[2], str) else (src or "auto")
+            # Re-validate detected language against the same conservative regex
+            # before splicing — otherwise upstream could return "xx\r\nQUIT" and
+            # bypass our PRIVMSG framing.
+            detected = detected_raw if _LANG_RE.match(detected_raw or "") else "??"
+            translated = _strip_ctrl(translated, 400)
+            return f"[t] [{detected}→{tgt}] {translated}" if translated else "empty result"
     except Exception as e:
         log.warning(f"Translate: {e}")
         return "translation failed"
@@ -129,7 +113,7 @@ class TranslateModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         """Return translation help text."""
-        return [f"  {prefix}t/.translate [src] <tgt> <text>   Translate  e.g. {prefix}t en es Hello"]
+        return [help_row(prefix, "t/.translate [src] <tgt> <text>", f"Translate  e.g. {prefix}t en es Hello")]
 
 
 def setup(bot: object) -> TranslateModule:

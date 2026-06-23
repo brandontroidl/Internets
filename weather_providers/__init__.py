@@ -1,7 +1,7 @@
 """Multi-provider weather aggregation platform with capability-based dispatch.
 
 Architecture:
-    14 provider packages (sub-module per endpoint)
+    30 provider packages (sub-module per endpoint)
     ↓
     Dispatcher (capability discovery + accuracy-then-health routing)
     ↓
@@ -33,6 +33,10 @@ Providers, ranked by scientific accuracy (see _dispatch.DEFAULT_RELIABILITY):
     Tomorrow.io        — key (proprietary nowcasting focus)
     World Weather Online — key (basic single-model)
     Weatherstack       — key (basic, plaintext HTTP — least preferred)
+
+Air-quality-only providers (not part of the current/forecast ranking):
+    AirNow             — key (US EPA official AQI — authoritative, US only)
+    PurpleAir          — key (crowdsourced PM2.5 sensors — global, hyper-local)
 """
 
 from __future__ import annotations
@@ -48,6 +52,7 @@ from .base import (
     HourlyResult, HourlyEntry, AlertsResult, AlertEntry,
     AirQualityResult, AstronomyResult, HistoricalResult, MarineResult,
     NowcastResult, NowcastEntry, aqi_category,
+    UVResult, PollenResult, WildfireResult, SpaceWeatherResult, TideResult,
 )
 from ._dispatch import Dispatcher, CAPABILITY_METHODS
 from ._health import health_registry, format_health_score
@@ -78,10 +83,12 @@ __all__ = [
     "HourlyResult", "HourlyEntry", "AlertsResult", "AlertEntry",
     "AirQualityResult", "AstronomyResult", "HistoricalResult", "MarineResult",
     "NowcastResult", "NowcastEntry", "aqi_category",
+    "UVResult", "PollenResult", "WildfireResult", "SpaceWeatherResult", "TideResult",
     "configure", "get_providers", "provider_capabilities", "provider_status",
     "get_weather", "get_forecast",
     "get_hourly", "get_alerts", "get_air_quality",
     "get_astronomy", "get_historical", "get_marine", "get_nowcast",
+    "get_uv", "get_pollen", "get_wildfire", "get_space_weather", "get_tides",
     "dispatcher", "HTTPError", "ResponseTooLargeError",
     "format_health_score",
     "record_call", "quota_status",
@@ -136,6 +143,8 @@ _DEFAULT_QUOTA_LIMITS: dict[str, int | None] = {
     "openmeteo":            None,
     "meteomatics":          None,
     "weatherkit":           None,
+    "airnow":               500,    # 500 req/hour upstream — shown as a soft marker
+    "purpleair":            None,   # points-budget based, no fixed daily call cap
 }
 
 # Public module-level dict — operators / status pages can read this
@@ -329,6 +338,100 @@ def _f_weatherbit(cfg):
     from .weatherbit import WeatherBitProvider
     return WeatherBitProvider(key)
 
+def _f_airnow(cfg):
+    key = _cred(cfg, "airnow_key", "airnow_key")
+    if not key:
+        log.info("airnow: skipped (no airnow_key)")
+        return None
+    from .airnow import AirNowProvider
+    return AirNowProvider(key)
+
+def _f_purpleair(cfg):
+    key = _cred(cfg, "purpleair_key", "purpleair_key")
+    if not key:
+        log.info("purpleair: skipped (no purpleair_key)")
+        return None
+    from .purpleair import PurpleAirProvider
+    return PurpleAirProvider(key)
+
+# ── Specialist / single-capability providers (added this session) ─────
+
+def _f_sunrisesunset(cfg):
+    from .sunrisesunset import SunriseSunsetProvider
+    return SunriseSunsetProvider()
+
+def _f_currentuvindex(cfg):
+    from .currentuvindex import CurrentUVIndexProvider
+    return CurrentUVIndexProvider()
+
+def _f_gdacs(cfg):
+    from .gdacs import GdacsProvider
+    return GdacsProvider()
+
+def _f_eccc(cfg):
+    from .eccc import ECCCProvider
+    return ECCCProvider()
+
+def _f_metno(cfg):
+    from .metno import MetNoProvider
+    return MetNoProvider()
+
+def _f_nasapower(cfg):
+    from .nasapower import NasaPowerProvider
+    return NasaPowerProvider()
+
+def _f_nifc(cfg):
+    from .nifc import NIFCProvider
+    return NIFCProvider()
+
+def _f_swpc(cfg):
+    from .swpc import SWPCProvider
+    return SWPCProvider()
+
+def _f_noaa_coops(cfg):
+    from .noaa_coops import NoaaCoopsProvider
+    return NoaaCoopsProvider()
+
+def _f_waqi(cfg):
+    key = _cred(cfg, "waqi_token", "waqi_token")
+    if not key:
+        log.info("waqi: skipped (no waqi_token)")
+        return None
+    from .waqi import WAQIProvider
+    return WAQIProvider(key)
+
+def _f_openaq(cfg):
+    key = _cred(cfg, "openaq_key", "openaq_key")
+    if not key:
+        log.info("openaq: skipped (no openaq_key)")
+        return None
+    from .openaq import OpenAQProvider
+    return OpenAQProvider(key)
+
+def _f_iqair(cfg):
+    key = _cred(cfg, "iqair_key", "iqair_key")
+    if not key:
+        log.info("iqair: skipped (no iqair_key)")
+        return None
+    from .iqair import IQAirProvider
+    return IQAirProvider(key)
+
+def _f_firms(cfg):
+    key = _cred(cfg, "firms_key", "firms_key")
+    if not key:
+        log.info("firms: skipped (no firms_key)")
+        return None
+    from .firms import FirmsProvider
+    return FirmsProvider(key)
+
+def _f_tidecheck(cfg):
+    key = _cred(cfg, "tidecheck_key", "tidecheck_key")
+    if not key:
+        log.info("tidecheck: skipped (no tidecheck_key)")
+        return None
+    from .tidecheck import TideCheckProvider
+    return TideCheckProvider(key)
+
 
 _reg("nws",                 _f_nws)
 _reg("meteomatics",         _f_meteomatics)
@@ -344,6 +447,22 @@ _reg("stormglass",          _f_stormglass)
 _reg("tomorrowio",          _f_tomorrowio)
 _reg("worldweatheronline",  _f_worldweatheronline)
 _reg("weatherstack",        _f_weatherstack)
+_reg("airnow",              _f_airnow)
+_reg("purpleair",           _f_purpleair)
+_reg("metno",               _f_metno)
+_reg("waqi",                _f_waqi)
+_reg("openaq",              _f_openaq)
+_reg("iqair",               _f_iqair)
+_reg("sunrisesunset",       _f_sunrisesunset)
+_reg("currentuvindex",      _f_currentuvindex)
+_reg("gdacs",               _f_gdacs)
+_reg("eccc",                _f_eccc)
+_reg("nasapower",           _f_nasapower)
+_reg("nifc",                _f_nifc)
+_reg("firms",               _f_firms)
+_reg("swpc",                _f_swpc)
+_reg("tidecheck",           _f_tidecheck)
+_reg("noaa_coops",          _f_noaa_coops)
 
 
 # ── Global dispatcher ────────────────────────────────────────────────
@@ -530,3 +649,38 @@ async def get_nowcast(
     """Short-range precipitation nowcast.  ``force_provider`` pins one."""
     return await dispatcher.dispatch(
         "nowcast", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_uv(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> UVResult | None:
+    """UV index now + today's peak.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "uv", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_pollen(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> PollenResult | None:
+    """Airborne pollen (CAMS — Europe).  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "pollen", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_wildfire(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> WildfireResult | None:
+    """Active wildfire detections nearby.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "wildfire", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_space_weather(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> SpaceWeatherResult | None:
+    """Geomagnetic activity + aurora chance.  ``force_provider`` pins one provider."""
+    return await dispatcher.dispatch(
+        "space_weather", lat, lon, location, **_force_kw(force_provider, kw))
+
+async def get_tides(
+    lat, lon, location, *, force_provider: str | None = None, **kw,
+) -> TideResult | None:
+    """Next high/low tide from the nearest station.  ``force_provider`` pins one."""
+    return await dispatcher.dispatch(
+        "tides", lat, lon, location, **_force_kw(force_provider, kw))

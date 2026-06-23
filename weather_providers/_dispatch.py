@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import dataclasses
 import time
 import logging
 from typing import Any
@@ -38,6 +39,11 @@ CAPABILITY_METHODS: dict[str, str] = {
     "historical":  "get_historical",
     "marine":      "get_marine",
     "nowcast":     "get_nowcast",
+    "uv":          "get_uv",
+    "pollen":      "get_pollen",
+    "wildfire":    "get_wildfire",
+    "space_weather": "get_space_weather",
+    "tides":       "get_tides",
 }
 
 # Static reliability ordering ranked by scientific accuracy of the
@@ -70,28 +76,39 @@ DEFAULT_RELIABILITY: dict[str, dict[str, int]] = {
                     "openmeteo": 4, "visualcrossing": 5, "accuweather": 6,
                     "openweathermap": 7, "weatherapi": 8, "weatherbit": 9,
                     "pirateweather": 10, "tomorrowio": 11,
-                    "worldweatheronline": 12, "weatherstack": 13},
+                    "worldweatheronline": 12, "metno": 13, "weatherstack": 14},
     "forecast":    {"nws": 1, "meteomatics": 2, "weatherkit": 3,
                     "openmeteo": 4, "visualcrossing": 5, "accuweather": 6,
                     "openweathermap": 7, "weatherbit": 8, "weatherapi": 9,
                     "pirateweather": 10, "tomorrowio": 11,
-                    "worldweatheronline": 12, "weatherstack": 13},
+                    "worldweatheronline": 12, "metno": 13, "weatherstack": 14},
     "hourly":      {"nws": 1, "meteomatics": 2, "weatherkit": 3,
                     "openmeteo": 4, "pirateweather": 5, "visualcrossing": 6,
                     "openweathermap": 7, "weatherbit": 8, "weatherapi": 9,
                     "tomorrowio": 10, "accuweather": 11,
-                    "worldweatheronline": 12, "stormglass": 13},
+                    "worldweatheronline": 12, "metno": 13, "stormglass": 14},
     "alerts":      {"nws": 1, "weatherkit": 2, "openweathermap": 3,
                     "pirateweather": 4, "accuweather": 5, "weatherbit": 6,
-                    "visualcrossing": 7, "weatherapi": 8, "tomorrowio": 9},
-    "air_quality": {"openmeteo": 1, "openweathermap": 2, "weatherbit": 3,
-                    "weatherapi": 4, "tomorrowio": 5, "accuweather": 6},
-    "astronomy":   {"openmeteo": 1, "weatherapi": 2, "worldweatheronline": 3},
+                    "visualcrossing": 7, "weatherapi": 8, "tomorrowio": 9,
+                    "gdacs": 10, "eccc": 11, "metno": 12},
+    "air_quality": {"airnow": 1, "waqi": 2, "openaq": 3, "openmeteo": 4,
+                    "iqair": 5, "openweathermap": 6, "weatherbit": 7,
+                    "weatherapi": 8, "tomorrowio": 9, "accuweather": 10,
+                    "purpleair": 11},
+    "astronomy":   {"sunrisesunset": 1, "openmeteo": 2, "weatherapi": 3,
+                    "worldweatheronline": 4},
     "historical":  {"openmeteo": 1, "visualcrossing": 2, "weatherbit": 3,
-                    "weatherapi": 4, "worldweatheronline": 5, "weatherstack": 6},
+                    "weatherapi": 4, "worldweatheronline": 5, "weatherstack": 6,
+                    "nasapower": 7},
     "marine":      {"stormglass": 1, "nws": 2, "openmeteo": 3,
                     "worldweatheronline": 4},
-    "nowcast":     {"pirateweather": 1, "meteomatics": 2, "openmeteo": 3},
+    "nowcast":     {"pirateweather": 1, "meteomatics": 2, "openmeteo": 3, "metno": 4},
+    # Air-quality-only / specialist capabilities added this session.
+    "uv":          {"openmeteo": 1, "currentuvindex": 2},
+    "pollen":      {"openmeteo": 1},
+    "wildfire":    {"nifc": 1, "firms": 2},
+    "space_weather": {"swpc": 1},
+    "tides":       {"noaa_coops": 1, "tidecheck": 2},
 }
 
 
@@ -103,6 +120,14 @@ DEFAULT_RELIABILITY: dict[str, dict[str, int]] = {
 # false positives on words like "iterate".
 _RL_TOKEN_HINTS = ("429", "rate limit", "ratelimit", "too many requests",
                    "quota exceeded")
+
+# Exception types that signal a bug in the PROVIDER's own code (constructing a
+# frozen dataclass wrong, a missing attribute, a bad key/index) rather than a
+# transient upstream failure.  The dispatcher still falls through on these (so
+# one buggy provider can't take the bot down), but logs them at ERROR so the
+# defect surfaces instead of hiding behind the normal "provider unavailable".
+_BUG_EXC_TYPES = (TypeError, AttributeError, KeyError, IndexError, NameError,
+                  dataclasses.FrozenInstanceError)
 
 
 def _is_rate_limit_error(e: BaseException) -> bool:
@@ -355,6 +380,19 @@ class Dispatcher:
                 etype = type(e).__name__
                 is_rate_limit = _is_rate_limit_error(e)
                 rp.health.record_failure(rate_limited=is_rate_limit)
+                if isinstance(e, HTTPError) and e.status in (401, 403):
+                    # Deterministic auth/entitlement failure — trip the breaker
+                    # now so we stop burning a request per dispatch on a known-
+                    # bad key (it still re-probes after the cooldown).
+                    rp.health.mark_auth_failure()
+                if isinstance(e, _BUG_EXC_TYPES):
+                    # Provider code defect, not an upstream outage — log loudly
+                    # so it doesn't hide behind the normal fallthrough.
+                    log.error(
+                        "dispatch_bug provider=%s capability=%s err=%s:%s "
+                        "(provider code defect — fix the provider)",
+                        pid, capability, etype, _redact(e),
+                    )
                 # Structured, single-line, grep-friendly failure log.
                 # We deliberately *don't* log args/kwargs (lat/lon/loc
                 # are not secret but URL params can include API keys,

@@ -75,10 +75,9 @@ _CB_CLOSED = "closed"
 _CB_OPEN = "open"
 _CB_HALF_OPEN = "half_open"
 
-# TODO(_dispatch.py): before invoking a provider, check
-#   ``health_registry.get(pid).is_callable()`` and skip the provider if
-#   it returns False.  The breaker tripping is already logged here, so
-#   the dispatcher just needs to honour the gate.
+# The dispatcher honours this gate: it calls
+# ``health_registry.get(pid).is_callable()`` before invoking each provider
+# and skips it when the breaker is open (see ``Dispatcher.dispatch``).
 
 
 def format_health_score(score: float) -> str:
@@ -183,9 +182,8 @@ class ProviderHealth:
         return (1.0 - t) * _COLD_DEFAULT + t * live_score
 
     # ── circuit breaker ─────────────────────────────────────────────
-    # The dispatcher should call ``is_callable()`` before invoking the
-    # provider.  Wiring is left for the dispatch agent — this file
-    # only exposes the API.  See `# TODO(_dispatch.py)` below.
+    # The dispatcher calls ``is_callable()`` before invoking the provider
+    # and skips it when the breaker is open (see ``Dispatcher.dispatch``).
     #
     # State transitions:
     #   closed → open:       cb_threshold consecutive failures within cb_window
@@ -304,6 +302,26 @@ class ProviderHealth:
                 self.rate_limit_last_ts = now
             # Circuit breaker — may trip closed → open or half_open → open.
             self._cb_on_failure_locked(now)
+
+    def mark_auth_failure(self) -> None:
+        """Trip the breaker immediately on an auth/permission error (401/403).
+
+        A bad or unentitled API key fails deterministically on every call, so
+        rather than retrying it on every request (tripping only after the
+        normal consecutive-failure threshold), open the breaker now and log
+        loudly.  The breaker still re-probes after its cooldown, so the
+        provider recovers on its own once the key is fixed/reconfigured.
+        """
+        with self._lock:
+            now = time.time()
+            if self.cb_state != _CB_OPEN:
+                log.error(
+                    "provider[%s]: auth/permission error (401/403) — opening "
+                    "circuit (check the API key/entitlement); re-probes after "
+                    "%.0fs", self.provider_id, self.cb_cooldown)
+            self.cb_state = _CB_OPEN
+            self.cb_opened_at = now
+            self.cb_consecutive_failures = self.cb_threshold
 
     def summary(self) -> str:
         """Human-readable health summary for status/debug output."""

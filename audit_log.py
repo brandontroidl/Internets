@@ -270,6 +270,11 @@ class AuditLog:
                 log.error("audit_log: write failed: %s", type(e).__name__)
                 raise
             self._tip = this_hash
+            try:
+                from metrics import registry as _mreg  # noqa: PLC0415
+                _mreg.audit_records_total.inc()
+            except Exception:  # noqa: BLE001
+                pass  # nosec B110: best-effort cleanup
             return this_hash
 
     def verify(self) -> tuple[bool, int]:

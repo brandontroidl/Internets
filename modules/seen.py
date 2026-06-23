@@ -15,12 +15,13 @@ import json
 import logging
 import os
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.seen")
 
@@ -249,20 +250,21 @@ class SeenModule(BotModule):
             snapshot = dict(self._seen)
             self._dirty = False
 
-        tmp = self._file.with_suffix(self._file.suffix + ".tmp")
+        # Unique temp name in the same dir (mkstemp is 0o600 and collision-
+        # free, unlike a fixed ".tmp") + unlink-on-error, so a failed or
+        # racing write never leaves a stale/world-readable file behind.
+        # os.replace moves the inode, so the final file keeps the 0o600 mode.
+        fd, tmp = tempfile.mkstemp(dir=str(self._file.parent),
+                                   prefix=self._file.name + ".", suffix=".tmp")
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, ensure_ascii=False)
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
             os.replace(tmp, self._file)
+        except Exception as e:
             try:
-                os.chmod(self._file, 0o600)
+                os.unlink(tmp)
             except OSError:
                 pass
-        except Exception as e:
             log.warning(f"seen: flush failed: {e!r}")
             # Re-mark dirty so we retry next interval
             with self._lock:
@@ -344,7 +346,7 @@ class SeenModule(BotModule):
         self.bot.privmsg(reply_to, self._format_entry(entry))
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}seen <nick>             When was <nick> last seen"]
+        return [help_row(prefix, "seen <nick>", "When was <nick> last seen")]
 
 
 def setup(bot: object) -> SeenModule:

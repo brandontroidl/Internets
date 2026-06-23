@@ -7,7 +7,30 @@ from configparser import ConfigParser
 import pytest
 
 import secret_store
-from modules.base import BotModule, cred, _PLACEHOLDER_MARKERS
+from modules.base import BotModule, cred, strip_ctrl, _PLACEHOLDER_MARKERS
+
+
+# ── strip_ctrl(): the shared IRC-output sanitizer ───────────────────────
+
+class TestStripCtrl:
+    def test_strips_full_c0_range_and_del(self):
+        # CR/LF/NUL (injection) + the formatting/escape bytes the old
+        # per-module blocklist missed: bold/color/reverse/ESC/BEL.
+        raw = "a\r\nb\x00c\x02d\x03e\x16f\x1bg\x07h\x7fi"
+        out = strip_ctrl(raw)
+        assert out == "abcdefghi"
+        for ch in ("\x00", "\r", "\n", "\x02", "\x03", "\x16", "\x1b", "\x07", "\x7f"):
+            assert ch not in out
+
+    def test_keeps_printable_and_unicode(self):
+        assert strip_ctrl("Café — 北京 90%") == "Café — 北京 90%"
+
+    def test_coerces_non_str(self):
+        assert strip_ctrl(None) == ""
+        assert strip_ctrl(42) == "42"
+
+    def test_caps_length(self):
+        assert len(strip_ctrl("x" * 1000, max_len=200)) == 200
 
 
 # ── _PLACEHOLDER_MARKERS sanity ─────────────────────────────────────────

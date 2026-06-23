@@ -8,7 +8,7 @@ from urllib.parse import urlparse, urlunparse, urljoin
 
 import requests
 from requests.adapters import HTTPAdapter
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.urls")
 
@@ -364,20 +364,8 @@ def _safe_request(method: str, url: str, ua: str) -> requests.Response | None:
             last_session.close()
 
 
-def _strip_ctrl(s: str) -> str:
-    """Strip CR/LF/NUL/IRC-formatting bytes from upstream-derived strings.
-
-    Anything we splice into an IRC line that came from a third party (a
-    redirect Location header, an is.gd error message, a Google Translate
-    payload, an IP-API response) is untrusted: it can carry \r\n to inject
-    a second IRC command, or IRC color/bold/reverse codes to spoof bot
-    output.  Strip the lot before we hand it to ``privmsg``.
-    """
-    return "".join(
-        ch for ch in s
-        if ch not in ("\r", "\n", "\x00", "\x01", "\x02", "\x03",
-                      "\x04", "\x0f", "\x16", "\x1d", "\x1f")
-    )
+def _strip_ctrl(s: str, max_len: int = 10_000) -> str:
+    return strip_ctrl(s, max_len)
 
 
 def _shorten_sync(url: str, ua: str) -> str:
@@ -465,8 +453,8 @@ class UrlsModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}shorten <url>          Shorten a URL via is.gd",
-            f"  {prefix}expand/.unshorten <url> Expand a shortened URL",
+            help_row(prefix, "shorten <url>", "Shorten a URL via is.gd"),
+            help_row(prefix, "expand/.unshorten <url>", "Expand a shortened URL"),
         ]
 
 

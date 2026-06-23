@@ -12,19 +12,15 @@ from __future__ import annotations
 
 import logging
 from urllib.parse import quote
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.qr")
 
 _MAX_INPUT = 1000
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 class QRModule(BotModule):
@@ -55,7 +51,7 @@ class QRModule(BotModule):
         self.bot.privmsg(reply_to, _strip_ctrl(url))
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}qr <text>             QR-code image URL (max 1000 chars)"]
+        return [help_row(prefix, "qr <text>", "QR-code image URL (max 1000 chars)")]
 
 
 def setup(bot: object) -> QRModule:

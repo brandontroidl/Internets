@@ -15,7 +15,7 @@ import logging
 import time
 from typing import Any
 
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.health")
 
@@ -80,10 +80,10 @@ class HealthModule(BotModule):
                 f"{nick}: .health is admin-only — try .uptime instead.")
             return
 
-        # Replies go via notice to the requester to keep channel noise
-        # down; if they invoked it in PM, that's where it lands anyway.
-        target = nick if not reply_to.startswith(("#", "&", "+", "!")) else reply_to
-        send = lambda msg: self.bot.privmsg(target, msg)
+        # Admin diagnostics are private: preply() routes them as a NOTICE to
+        # the requester when invoked in a channel (and a privmsg in PM), so
+        # provider quotas / call counts never spill into the public channel.
+        send = lambda msg: self.bot.preply(nick, reply_to, msg)
 
         # 1. Uptime ────────────────────────────────────────────────
         up = _fmt_duration(time.time() - self._started_at)
@@ -137,6 +137,15 @@ class HealthModule(BotModule):
         send(f"[health] store dirty: locations={dirty_loc} "
              f"channels={dirty_chan} users={dirty_user}")
 
+        # 6. Geocode cache (Nominatim ToS visibility) ─────────────
+        try:
+            from .geocode import geocode_cache_stats
+            g = geocode_cache_stats()
+            send(f"[health] geocode cache: size={g['size']} hits={g['hits']} "
+                 f"misses={g['misses']} evictions={g['evictions']}")
+        except Exception:  # noqa: BLE001
+            pass  # nosec B110: best-effort cleanup
+
         # 6. Authed admins ─────────────────────────────────────────
         authed = _safe(lambda: len(self.bot._authed), None)
         send(f"[health] authed admins: "
@@ -177,8 +186,8 @@ class HealthModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}health           Per-subsystem health snapshot  [admin]",
-            f"  {prefix}uptime           Show bot uptime",
+            help_row(prefix, "health", "Per-subsystem health snapshot  [admin]"),
+            help_row(prefix, "uptime", "Show bot uptime"),
         ]
 
 

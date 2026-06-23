@@ -161,12 +161,10 @@ class IRCBot(AdminCommandsMixin):
     _READ_TIMEOUT        = 300    # seconds — read inactivity → reconnect
     _PING_INTERVAL       = 90     # seconds between client-side PINGs
     _PONG_TIMEOUT        = 240    # seconds without a PONG → link is dead
-    _PONG_MAX_PAYLOAD    = 400    # bytes — guard against oversized PONGs
     _NICKSERV_WAIT_TICKS = 40     # 40 * _NICKSERV_TICK = 10 s total
     _NICKSERV_TICK       = 0.25   # seconds between identify polls
     _SHUTDOWN_DRAIN_S    = 2.0    # grace period for sender to flush QUIT
     _UNEXPECTED_SLEEP_S  = 5.0    # back-off on unexpected main-loop errors
-    _MAX_PONG_LEN        = 400    # bytes — cap PING/PONG payload
 
     # Precompiled regex for _process() hot path.
     _RE_CAP       = re.compile(r"(?::\S+ )?CAP \S+ (\S+)(?: :?(.*))?")
@@ -784,10 +782,17 @@ class IRCBot(AdminCommandsMixin):
     # ── IRC line processing ──────────────────────────────────────────
 
     def _process(self, line: str) -> None:
+        # Strip IRCv3 message tags first so the PING/PONG checks (and every
+        # handler after them) still match when the server prefixes a
+        # `@time=...` tag block — otherwise a tagged PING goes unanswered
+        # (eventual ping-timeout disconnect) and a tagged PONG never refreshes
+        # liveness, causing spurious reconnects on servers we negotiate
+        # server-time with.
+        line = strip_tags(line)
         if line.startswith("PING"):
             payload = line.split(":", 1)[1] if ":" in line else line.split(" ", 1)[-1]
             # Test BUG-050 inspects the source for the literal [:400] slice —
-            # keep it; _MAX_PONG_LEN documents the value for humans.
+            # keep the literal so that test stays green.
             self.send(f"PONG :{payload[:400]}", priority=0); return
         # Inbound PONG — the server answered our keepalive PING; mark the
         # link live.  Command is at index 0 (`PONG ...`) or 1 (`:srv PONG`).
@@ -795,7 +800,6 @@ class IRCBot(AdminCommandsMixin):
         if _p[0] == "PONG" or (len(_p) > 1 and _p[1] == "PONG"):
             self._last_pong = time.monotonic()
             return
-        line = strip_tags(line)
         # Shadow-ban filter: if the line's prefix nick is shadow-banned,
         # skip the module on_raw fanout so .seen / .tell / etc. don't
         # record them.  Bot-internal handlers (CAP, numerics, membership,
@@ -1263,6 +1267,7 @@ class IRCBot(AdminCommandsMixin):
             _LOG_SIGNAL.error("event=rehash_failed err=%s", e)
             return
         # Clear admin sessions: secrets may have changed.
+        n = 0
         with self._auth_lock:
             n = len(self._authed)
             self._authed.clear()

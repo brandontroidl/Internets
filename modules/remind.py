@@ -31,7 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.remind")
 
@@ -328,7 +328,7 @@ class RemindModule(BotModule):
             self.bot.privmsg(
                 reply_to,
                 f"{nick}: usage: {p}remind <when> <message>  "
-                f"(e.g. 30s, 5m, 1h30m, tomorrow, tonight, 14:30, 2026-05-20T18:00)",
+                f"(e.g. 30s, 5m, 1h30m, tomorrow, tonight, 14:30, 2026-05-20T18:00 — clock times are UTC)",
             )
             return
 
@@ -469,9 +469,9 @@ class RemindModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}remind <when> <msg>    Schedule a reminder (30s, 5m, 1h30m, tonight, 14:30, ISO)",
-            f"  {prefix}remind-list            List your pending reminders",
-            f"  {prefix}remind-cancel <N>      Cancel reminder #N",
+            help_row(prefix, "remind <when> <msg>", "Schedule a reminder (30s, 5m, 1h30m, tonight, 14:30 UTC, ISO)"),
+            help_row(prefix, "remind-list", "List your pending reminders"),
+            help_row(prefix, "remind-cancel <N>", "Cancel reminder #N"),
         ]
 
 

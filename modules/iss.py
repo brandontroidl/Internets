@@ -12,32 +12,28 @@ import json
 import logging
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.iss")
 
 _NOW = "http://api.open-notify.org/iss-now.json"
 _PEOPLE = "http://api.open-notify.org/astros.json"
 _MAX_BODY_BYTES = 16 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _get_json(url: str, ua: str) -> dict | None:
     try:
-        r = requests.get(url, headers={"User-Agent": ua},
-                         timeout=8, stream=True)
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        with requests.get(url, headers={"User-Agent": ua},
+                          timeout=8, stream=True) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except (requests.RequestException, ValueError):
         return None
 
@@ -85,7 +81,7 @@ class IssModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}iss                     ISS location + current crew"]
+        return [help_row(prefix, "iss", "ISS location + current crew")]
 
 
 def setup(bot: object) -> IssModule:

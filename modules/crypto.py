@@ -25,21 +25,17 @@ import logging
 from typing import Any
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.crypto")
 
 _SEARCH_URL = "https://api.coingecko.com/api/v3/search"
 _PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 _MAX_BODY_BYTES = 256 * 1024  # search responses can be sizeable
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _fmt_marketcap(n: float) -> str:
@@ -67,17 +63,17 @@ def _fmt_price(p: float) -> str:
 
 def _get_json(url: str, params: dict[str, str], ua: str) -> Any | None:
     try:
-        r = requests.get(
+        with requests.get(
             url, params=params,
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=10, stream=True,
-        )
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            log.warning("crypto: response too large from %s", url)
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        ) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                log.warning("crypto: response too large from %s", url)
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except requests.RequestException as e:
         log.warning(f"crypto request: {e}")
         return None
@@ -192,7 +188,7 @@ class CryptoModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}gecko / .cg <symbol>     Crypto spot price + 24h change via CoinGecko",
+            help_row(prefix, "gecko/.cg <symbol>", "Crypto spot price + 24h change via CoinGecko"),
         ]
 
 

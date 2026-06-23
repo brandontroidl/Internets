@@ -72,10 +72,6 @@ class _MarineOnlyProvider:
         return "marine-ok"
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
-
-
 # ── force_provider ──────────────────────────────────────────────────────
 
 class TestForceProvider:
@@ -234,6 +230,47 @@ class TestDefaultReliability:
         assert "weatherbit" in DEFAULT_RELIABILITY["current"]
         assert "weatherbit" in DEFAULT_RELIABILITY["forecast"]
 
+    def test_airnow_top_purpleair_bottom_for_air_quality(self):
+        # AirNow (authoritative US EPA) leads air_quality; PurpleAir
+        # (crowdsourced) ranks last behind the model/observation sources.
+        aq = DEFAULT_RELIABILITY["air_quality"]
+        assert aq["airnow"] == 1
+        assert aq["purpleair"] == max(aq.values())
+        assert aq["airnow"] < aq["openmeteo"]
+
+    def test_new_capability_tables_present(self):
+        # The five capabilities added this session must each have a table.
+        for cap in ("uv", "pollen", "wildfire", "space_weather", "tides"):
+            assert cap in DEFAULT_RELIABILITY and DEFAULT_RELIABILITY[cap]
+
+    def test_sunrisesunset_leads_astronomy(self):
+        # SunriseSunset.io returns the full moon+twilight set, so it leads.
+        assert DEFAULT_RELIABILITY["astronomy"]["sunrisesunset"] == 1
+
+    def test_new_air_quality_and_alert_sources_ranked(self):
+        assert DEFAULT_RELIABILITY["air_quality"]["waqi"] == 2
+        assert "openaq" in DEFAULT_RELIABILITY["air_quality"]
+        assert "gdacs" in DEFAULT_RELIABILITY["alerts"]
+        assert "eccc" in DEFAULT_RELIABILITY["alerts"]
+        assert "nasapower" in DEFAULT_RELIABILITY["historical"]
+
+    def test_metno_ranked_for_its_capabilities(self):
+        # metno was registered but absent from every map (silent rank-99).
+        for cap in ("current", "forecast", "hourly", "alerts", "nowcast"):
+            assert "metno" in DEFAULT_RELIABILITY[cap], f"metno missing from {cap}"
+
+    def test_every_registered_capability_is_ranked(self):
+        # Every capability a registered provider supports must appear in that
+        # capability's reliability map, or it silently sorts to rank-99.
+        from configparser import ConfigParser
+        configure(ConfigParser())
+        for cap, pids in global_dispatcher.capabilities().items():
+            table = DEFAULT_RELIABILITY.get(cap, {})
+            for pid in pids:
+                assert pid in table, (
+                    f"{pid} supports {cap!r} but is absent from "
+                    f"DEFAULT_RELIABILITY[{cap!r}]")
+
     def test_nws_is_top_for_us_capabilities(self):
         for cap in ("current", "forecast", "hourly", "alerts"):
             assert DEFAULT_RELIABILITY[cap]["nws"] == 1, (
@@ -265,9 +302,9 @@ class TestProviderRegistration:
     def test_weatherbit_registered_as_factory(self):
         assert "weatherbit" in _PROVIDER_FACTORIES
 
-    def test_factory_count_is_14(self):
-        # Sanity guard for the doc claim "14 provider packages".
-        assert len(_PROVIDER_FACTORIES) == 14
+    def test_factory_count_is_30(self):
+        # Sanity guard for the doc claim "30 provider packages".
+        assert len(_PROVIDER_FACTORIES) == 30
 
     def test_known_provider_set(self):
         expected = {
@@ -276,6 +313,14 @@ class TestProviderRegistration:
             "weatherbit", "weatherapi", "pirateweather",
             "stormglass", "tomorrowio", "worldweatheronline",
             "weatherstack",
+            # Air-quality-only providers.
+            "airnow", "purpleair", "waqi", "openaq", "iqair",
+            # General no-key fallback.
+            "metno",
+            # Specialist / single-capability providers.
+            "sunrisesunset", "currentuvindex", "gdacs", "eccc",
+            "nasapower", "nifc", "firms", "swpc",
+            "tidecheck", "noaa_coops",
         }
         assert set(_PROVIDER_FACTORIES) == expected
 
@@ -370,3 +415,27 @@ class TestGlobalDispatch:
         configure(cfg2)
 
         assert global_dispatcher.provider_ids == ["nws"]
+
+
+# ── auth-failure (401/403) handling ─────────────────────────────────────
+
+class TestAuthFailure:
+    def test_401_trips_breaker_and_falls_through(self):
+        from weather_providers._http import HTTPError
+        from weather_providers._health import health_registry
+        d = Dispatcher()
+        bad = _StubProvider(raises=HTTPError("unauthorized", status=401))
+        good = _StubProvider(result="ok")
+        # Unique ids so the global health registry isn't shared with other tests.
+        d.register(bad, "authbad")
+        d.register(good, "authgood")
+
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out == "ok"                                  # fell through to good
+        assert health_registry.get("authbad").is_callable() is False  # breaker open
+
+        # The open breaker means the bad provider is skipped, not retried.
+        before = bad.calls
+        out2 = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out2 == "ok"
+        assert bad.calls == before                          # not called again

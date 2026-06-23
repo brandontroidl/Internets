@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.imdb")
 
@@ -17,19 +17,19 @@ def _lookup_sync(title: str, key: str, ua: str) -> str:
             timeout=10,
         )
         if d.get("Response") != "True":
-            return f"nothing found for '{title}'"
-        rating = d.get("imdbRating", "N/A")
-        votes = d.get("imdbVotes", "N/A")
+            return f"nothing found for '{strip_ctrl(title)}'"
+        rating = strip_ctrl(d.get("imdbRating", "N/A"))
+        votes = strip_ctrl(d.get("imdbVotes", "N/A"))
         return (
-            f"\x02{d['Title']}\x02 [{d.get('Year', '?')}] "
-            f"Rated {d.get('Rated', 'N/A')} | "
+            f"\x02{strip_ctrl(d['Title'])}\x02 [{strip_ctrl(d.get('Year', '?'))}] "
+            f"Rated {strip_ctrl(d.get('Rated', 'N/A'))} | "
             f"\x02Rating\x02 {rating}/10, {votes} votes | "
-            f"\x02Genre\x02 {d.get('Genre', 'N/A')} | "
-            f"\x02Director\x02 {d.get('Director', 'N/A')} | "
-            f"\x02Actors\x02 {d.get('Actors', 'N/A')} | "
-            f"\x02Runtime\x02 {d.get('Runtime', 'N/A')} | "
-            f"\x02Plot\x02 {d.get('Plot', 'N/A')} | "
-            f"https://www.imdb.com/title/{d.get('imdbID', '')}/"
+            f"\x02Genre\x02 {strip_ctrl(d.get('Genre', 'N/A'))} | "
+            f"\x02Director\x02 {strip_ctrl(d.get('Director', 'N/A'))} | "
+            f"\x02Actors\x02 {strip_ctrl(d.get('Actors', 'N/A'))} | "
+            f"\x02Runtime\x02 {strip_ctrl(d.get('Runtime', 'N/A'))} | "
+            f"\x02Plot\x02 {strip_ctrl(d.get('Plot', 'N/A'))} | "
+            f"https://www.imdb.com/title/{strip_ctrl(d.get('imdbID', ''))}/"
         )
     except Exception as e:
         log.warning(f"OMDb lookup: {e}")
@@ -68,7 +68,7 @@ class ImdbModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}imdb <title>           Movie/TV lookup  e.g. {prefix}imdb The Matrix"]
+        return [help_row(prefix, "imdb <title>", f"Movie/TV lookup  e.g. {prefix}imdb The Matrix")]
 
 
 def setup(bot: object) -> ImdbModule:

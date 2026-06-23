@@ -14,20 +14,16 @@ from __future__ import annotations
 
 import logging
 import textwrap
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.cowsay")
 
 _MAX_INPUT = 200
 _WRAP = 40
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 _COW = (
@@ -94,7 +90,7 @@ class CowsayModule(BotModule):
             self.bot.privmsg(reply_to, _strip_ctrl(line))
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}cowsay <text>         ASCII cow speaks <text>"]
+        return [help_row(prefix, "cowsay <text>", "ASCII cow speaks <text>")]
 
 
 def setup(bot: object) -> CowsayModule:

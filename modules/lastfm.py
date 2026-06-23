@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.lastfm")
 
@@ -38,7 +38,7 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
             timeout=10,
         )
         if "error" in data:
-            return f"{data.get('message', 'user not found')}"
+            return f"{strip_ctrl(data.get('message', 'user not found'))}"
         user = data["user"]
 
         # Get recent tracks
@@ -54,10 +54,10 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
         parts: list[str] = []
         rn = user.get("realname", "")
         if rn:
-            parts.append(rn)
+            parts.append(strip_ctrl(rn))
         country = user.get("country", "")
         if country and country != "None":
-            parts.append(country)
+            parts.append(strip_ctrl(country))
         info_str = f" [{', '.join(parts)}]" if parts else ""
 
         plays = _fmt_thousand(int(user.get("playcount", 0)))
@@ -71,8 +71,8 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
             tracks = [tracks]
         if tracks:
             t = tracks[0]
-            artist = t.get("artist", {}).get("#text", "?")
-            name = t.get("name", "?")
+            artist = strip_ctrl(t.get("artist", {}).get("#text", "?"))
+            name = strip_ctrl(t.get("name", "?"))
             now_playing = t.get("@attr", {}).get("nowplaying", "false") == "true"
             if now_playing:
                 track_str = f" | \x02Now playing\x02 {artist} — {name}"
@@ -81,9 +81,9 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
                 track_str = f" | \x02Latest\x02 {artist} — {name} ({ago} ago)"
 
         return (
-            f"\x02{user['name']}\x02{info_str} | "
+            f"\x02{strip_ctrl(user['name'])}\x02{info_str} | "
             f"\x02Plays\x02 {plays} since {reg_date} | "
-            f"\x02Link\x02 {user.get('url', '')}"
+            f"\x02Link\x02 {strip_ctrl(user.get('url', ''))}"
             f"{track_str}"
         )
     except Exception as e:
@@ -123,7 +123,7 @@ class LastfmModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}lastfm <user>          Last.fm profile + now playing"]
+        return [help_row(prefix, "lastfm <user>", "Last.fm profile + now playing")]
 
 
 def setup(bot: object) -> LastfmModule:

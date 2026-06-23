@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.steam")
 
@@ -85,7 +85,7 @@ def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:
         log.warning(f"Steam status: {e}")
         return "lookup failed"
 
-    name = d.get("personaname", "?")
+    name = strip_ctrl(d.get("personaname", "?"))
     state = d.get("personastate", 0)
     label, color = _PERSONA_STATES.get(state, ("UNKNOWN", "\x0314"))
     status_str = f"{color}{label}\x03"
@@ -101,7 +101,7 @@ def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:
         games = gdata.get("games", [])
         total_hrs = sum(g.get("playtime_forever", 0) for g in games) / 60
         top = max(games, key=lambda g: g.get("playtime_forever", 0))
-        top_name = top.get("name", f"appid {top.get('appid', '?')}")
+        top_name = strip_ctrl(top.get("name", f"appid {top.get('appid', '?')}"))
         top_hrs = top.get("playtime_forever", 0) / 60
         return (
             f"\x02{name}\x02 [{status_str}] | "
@@ -118,11 +118,11 @@ def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:
     else:
         gid = d.get("gameid")
         if gid:
-            gname = d.get("gameextrainfo", f"appid {gid}")
+            gname = strip_ctrl(d.get("gameextrainfo", f"appid {gid}"))
             msg += f" | \x02Playing\x02 {gname}"
             gsrv = d.get("gameserverip")
             if gsrv:
-                msg += f" on {gsrv}"
+                msg += f" on {strip_ctrl(gsrv)}"
         else:
             msg += " | not playing anything"
     return msg
@@ -241,14 +241,14 @@ class SteamModule(BotModule):
         if sid:
             self._ids[nick.lower()] = sid
             await asyncio.to_thread(self._save_ids)
-            self.bot.notice(nick, f"Steam ID registered — current persona: {display}")
+            self.bot.notice(nick, f"Steam ID registered — current persona: {strip_ctrl(display)}")
         else:
             self.bot.notice(nick, display)
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}steam [user/-g/-n nick]  Steam status/games",
-            f"  {prefix}regsteam <id/vanity>     Register your Steam ID",
+            help_row(prefix, "steam [user/-g/-n nick]", "Steam status/games"),
+            help_row(prefix, "regsteam <id/vanity>", "Register your Steam ID"),
         ]
 
 

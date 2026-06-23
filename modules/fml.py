@@ -7,7 +7,7 @@ import random
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 # Bandit B311 false-positive — picking which scraped quote to print is
 # not security-relevant, but routing through SystemRandom keeps scans
@@ -93,7 +93,9 @@ def _lookup_sync(ua: str) -> str:
         qid, text = _rng.choice(candidates)
         if len(text) > 400:
             text = text[:397] + "..."
-        return f"[fml #{qid}] {text}"
+        # Scraped quote text is third-party — strip IRC control bytes before
+        # it hits the channel.  qid is digits from the regex, so it's safe.
+        return f"[fml #{qid}] {strip_ctrl(text)}"
     except Exception as e:
         log.warning(f"FML lookup: {e}")
         return "fmylife.com is temporarily unavailable"
@@ -118,7 +120,7 @@ class FmlModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}fml                    Random FMyLife quote"]
+        return [help_row(prefix, "fml", "Random FMyLife quote")]
 
 
 def setup(bot: object) -> FmlModule:

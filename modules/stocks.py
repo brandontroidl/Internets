@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row
 
 log = logging.getLogger("internets.stocks")
 
@@ -281,8 +281,8 @@ class StocksModule(BotModule):
     def help_lines(self, prefix: str) -> list[str]:
         """Return stocks help text."""
         return [
-            f"  {prefix}stock/.s <symbol>    Stock quote     e.g. {prefix}s AAPL",
-            f"  {prefix}crypto <symbol>      Crypto price    e.g. {prefix}crypto BTC",
+            help_row(prefix, "stock/.s <symbol>", f"Stock quote     e.g. {prefix}s AAPL"),
+            help_row(prefix, "crypto <symbol>", f"Crypto price    e.g. {prefix}crypto BTC"),
         ]
 
 
