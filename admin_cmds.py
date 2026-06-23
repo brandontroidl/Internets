@@ -819,7 +819,7 @@ class AdminCommandsMixin:
         self._shadow_bans.add(tlow)
         if reason:
             self._shadow_ban_reasons[tlow] = reason
-        self._save_shadow_bans()
+        await asyncio.to_thread(self._save_shadow_bans)
         self.preply(nick, reply_to,
             f"\x0304shadow-banned\x03 \x02{target}\x02 — silently ignored from now on.")
         log.info(f"Shadow-ban added by {nick}: {target!r} reason={reason!r}")
@@ -838,7 +838,7 @@ class AdminCommandsMixin:
             return
         self._shadow_bans.discard(tlow)
         self._shadow_ban_reasons.pop(tlow, None)
-        self._save_shadow_bans()
+        await asyncio.to_thread(self._save_shadow_bans)
         self.preply(nick, reply_to, f"\x0303unbanned\x03 \x02{target}\x02.")
         log.info(f"Shadow-unban by {nick}: {target!r}")
         self._audit(nick, "shadow-unban", target)

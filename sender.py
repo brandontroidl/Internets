@@ -18,6 +18,19 @@ import threading
 log = logging.getLogger("internets.sender")
 
 
+def _bump_dropped() -> None:
+    """Best-effort: count an outbound message drop in the Prometheus metric.
+
+    Sender has no bot reference, so it touches the global registry directly;
+    a failure (metrics disabled / import issue) must never affect sending.
+    """
+    try:
+        from metrics import registry as _mreg  # noqa: PLC0415
+        _mreg.dropped_messages_total.inc()
+    except Exception:  # noqa: BLE001
+        pass  # nosec B110: best-effort cleanup
+
+
 class Sender:
     """Async priority send queue with token-bucket rate limiting.
 
@@ -88,6 +101,7 @@ class Sender:
                             f"Send queue full — evicted pri={evicted[0]} "
                             f"to make room for priority-0 traffic"
                         )
+                        _bump_dropped()
                         self._q.put_nowait(item)
                         return
                 except Exception as e:  # pragma: no cover — defensive
@@ -96,6 +110,7 @@ class Sender:
                 log.error("Send queue full — UNABLE to enqueue priority-0 message")
             else:
                 log.warning("Send queue full — dropping message")
+                _bump_dropped()
 
     def enqueue(self, msg: str, priority: int = 1) -> None:
         """Thread-safe enqueue.  Safe to call from any thread."""
