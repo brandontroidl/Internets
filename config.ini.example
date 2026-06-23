@@ -97,6 +97,10 @@ units = us
 ; registration order and a final tie-breaker after the dispatcher's
 ; accuracy ranks + live health scores.
 ;
+; This is an ORDERING, not an allowlist: listing a subset just puts those
+; first — every other supported provider still registers (after the listed
+; ones), so adding a provider never requires editing this line.
+;
 ; Providers register only when their credentials are present in
 ; [secrets] (nws + openmeteo are key-free and always available).
 ;

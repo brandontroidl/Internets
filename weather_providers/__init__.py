@@ -478,6 +478,14 @@ def configure(cfg: ConfigParser) -> None:
                            fallback=cfg.get("weather_providers", "priority", fallback="")).strip()
     if priority_str:
         order = [p.strip().lower() for p in priority_str.split(",") if p.strip()]
+        # provider_priority is an ORDERING preference (and a dispatch
+        # tie-breaker), NOT an allowlist.  Append every other known provider
+        # after the listed ones so providers added after this config file was
+        # written still register (they simply sort last).  Without this, a
+        # stale list silently disables whole capabilities — e.g. a config
+        # predating the air-quality/wildfire/space-weather/tides providers
+        # would never load them.
+        order += [p for p in _PROVIDER_FACTORIES if p not in order]
     else:
         order = list(_PROVIDER_FACTORIES.keys())
 

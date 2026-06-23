@@ -562,7 +562,9 @@ def _():
     cfg.set("weather_providers", "tomorrowio_key", "fake-key-2")
     wp.configure(cfg)
     providers = wp.get_providers()
-    assert providers == ["weatherapi", "tomorrowio", "openmeteo"]
+    # Listed providers register first, in order (unlisted keyless providers
+    # append after — priority is an ordering, not an allowlist).
+    assert providers[:3] == ["weatherapi", "tomorrowio", "openmeteo"]
 
 @test("configure: ignores unknown provider IDs")
 def _():
@@ -573,8 +575,10 @@ def _():
     cfg.set("weather_providers", "provider_priority", "nonexistent, openmeteo")
     wp.configure(cfg)
     providers = wp.get_providers()
-    assert len(providers) == 1
+    # Unknown IDs are skipped; openmeteo (listed) leads, and other keyless
+    # providers still register (priority is an ordering, not an allowlist).
     assert providers[0] == "openmeteo"
+    assert "nonexistent" not in providers
 
 @test("weather _format_current: produces valid output from WeatherResult")
 def _():

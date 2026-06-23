@@ -399,8 +399,10 @@ class TestGlobalDispatch:
         cfg.add_section("weather_providers")
         cfg.set("weather_providers", "provider_priority", "openmeteo")
         configure(cfg)
-        # Only openmeteo should be registered now.
-        assert global_dispatcher.provider_ids == ["openmeteo"]
+        # provider_priority is an ordering, not an allowlist: the listed
+        # provider registers first; unlisted keyless providers still append.
+        assert global_dispatcher.provider_ids[0] == "openmeteo"
+        assert "nws" in global_dispatcher.provider_ids
 
     def test_reconfigure_replaces_set(self):
         from configparser import ConfigParser
@@ -414,7 +416,9 @@ class TestGlobalDispatch:
         cfg2.set("weather_providers", "provider_priority", "nws")
         configure(cfg2)
 
-        assert global_dispatcher.provider_ids == ["nws"]
+        # Reconfigure rebuilds from scratch: nws now sorts first (its
+        # priority), replacing openmeteo as the lead provider.
+        assert global_dispatcher.provider_ids[0] == "nws"
 
 
 # ── auth-failure (401/403) handling ─────────────────────────────────────
