@@ -352,7 +352,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 
 | Command | Description |
 |---------|-------------|
-| `.sci [topic]` | STEM headlines (physics/cs/math/bio/astro/space) |
+| `.sci [topic]` | STEM headlines (26 feeds: all/ai/cs/tech/physics/math/bio/astro/space) |
 | `.sci read <N>` | Read item N from the last list (lead and link) |
 | `.sci sources` | List feed topics |
 | `.isprime <n>` | Primality test and next prime |

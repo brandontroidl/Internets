@@ -35,6 +35,7 @@ _LIST_TTL = 600.0       # per-channel "last list" lifetime (s)
 _CACHE_TTL = 120.0      # aggregate-fetch cache (s)
 _MAX_ITEMS = 6
 _PER_SOURCE = 2         # diversity: at most this many items from one feed
+_FETCH_CONCURRENCY = 8  # cap simultaneous feed fetches (protect the thread pool)
 
 # name -> (feed url, {topic tags})
 _FEEDS: dict[str, tuple[str, set[str]]] = {
@@ -50,6 +51,20 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "arXiv math":    ("https://rss.arxiv.org/rss/math",                    {"math"}),
     "arXiv q-bio":   ("https://rss.arxiv.org/rss/q-bio",                   {"bio"}),
     "arXiv astro":   ("https://rss.arxiv.org/rss/astro-ph",               {"astro", "space"}),
+    "New Scientist": ("https://www.newscientist.com/feed/home/",          {"all"}),
+    "Sci. American": ("https://www.scientificamerican.com/platform/syndication/rss/", {"all"}),
+    "Live Science":  ("https://www.livescience.com/feeds/all",            {"all"}),
+    "Eos":           ("https://eos.org/feed",                             {"all"}),
+    "MIT Tech Rev":  ("https://www.technologyreview.com/feed/",           {"all", "tech", "ai"}),
+    "The Register":  ("https://www.theregister.com/headlines.atom",       {"tech", "cs"}),
+    "IEEE Spectrum": ("https://spectrum.ieee.org/feeds/feed.rss",         {"tech", "cs", "physics"}),
+    "Ars Technica":  ("https://feeds.arstechnica.com/arstechnica/index",  {"tech"}),
+    "arXiv cs.AI":   ("https://rss.arxiv.org/rss/cs.AI",                  {"cs", "ai"}),
+    "arXiv cs.LG":   ("https://rss.arxiv.org/rss/cs.LG",                  {"cs", "ai"}),
+    "Physics World": ("https://physicsworld.com/feed/",                   {"physics"}),
+    "STAT News":     ("https://www.statnews.com/feed/",                   {"bio"}),
+    "Space.com":     ("https://www.space.com/feeds/all",                  {"space", "astro"}),
+    "NASA":          ("https://www.nasa.gov/feed/",                       {"space", "astro"}),
 }
 _TOPICS = sorted({t for _u, tags in _FEEDS.values() for t in tags})
 
@@ -234,8 +249,14 @@ class ScinewsModule(BotModule):
         if cached and now - cached[0] < _CACHE_TTL:
             return cached[1]
         feeds = [(name, url) for name, (url, tags) in _FEEDS.items() if topic in tags]
+        sem = asyncio.Semaphore(_FETCH_CONCURRENCY)
+
+        async def _fetch(name: str, url: str):
+            async with sem:
+                return await asyncio.to_thread(_fetch_one, name, url, self._ua)
+
         results = await asyncio.gather(
-            *[asyncio.to_thread(_fetch_one, name, url, self._ua) for name, url in feeds],
+            *[_fetch(name, url) for name, url in feeds],
             return_exceptions=True,
         )
         flat = [it for r in results if isinstance(r, list) for it in r]
@@ -318,7 +339,7 @@ class ScinewsModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            help_row(prefix, "sci [topic]", "STEM headlines (physics/cs/math/bio/astro/space)"),
+            help_row(prefix, "sci [topic]", "STEM headlines (all/ai/cs/tech/physics/math/bio/astro/space); .sci sources"),
             help_row(prefix, "sci read <N>", "Read item N from the last list (lead + link)"),
             help_row(prefix, "sci sources", "List feed topics"),
         ]
