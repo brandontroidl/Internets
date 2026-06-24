@@ -79,6 +79,8 @@ KNOWN_SECRETS: tuple[str, ...] = (
     "steam_key",
     "twitch_client_id", "twitch_client_secret",
     "brave_key",
+    # IP reputation (.ip / .rep) — optional; the command is keyless without it
+    "abuseipdb_key",
 )
 
 # Mapping: canonical secret name → (config.ini section, key)
@@ -123,6 +125,7 @@ CONFIG_LOCATIONS: dict[str, tuple[str, str]] = {
     "twitch_client_id":        ("twitch", "twitch_client_id"),
     "twitch_client_secret":    ("twitch", "twitch_client_secret"),
     "brave_key":               ("search", "brave_key"),
+    "abuseipdb_key":           ("ipintel", "abuseipdb_key"),
 }
 
 # Placeholders that mean "not set" — never migrated, never returned.
