@@ -81,6 +81,20 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "PortSwigger":   ("https://portswigger.net/research/rss",             {"sec", "pentest"}),
     "The Record":    ("https://therecord.media/feed/",                    {"sec"}),
     "Help Net Sec":  ("https://www.helpnetsecurity.com/feed/",            {"sec"}),
+    # deeper threat-intel / IR (your honeypot + DNSBL + AbuseIPDB wheelhouse)
+    "DFIR Report":   ("https://thedfirreport.com/feed/",                  {"sec", "pentest"}),
+    "Unit 42":       ("https://unit42.paloaltonetworks.com/feed/",        {"sec"}),
+    "Cisco Talos":   ("https://blog.talosintelligence.com/rss/",          {"sec"}),
+    "abuse.ch":      ("https://abuse.ch/rss/",                            {"sec"}),
+    # OpenBSD
+    "OpenBSD":       ("https://undeadly.org/cgi?action=rss",              {"bsd"}),
+    # AI / LLM / agents
+    "Simon Willison":("https://simonwillison.net/atom/everything/",       {"ai"}),
+    "Hugging Face":  ("https://huggingface.co/blog/feed.xml",             {"ai"}),
+    "OpenAI":        ("https://openai.com/news/rss.xml",                  {"ai"}),
+    "DeepMind":      ("https://deepmind.google/blog/rss.xml",             {"ai"}),
+    "Import AI":     ("https://importai.substack.com/feed",               {"ai"}),
+    "Latent Space":  ("https://www.latent.space/feed",                    {"ai"}),
 }
 _TOPICS = sorted({t for _u, tags in _FEEDS.values() for t in tags})
 
@@ -355,7 +369,7 @@ class ScinewsModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            help_row(prefix, "sci [topic]", "Science + infosec headlines (all/ai/cs/sec/pentest/tech/physics/...); .sci sources"),
+            help_row(prefix, "sci [topic]", "Science/infosec/AI/BSD headlines; topics via .sci sources"),
             help_row(prefix, "sci read <N>", "Read item N from the last list (lead + link)"),
             help_row(prefix, "sci sources", "List feed topics"),
         ]
