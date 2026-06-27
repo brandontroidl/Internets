@@ -1454,15 +1454,29 @@ def _():
     assert m and m.group(1).strip() == "hello world" and m.group(2) == "10"
     assert not _IDX_RE.match("noindex")
 
-@test("geocode: _COORD_RE accepts valid coordinates")
+@test("geocode: _parse_coords handles decimal, hemisphere, and DMS coordinates")
 def _():
-    from modules.geocode import _COORD_RE
-    m = _COORD_RE.match("40.7128, -74.0060")
-    assert m and float(m.group(1)) == 40.7128
-    m = _COORD_RE.match("-33.8688,151.2093")
-    assert m
-    assert not _COORD_RE.match("not coords")
-    assert not _COORD_RE.match("40.7128")
+    from modules.geocode import _parse_coords
+    def close(got, want):
+        return got is not None and abs(got[0]-want[0]) < 1e-3 and abs(got[1]-want[1]) < 1e-3
+    # decimal (comma and space separated)
+    assert close(_parse_coords("40.7128, -74.0060"), (40.7128, -74.0060))
+    assert close(_parse_coords("-33.8688,151.2093"), (-33.8688, 151.2093))
+    assert close(_parse_coords("39.8333 -98.5855"), (39.8333, -98.5855))
+    # hemisphere decimal (the case free-text mis-resolved to Creve Coeur MO),
+    # order-independent
+    assert close(_parse_coords("39°N 98°W"), (39.0, -98.0))
+    assert close(_parse_coords("N39 W98"), (39.0, -98.0))
+    assert close(_parse_coords("98W 39N"), (39.0, -98.0))
+    # DMS with minutes / seconds
+    assert close(_parse_coords("39°50'N 98°35'W"), (39.8333, -98.5833))
+    assert close(_parse_coords("34°30'15\"N 117°12'30\"W"), (34.5042, -117.2083))
+    # Not coordinates → None (place names, postal codes, bare ints, out-of-range)
+    assert _parse_coords("not coords") is None
+    assert _parse_coords("40.7128") is None
+    assert _parse_coords("91773") is None
+    assert _parse_coords("39 98") is None
+    assert _parse_coords("200,300") is None
 
 @test("geocode: _format_name handles US locations with state abbreviation")
 def _():
@@ -1734,6 +1748,24 @@ def _():
         g._nominatim_postal, g._zippo, g._get = orig_nom, orig_zippo, orig_get
     assert res is None            # free-text _get raised → no hit
     assert calls == []            # postal resolvers never called
+
+@test("weather: no saved location prompts for regloc instead of a default location")
+def _():
+    from modules.weather import WeatherModule
+    class FakeBot:
+        cfg = {"bot": {"command_prefix": ".", "default_location": "38.0,-97.0"}}
+        def loc_get(self, nick):
+            return None
+    res, err = WeatherModule(FakeBot())._resolve("bob", None)
+    assert res is None              # no silent fallback to a default point
+    assert err and "regloc" in err  # tells the user to register
+    assert "38" not in err          # the old Kansas default is not echoed
+    # A saved location is still honoured.
+    class SavedBot(FakeBot):
+        def loc_get(self, nick):
+            return "San Dimas CA"
+    res2, err2 = WeatherModule(SavedBot())._resolve("bob", None)
+    assert res2 == "San Dimas CA" and err2 is None
 
 @test("channels: _CHAN_RE validates IRC channel names")
 def _():

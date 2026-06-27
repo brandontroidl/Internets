@@ -64,7 +64,6 @@ oper_snomask =
 command_prefix = .
 api_cooldown = 10
 flood_cooldown = 3
-default_location = 38.0000,-97.0000
 locations_file = locations.json
 channels_file  = channels.json
 users_file     = users.json

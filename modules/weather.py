@@ -538,13 +538,12 @@ class WeatherModule(BotModule):
         saved = self.bot.loc_get(nick)
         if saved:
             return saved, None
-        # Fall back to the operator-configured default_location if set, so the
-        # bot answers .weather out of the box before anyone runs regloc.
-        default = self.bot.cfg["bot"].get("default_location", "").strip()
-        if default:
-            return default, None
+        # No default-location fallback: silently answering with an operator
+        # default (e.g. the geographic-centre point) confuses users who think
+        # it's their own weather.  Tell them to register instead.
         p = self.bot.cfg["bot"]["command_prefix"]
-        return None, f"{nick}: no location saved — use {p}regloc <city or zip> first."
+        return None, (f"{nick}: no saved location — set yours with "
+                      f"{p}regloc <city, zip, or coords>")
 
     async def _geo(self, nick: str, reply_to: str,
                    arg: str | None) -> tuple[float, float, str, str] | None:
@@ -840,7 +839,7 @@ class WeatherModule(BotModule):
             row("Air/Sky",  f"{p}aqi/.air  {p}uv/.uvi  {p}pollen/.allergy  {p}astro/.sun"),
             row("Hazards",  f"{p}alerts/.al  {p}wildfire/.fire  {p}space/.aurora"),
             row("Sea/Past", f"{p}marine/.sea  {p}tides/.tide  {p}history/.hist"),
-            row("Where",    f"city / ZIP / 'lat,lon';  {p}regloc saves yours;  add -n <nick> for someone else's"),
+            row("Where",    f"city / ZIP / postal+cc (08000 es) / 'lat,lon' / 39°N 98°W;  {p}regloc saves yours;  -n <nick> for another's"),
             row("Flags",    f"{n} providers active — force one with -<flag> (e.g. -nws -vc -aw);  {p}<cmd> -l lists them"),
             row("Try",      f"{p}w 90210   {p}aqi -an 67127   {p}f -vc Tokyo   {p}uv London   {p}tides -coops"),
             row("Admin",    f"{p}providers  provider health + capability chains  [admin]"),

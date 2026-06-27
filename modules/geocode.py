@@ -158,8 +158,26 @@ _STATE_ABBR: dict[str, str] = {
 # Patterns
 # ---------------------------------------------------------------------------
 
-_COORD_RE = re.compile(r"^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$")
 _USZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
+
+# Coordinate parsing — decimal (comma/space), hemisphere (39°N 98°W), and DMS.
+# Free-text Nominatim mangles the non-decimal forms ("39°N 98°W" resolves to a
+# random Missouri suburb), so _parse_coords normalises to signed decimal and the
+# exact point is reverse-geocoded instead.
+_COORD_DECIMAL_RE = re.compile(
+    r"^\s*([-+]?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*([-+]?\d{1,3}(?:\.\d+)?)\s*$")
+# Two degree[/minute/second] components, each carrying a hemisphere letter on
+# either side — required so the axis (N/S vs E/W) and sign are unambiguous.
+_COORD_DMS_RE = re.compile(
+    r"^\s*"
+    r"(?P<ah1>[NSEWnsew])?\s*(?P<ad>\d{1,3}(?:\.\d+)?)\s*[°ºd]?\s*"
+    r"(?:(?P<am>\d{1,2}(?:\.\d+)?)\s*['′m]\s*)?"
+    r"(?:(?P<asec>\d{1,2}(?:\.\d+)?)\s*[\"″]\s*)?(?P<ah2>[NSEWnsew])?"
+    r"[\s,]+"
+    r"(?P<bh1>[NSEWnsew])?\s*(?P<bd>\d{1,3}(?:\.\d+)?)\s*[°ºd]?\s*"
+    r"(?:(?P<bm>\d{1,2}(?:\.\d+)?)\s*['′m]\s*)?"
+    r"(?:(?P<bsec>\d{1,2}(?:\.\d+)?)\s*[\"″]\s*)?(?P<bh2>[NSEWnsew])?"
+    r"\s*$")
 
 # Postal-code classification (see _postal_kind).  The Canadian alphanumeric
 # and UK formats are globally unique, so they pin a country with zero
@@ -492,6 +510,58 @@ def _zippo_parse(data: object) -> tuple[float, float, str, str] | None:
     return (lat, lon, (name or city)[:_MAX_NAME_CHARS], cc)
 
 
+def _valid_latlon(lat: float, lon: float) -> tuple[float, float] | None:
+    """Return ``(lat, lon)`` if in range, else None (reject bad coordinates)."""
+    if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        return (lat, lon)
+    return None
+
+
+def _dms_to_deg(d: str, m: str | None, s: str | None) -> float:
+    """Degrees[+minutes/60+seconds/3600] as a positive decimal magnitude."""
+    val = float(d)
+    if m:
+        val += float(m) / 60.0
+    if s:
+        val += float(s) / 3600.0
+    return val
+
+
+def _parse_coords(query: str) -> tuple[float, float] | None:
+    """Parse a coordinate string to ``(lat, lon)`` signed decimal, or None.
+
+    Accepts decimal pairs (comma- or space-separated), hemisphere decimals
+    ("39°N 98°W", "N39 W98", either order), and DMS ("39°50'15\\"N 98°35'W").
+    Returns None for anything that isn't an unambiguous coordinate pair, so
+    place names and postal codes fall through to their own resolvers.  A bare
+    "39 98" (no comma, sign, or decimal point) is intentionally rejected as too
+    ambiguous to claim as coordinates.
+    """
+    query = query.strip()
+    m = _COORD_DECIMAL_RE.match(query)
+    if m and any(c in query for c in ",.+-"):
+        return _valid_latlon(float(m.group(1)), float(m.group(2)))
+    m = _COORD_DMS_RE.match(query)
+    if not m:
+        return None
+    ah = (m.group("ah1") or m.group("ah2") or "").lower()
+    bh = (m.group("bh1") or m.group("bh2") or "").lower()
+    # Require exactly one N/S component and one E/W component.
+    if not ah or not bh or (ah in "ns") == (bh in "ns"):
+        return None
+    av = _dms_to_deg(m.group("ad"), m.group("am"), m.group("asec"))
+    bv = _dms_to_deg(m.group("bd"), m.group("bm"), m.group("bsec"))
+    if ah in "ns":
+        (lat, lath), (lon, lonh) = (av, ah), (bv, bh)
+    else:
+        (lat, lath), (lon, lonh) = (bv, bh), (av, ah)
+    if lath == "s":
+        lat = -lat
+    if lonh == "w":
+        lon = -lon
+    return _valid_latlon(lat, lon)
+
+
 # ---------------------------------------------------------------------------
 # Display name formatting
 # ---------------------------------------------------------------------------
@@ -727,12 +797,13 @@ async def geocode(query: str, user_agent: str, *,
         return result
 
     # ---- Coordinate passthrough ------------------------------------------
-    m = _COORD_RE.match(query)
-    if m:
-        lat, lon = float(m.group(1)), float(m.group(2))
-        # Sanity-bound the coordinates before sending them upstream.
-        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
-            return _store(None)
+    # Decimal, hemisphere (39°N 98°W), and DMS forms, parsed deterministically
+    # so free-text can't mangle them (un-parsed, "39°N 98°W" → Creve Coeur MO).
+    # _parse_coords already range-validates, so an out-of-range pair returns
+    # None here and falls through rather than reverse-geocoding a bad point.
+    coords = _parse_coords(query)
+    if coords is not None:
+        lat, lon = coords
         try:
             with await asyncio.to_thread(
                 _get, "https://nominatim.openstreetmap.org/reverse",
