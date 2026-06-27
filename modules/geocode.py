@@ -387,8 +387,12 @@ def _postal_kind(s: str) -> str | None:
     """Classify a string as a postal code, or None if it isn't one.
 
     Returns ``"us"`` (ZIP+4 — unambiguously US), ``"ca"`` (Canadian
-    alphanumeric), ``"uk"`` (UK postcode), ``"num"`` (bare numeric, shared
-    across countries → home-first), or None (not a postal code → free-text).
+    alphanumeric), ``"uk"`` (UK postcode), ``"ie"`` / ``"jp"`` / ``"br"``
+    (distinctive Eircode / dashed-Japan / dashed-Brazil formats, each
+    country-unique), ``"num"`` (bare numeric, shared across countries →
+    home-first), or None (not a postal code → free-text).  The ``ie``/``jp``/
+    ``br`` kinds are also their ISO2 country code, so _resolve_postal pins them
+    directly.
     """
     s = s.strip()
     if _ZIP4_RE.match(s):
@@ -397,6 +401,12 @@ def _postal_kind(s: str) -> str | None:
         return "ca"
     if _UK_POSTAL_RE.match(s):
         return "uk"
+    if _IE_POSTAL_RE.match(s):
+        return "ie"
+    if _JP_POSTAL_RE.match(s):
+        return "jp"
+    if _BR_POSTAL_RE.match(s):
+        return "br"
     if _NUM_POSTAL_RE.match(s):
         return "num"
     return None
@@ -621,6 +631,9 @@ async def _resolve_postal(kind: str, code: str, hint: str | None,
                 or await _zippo("us", base, user_agent))
     if kind == "uk":
         return await _nominatim_postal(code, hint or "gb", hdrs)
+    if kind in ("ie", "jp", "br"):
+        # Format-unique → the kind IS the ISO2; pin straight to it.
+        return await _nominatim_postal(code, kind, hdrs)
     # kind == "num"
     if hint:
         return (await _nominatim_postal(code, hint, hdrs)
