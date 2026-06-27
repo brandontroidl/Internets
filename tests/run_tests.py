@@ -1656,6 +1656,41 @@ def _():
     assert ("nom", "08000", "es") in calls
     assert ("nom", "08000", "us") not in calls   # override beats home country
 
+@test("geocode: _postal_kind pins distinctive intl formats (JP/BR/IE) but not bare numerics")
+def _():
+    from modules.geocode import _postal_kind
+    assert _postal_kind("100-0001") == "jp"     # Japan, dashed
+    assert _postal_kind("01310-100") == "br"     # Brazil CEP, dashed
+    assert _postal_kind("D02 AF30") == "ie"      # Ireland Eircode
+    assert _postal_kind("D02AF30")  == "ie"      # Eircode without the space
+    assert _postal_kind("1000001")  == "num"     # bare 7-digit is NOT uniquely JP
+    assert _postal_kind("01310100") == "num"     # bare 8-digit is NOT uniquely BR
+    # Format-unique kinds remain disjoint — no cannibalisation
+    assert _postal_kind("A1A 1A1") == "ca"
+    assert _postal_kind("SW1A 1AA") == "uk"
+
+@test("geocode: distinctive intl postal codes pin their country (100-0001/01310-100/D02 AF30)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    for query, want_cc in [("100-0001", "jp"), ("01310-100", "br"), ("D02 AF30", "ie")]:
+        calls: list = []
+        async def fake_nom(code, cc, hdrs, _calls=calls, _cc=want_cc):
+            _calls.append(("nom", code, cc))
+            return (1.0, 2.0, f"City, {_cc}", _cc) if cc == _cc else None
+        async def fake_zippo(cc, code, ua, _calls=calls):
+            _calls.append(("zippo", cc, code))
+            return None
+        orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+        try:
+            g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+            g._geocode_cache.clear()
+            res = asyncio.run(g.geocode(query, "bot (https://example.org)"))
+        finally:
+            g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+        assert res is not None and res[3] == want_cc, (query, res)
+        assert ("nom", query, want_cc) in calls, (query, calls)
+
 @test("geocode: ZIP+4 resolves the 5-digit base, US-pinned (90210-1234)")
 def _():
     import asyncio

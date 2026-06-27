@@ -557,7 +557,9 @@ class WeatherModule(BotModule):
             return None
         geo = await geocode(raw, self._ua, default_country=self._default_country)
         if geo is None:
-            self.bot.privmsg(reply_to, f"{nick}: location not found: '{raw}'")
+            # _sanitize: the echoed query is user input — keep IRC formatting
+            # bytes out of bot output (matches location.py's not-found path).
+            self.bot.privmsg(reply_to, f"{nick}: location not found: '{_sanitize(raw)}'")
         return geo
 
     # State badge for ``provider_status()`` — only "active"/"cold"/"failing"
