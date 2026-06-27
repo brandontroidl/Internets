@@ -29,6 +29,8 @@ class LocationModule(BotModule):
         import secret_store
         self._ua: str = (secret_store.get("weather_user_agent")
                          or self.bot.cfg["weather"]["user_agent"])
+        # Home country for bare cross-country postal codes (see geocode()).
+        self._default_country: str = self.bot.cfg["weather"].get("default_country", "us")
 
     async def cmd_regloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Save a default location for the requesting user."""
@@ -36,7 +38,7 @@ class LocationModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}regloc <zip or city name>")
             return
-        geo = await geocode(arg, self._ua)
+        geo = await geocode(arg, self._ua, default_country=self._default_country)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{strip_ctrl(arg)}'")
             return
@@ -49,7 +51,7 @@ class LocationModule(BotModule):
         """Display the user's saved location."""
         raw = self.bot.loc_get(nick)
         if raw:
-            geo     = await geocode(raw, self._ua)
+            geo     = await geocode(raw, self._ua, default_country=self._default_country)
             display = geo[2] if geo else raw
             self.bot.privmsg(reply_to, f"{nick}: saved location is {strip_ctrl(display)} ({strip_ctrl(raw)!r})")
         else:

@@ -512,6 +512,9 @@ class WeatherModule(BotModule):
         self._ua = (secret_store.get("weather_user_agent")
                     or self.bot.cfg["weather"]["user_agent"])
         self._cooldown = int(self.bot.cfg["bot"]["api_cooldown"])
+        # Home country for resolving bare, cross-country postal codes
+        # (geocode() validates/normalizes; a bad value falls back to "us").
+        self._default_country = self.bot.cfg["weather"].get("default_country", "us")
 
     def _resolve(self, nick: str, arg: str | None) -> tuple[str | None, str | None]:
         if arg:
@@ -552,7 +555,7 @@ class WeatherModule(BotModule):
         if self.bot.rate_limited(nick):
             self.bot.notice(nick, f"{nick}: slow down ({self._cooldown}s cooldown)")
             return None
-        geo = await geocode(raw, self._ua)
+        geo = await geocode(raw, self._ua, default_country=self._default_country)
         if geo is None:
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{raw}'")
         return geo

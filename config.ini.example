@@ -92,6 +92,15 @@ password_hash =
 ; file (Nominatim and several weather APIs require a real URL or email).
 units = us
 
+; Home country (ISO 3166-1 alpha-2) for resolving BARE numeric postal codes
+; that are shared across countries.  A real local code stays local; one that
+; isn't valid here falls back to the global best match — so with "us",
+; `.w 43812` → Ohio but `.w 08000` → Barcelona.  Override per-query with an
+; explicit country, e.g. `.w 08000 spain` or `.w 08000 es`.  Format-unique
+; codes (Canadian "A1A 1A1", UK "SW1A 1AA", ZIP+4) ignore this and pin their
+; own country.  Invalid values fall back to "us".
+default_country = us
+
 [weather_providers]
 ; Provider priority order, ranked by scientific accuracy.  This is the
 ; registration order and a final tie-breaker after the dispatcher's

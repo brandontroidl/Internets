@@ -35,16 +35,19 @@ log = logging.getLogger("internets.geocode")
 
 _GEOCODE_CACHE_TTL = 24 * 60 * 60   # 24h, per Nominatim ToS
 _GEOCODE_CACHE_MAX = 1000           # bounded — memory cap
-_geocode_cache: "OrderedDict[tuple[str, str], tuple[float, Optional[tuple[float, float, str, str]]]]" = OrderedDict()
+_geocode_cache: "OrderedDict[tuple[str, str, str], tuple[float, Optional[tuple[float, float, str, str]]]]" = OrderedDict()
 _geocode_cache_lock = threading.Lock()
 _geocode_cache_stats = {"hits": 0, "misses": 0, "evictions": 0}
 
 
-def _cache_key(query: str, user_agent: str) -> tuple[str, str]:
-    return (query.strip().lower(), user_agent)
+def _cache_key(query: str, user_agent: str,
+               default_country: str) -> tuple[str, str, str]:
+    # default_country is part of the key: the same bare numeric code can
+    # resolve to a different place depending on the operator's home country.
+    return (query.strip().lower(), user_agent, default_country)
 
 
-def _cache_get(key: tuple[str, str]) -> tuple[bool, Optional[tuple[float, float, str, str]]]:
+def _cache_get(key: tuple[str, str, str]) -> tuple[bool, Optional[tuple[float, float, str, str]]]:
     """Return ``(found, value)``.  ``found`` is False on miss or expiry."""
     now = time.time()
     with _geocode_cache_lock:
@@ -64,7 +67,7 @@ def _cache_get(key: tuple[str, str]) -> tuple[bool, Optional[tuple[float, float,
         return (True, value)
 
 
-def _cache_put(key: tuple[str, str], value: Optional[tuple[float, float, str, str]]) -> None:
+def _cache_put(key: tuple[str, str, str], value: Optional[tuple[float, float, str, str]]) -> None:
     now = time.time()
     with _geocode_cache_lock:
         if key in _geocode_cache:
@@ -157,6 +160,28 @@ _STATE_ABBR: dict[str, str] = {
 
 _COORD_RE = re.compile(r"^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$")
 _USZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
+
+# Postal-code classification (see _postal_kind).  The Canadian alphanumeric
+# and UK formats are globally unique, so they pin a country with zero
+# ambiguity.  A bare numeric code (5-digit ZIP, 4-digit CH, etc.) is shared
+# across countries and is resolved home-country-first, then globally.
+# CA and UK are disjoint: a CA code always ends in a digit, a UK one always
+# ends in two letters.
+_ZIP4_RE       = re.compile(r"^\d{5}-\d{4}$")               # ZIP+4 → US only
+_CA_POSTAL_RE  = re.compile(r"^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$")
+_UK_POSTAL_RE  = re.compile(r"^[A-Za-z]{1,2}\d[A-Za-z\d]?\s*\d[A-Za-z]{2}$")
+# Distinctive dashed/alphanumeric international formats whose shape alone
+# identifies the country (determinism / provider-independence, not accuracy —
+# the free-text path resolves these too, but luck-of-ranking, not by contract).
+# Only the country-UNIQUE forms are pinned; bare numeric equivalents (7-digit
+# JP, 8-digit BR) stay generic-numeric since the digit count isn't unique.
+# IE Eircode ends in a 4-char group; CA (3-char inward) and UK (digit+2 letters)
+# do not, so the three stay disjoint.
+_JP_POSTAL_RE  = re.compile(r"^\d{3}-\d{4}$")               # Japan (dashed)
+_BR_POSTAL_RE  = re.compile(r"^\d{5}-\d{3}$")               # Brazil CEP (dashed)
+_IE_POSTAL_RE  = re.compile(r"^[A-Za-z]\d[A-Za-z\d]\s?[A-Za-z\d]{4}$")  # Ireland Eircode
+_NUM_POSTAL_RE = re.compile(r"^\d{4,10}$")                  # bare numeric
+_CC_RE         = re.compile(r"^[a-z]{2}$")                  # ISO-3166-1 alpha-2
 
 # ---------------------------------------------------------------------------
 # US location detection
@@ -337,6 +362,127 @@ def _country_code_for(query: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Postal-code classification + resolution
+# ---------------------------------------------------------------------------
+# Free-text Nominatim ``q=`` searches fuzzy-match a postal code against the
+# nearest house-number / building, so "08000" pinned to the US returns a
+# random Ohio motel and "A1A 1A1" with no pin returns a Swiss street.  We
+# fix that by classifying the input and resolving it with structured
+# postal-code lookups (Nominatim ``postalcode=`` / Zippopotam) that match the
+# code AS a postal code — a bogus code returns nothing instead of garbage.
+
+
+def _normalize_cc(cc: str) -> str:
+    """Coerce an operator-supplied home country to a safe ISO2 code.
+
+    Anything that isn't two ASCII letters falls back to ``us`` so a typo'd
+    ``[weather] default_country`` can't disable the home-country bias or
+    inject junk into the ``countrycodes`` parameter.
+    """
+    cc = (cc or "").strip().lower()
+    return cc if _CC_RE.match(cc) else "us"
+
+
+def _postal_kind(s: str) -> str | None:
+    """Classify a string as a postal code, or None if it isn't one.
+
+    Returns ``"us"`` (ZIP+4 — unambiguously US), ``"ca"`` (Canadian
+    alphanumeric), ``"uk"`` (UK postcode), ``"num"`` (bare numeric, shared
+    across countries → home-first), or None (not a postal code → free-text).
+    """
+    s = s.strip()
+    if _ZIP4_RE.match(s):
+        return "us"
+    if _CA_POSTAL_RE.match(s):
+        return "ca"
+    if _UK_POSTAL_RE.match(s):
+        return "uk"
+    if _NUM_POSTAL_RE.match(s):
+        return "num"
+    return None
+
+
+# Bare 2-letter country codes accepted as a postal override.  A real ISO2,
+# MINUS those that collide with a US state or Canadian province abbreviation:
+# in a US/CA-centric bot a trailing "ca"/"il"/"oh" means the subdivision
+# (California / Illinois / Ohio), not Canada/Israel/—, so "90210 ca" must
+# resolve the US ZIP, not pin to Canada.  Forcing those countries still works
+# via the full name ("90210 canada", "08000 israel").
+_ISO2_OVERRIDES: frozenset[str] = (
+    frozenset(_COUNTRY_NAME_MAP.values())
+    - frozenset(a.lower() for a in _US_STATE_ABBRS)
+    - frozenset(a.lower() for a in _CA_PROVINCE_ABBRS)
+)
+
+
+def _split_postal_country(query: str) -> tuple[str, str | None]:
+    """Split ``"<postal-code> <country>"`` into ``(core, iso2)``.
+
+    Honours an explicit override like ``"08000 spain"`` / ``"08000 es"`` so a
+    user can force a country for an otherwise-ambiguous bare code.  Only
+    splits when the leading part is itself a postal code, so city+province /
+    city+country queries ("london ontario", "paris france") are returned
+    unchanged as ``(query, None)`` and fall through to the free-text loop.
+    A bare 2-letter tail is accepted only when it is a real ISO2 that is NOT
+    a US-state / CA-province abbreviation, so "90210 ca" (ZIP + state) stays
+    on the working free-text path instead of mis-pinning to Canada.
+    """
+    toks = query.split()
+    if len(toks) >= 2:
+        for n in (3, 2, 1):
+            if len(toks) <= n:
+                continue
+            tail = " ".join(toks[-n:]).lower()
+            cc = _COUNTRY_NAME_MAP.get(tail)
+            if cc is None and n == 1 and tail in _ISO2_OVERRIDES:
+                cc = tail
+            if cc and _postal_kind(" ".join(toks[:-n])):
+                return " ".join(toks[:-n]), cc
+    return query, None
+
+
+def _fsa(code: str) -> str:
+    """First 3 alphanumerics of a Canadian postal code (the FSA), uppercased.
+
+    Zippopotam keys Canadian data by Forward Sortation Area (the outward
+    half), which is the granularity OSM/Canada-Post-free data actually has.
+    """
+    return re.sub(r"[^A-Za-z0-9]", "", code)[:3].upper()
+
+
+def _zippo_parse(data: object) -> tuple[float, float, str, str] | None:
+    """Parse a Zippopotam.us response into ``(lat, lon, name, cc)`` or None.
+
+    Fails closed (None) on any missing/oversize/unparseable field.  Place
+    names from Zippopotam can carry a long parenthetical FSA list, so we trim
+    at the first ``(`` and apply the same control-byte stripping as Nominatim
+    output before it reaches an IRC line.
+    """
+    if not isinstance(data, dict):
+        return None
+    places = data.get("places")
+    if not isinstance(places, list) or not places or not isinstance(places[0], dict):
+        return None
+    p = places[0]
+    try:
+        lat = float(p.get("latitude"))
+        lon = float(p.get("longitude"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    cc = _strip_ctrl(data.get("country abbreviation", ""), 8).lower()
+    city = _strip_ctrl(p.get("place name", "")).split("(", 1)[0].strip()
+    if cc == "us":
+        state = _strip_ctrl(p.get("state abbreviation", ""), 8)
+        name = f"{city}, {state}".strip(", ")
+    else:
+        country = _strip_ctrl(data.get("country", ""), 64)
+        name = f"{city}, {country}".strip(", ")
+    return (lat, lon, (name or city)[:_MAX_NAME_CHARS], cc)
+
+
+# ---------------------------------------------------------------------------
 # Display name formatting
 # ---------------------------------------------------------------------------
 
@@ -392,10 +538,104 @@ def _read_json_capped(r: requests.Response) -> object | None:
 
 
 # ---------------------------------------------------------------------------
+# Structured postal-code resolvers (always called via asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+async def _nominatim_postal(code: str, cc: str | None,
+                            hdrs: dict[str, str]) -> tuple[float, float, str, str] | None:
+    """Structured Nominatim ``postalcode=`` search, optionally pinned to *cc*.
+
+    Unlike free-text ``q=``, the ``postalcode`` parameter matches the value
+    as a postal code, so a code that doesn't exist in the pinned country
+    returns nothing instead of a fuzzy nearest-object match.  Returns None on
+    miss / transport error / unparseable hit (fail closed).
+    """
+    params: dict = {"postalcode": code, "format": "json",
+                    "limit": 1, "addressdetails": 1}
+    if cc:
+        params["countrycodes"] = cc
+    try:
+        with await asyncio.to_thread(
+            _get, "https://nominatim.openstreetmap.org/search",
+            params=params, headers=hdrs,
+        ) as r:
+            hits = _read_json_capped(r)
+    except Exception as e:
+        log.warning(f"Nominatim postal '{code}' ({cc or 'global'}): {e}")
+        return None
+    if not (isinstance(hits, list) and hits and isinstance(hits[0], dict)):
+        return None
+    hit = hits[0]
+    try:
+        lat = float(hit.get("lat"))
+        lon = float(hit.get("lon"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    addr = hit.get("address", {})
+    if not isinstance(addr, dict):
+        addr = {}
+    name, rcc = _format_name(addr, hit.get("display_name", code))
+    return (lat, lon, name, rcc)
+
+
+async def _zippo(cc: str, code: str,
+                 user_agent: str) -> tuple[float, float, str, str] | None:
+    """Postal lookup via Zippopotam.us — a free, keyless, purpose-built postal
+    geocoder.  Used where OSM/Nominatim lacks postal coverage (notably
+    Canada, whose Canada-Post data is proprietary).  A 404 (no such code in
+    that country) is a clean miss, not an error; any other failure also
+    yields None (fail closed).
+    """
+    from .base import fetch_json  # noqa: PLC0415 — lazy, keeps import graph light
+    url = f"https://api.zippopotam.us/{cc.lower()}/{code}"
+    try:
+        data = await asyncio.to_thread(
+            fetch_json, url, ua=user_agent, allow_404=True, max_bytes=_MAX_BODY_BYTES)
+    except Exception as e:
+        log.warning(f"Zippopotam {cc}/{code}: {e}")
+        return None
+    return _zippo_parse(data) if data is not None else None
+
+
+async def _resolve_postal(kind: str, code: str, hint: str | None,
+                          default_country: str, hdrs: dict[str, str],
+                          user_agent: str) -> tuple[float, float, str, str] | None:
+    """Resolve a classified postal code to a location.
+
+    ``ca`` → Zippopotam by FSA (Nominatim can't); ``us`` (ZIP+4) → pinned
+    Nominatim; ``uk`` → Nominatim pinned to the hint or gb; ``num`` (bare
+    numeric) → explicit-hint pin if given, else home country first (Nominatim
+    then Zippopotam backstop), then global best-match.  Returns None if the
+    code resolves nowhere — we deliberately do NOT fall back to fuzzy
+    free-text, which is what produced the wrong-country matches.
+    """
+    if kind == "ca":
+        return await _zippo("ca", _fsa(code), user_agent)
+    if kind == "us":
+        # ZIP+4 — the +4 is sub-ZIP granularity neither Nominatim nor
+        # Zippopotam carries, so resolve the 5-digit base, US-pinned.
+        base = code.split("-", 1)[0]
+        return (await _nominatim_postal(base, "us", hdrs)
+                or await _zippo("us", base, user_agent))
+    if kind == "uk":
+        return await _nominatim_postal(code, hint or "gb", hdrs)
+    # kind == "num"
+    if hint:
+        return (await _nominatim_postal(code, hint, hdrs)
+                or await _zippo(hint, code, user_agent))
+    return (await _nominatim_postal(code, default_country, hdrs)
+            or await _zippo(default_country, code, user_agent)
+            or await _nominatim_postal(code, None, hdrs))
+
+
+# ---------------------------------------------------------------------------
 # Public geocode function
 # ---------------------------------------------------------------------------
 
-async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] | None:
+async def geocode(query: str, user_agent: str, *,
+                  default_country: str = "us") -> tuple[float, float, str, str] | None:
     """
     Resolve a location string to (lat, lon, display_name, country_code).
     Returns None on failure.
@@ -403,22 +643,29 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
     Accepted input formats
     ----------------------
     • lat,lon          — "34.5,-117.2"
-    • US zip code      — "92253" or "90210-1234"
+    • Postal code      — "92253" / "90210-1234" / "A1A 1A1" / "SW1A 1AA"
+    • Postal + country — "08000 spain" / "08000 es"  (explicit override)
     • City + US state  — "la quinta california" / "portland OR"
     • City + country   — "paris france" / "london england"
     • City + province  — "london ontario" / "toronto ON"
     • City alone       — "london"  (Nominatim global prominence ranking)
-    • Coordinates      — "34.5,-117.2"
 
-    Country pinning
-    ---------------
-    The countrycodes constraint is derived fresh for each candidate in the
-    word-drop loop (not locked to the original query).  This ensures that
-    dropping an ambiguous trailing token (e.g. "georgia" from "tbilisi
-    georgia") eventually produces an unconstrained search that resolves
-    correctly via Nominatim's global ranking.
+    Postal codes
+    ------------
+    Postal codes are classified (_postal_kind) and resolved with structured
+    lookups, NOT fuzzy free-text:
+      • CA alphanumeric / UK formats are globally unique → pinned with no
+        ambiguity (CA via Zippopotam, which has data OSM lacks).
+      • A bare numeric code is genuinely shared across countries.  It is
+        resolved home-country-first (``default_country``, default "us"): a
+        real local ZIP stays local, a code that isn't valid there falls back
+        to the global best match (so 43812→Ohio but 08000→Barcelona).  An
+        explicit trailing country ("08000 spain") overrides the home bias.
 
-    Priority: US zip > US state name/abbr > country/province name > none.
+    City / place names still use the free-text word-drop loop below, where the
+    countrycodes constraint is derived fresh for each candidate so dropping an
+    ambiguous trailing token (e.g. "georgia" from "tbilisi georgia") yields an
+    unconstrained search that resolves via Nominatim's global ranking.
     """
     # Reject empty / whitespace-only queries cleanly so we never send an
     # empty ``q=`` to Nominatim (which their policy frowns on).
@@ -430,6 +677,10 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
     # Cap query length: anything longer is junk and inflates upstream cost.
     if len(query) > _MAX_QUERY_CHARS:
         query = query[:_MAX_QUERY_CHARS]
+
+    # Bound the operator-supplied home country: a bad value must not disable
+    # the home bias or inject junk into countrycodes — fall back to "us".
+    default_country = _normalize_cc(default_country)
 
     # Nominatim usage policy: require an identifiable User-Agent that
     # includes a contact (email or URL).  If the operator hasn't
@@ -447,7 +698,7 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
     # We only reach this point with a non-empty, length-capped query and a
     # validated UA — both are part of the cache key.  ``found`` differentiates
     # a cached negative result (None) from a miss.
-    cache_key = _cache_key(query, user_agent)
+    cache_key = _cache_key(query, user_agent, default_country)
     found, cached = _cache_get(cache_key)
     if found:
         return cached
@@ -485,6 +736,18 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
                 return _store((lat, lon, name, cc))
         except Exception:
             return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
+
+    # ---- Postal-code resolution (structured, country-aware) --------------
+    # Classify the input; if it's a postal code, resolve it with structured
+    # lookups and return — including a negative cache on miss.  We do NOT fall
+    # through to the fuzzy free-text loop for a postal code: that fuzzy match
+    # is exactly what returned the wrong country (a US motel for "08000", a
+    # Swiss street for "A1A 1A1").
+    core, hint = _split_postal_country(query)
+    kind = _postal_kind(core)
+    if kind:
+        return _store(await _resolve_postal(
+            kind, core, hint, default_country, hdrs, user_agent))
 
     # ---- Place-name search with word-drop fallback -----------------------
     # If Nominatim returns no hits for the full query, drop the last token
