@@ -6,7 +6,7 @@ import math
 import operator
 import logging
 from typing import Any
-from .base import BotModule, help_row
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.calc")
 
@@ -131,11 +131,17 @@ class CalcModule(BotModule):
 
     async def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Evaluate a mathematical expression and display the result."""
+        if self.bot.rate_limited(nick):
+            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}cc <expression>  e.g. {p}cc 2pi")
             return
-        self.bot.privmsg(reply_to, f"[calc] {arg} = {_calc(arg)}")
+        expr = arg[:200]
+        # strip_ctrl the whole line: the echoed expr is user input and must not
+        # carry IRC control codes (\x02/\x03/\x07/\x1b/CTCP) into the channel.
+        self.bot.privmsg(reply_to, strip_ctrl(f"[calc] {expr} = {_calc(expr)}"))
 
     def help_lines(self, prefix: str) -> list[str]:
         """Return calculator help text."""

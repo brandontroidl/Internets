@@ -341,6 +341,10 @@ class Dispatcher:
                 log.warning("force_provider %r does not support '%s'",
                             force_provider, capability)
                 return None
+            if not self._providers[force_provider].health.is_callable():
+                log.warning("force_provider %r circuit is open (cooling down) — "
+                            "skipping; try again shortly", force_provider)
+                return None
             chain = [force_provider]
         else:
             chain = self._sorted_for_capability(capability, eligible)

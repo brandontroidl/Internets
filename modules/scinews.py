@@ -20,11 +20,11 @@ import time
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
 
 import requests
 from defusedxml import ElementTree as _ET
-from .base import BotModule, cred, help_row, resolve_public, strip_ctrl
+from .base import BotModule, cred, help_row, strip_ctrl
+from ._netsafe import SSRFBlocked, safe_open
 
 log = logging.getLogger("internets.scinews")
 
@@ -61,39 +61,19 @@ def _clean(s: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(_TAG_RE.sub(" ", s))).strip()
 
 
-def _http_bytes(url: str, ua: str, max_bytes: int, *,
-                validate_redirects: bool = False, max_hops: int = 4) -> bytes:
-    """Size-capped raw GET (feeds/articles are XML/HTML, not JSON).
+def _http_bytes(url: str, ua: str, max_bytes: int) -> bytes:
+    """Size-capped raw GET for the hardcoded trusted feed URLs in _FEEDS.
 
-    When ``validate_redirects`` is set (the reader, which fetches
-    attacker-influenceable article URLs), redirects are NOT auto-followed:
-    each 3xx hop's target is re-checked with ``resolve_public`` before the
-    next request, so a redirect to an internal address can't bypass the
-    SSRF guard.  Feeds are hardcoded trusted URLs and follow redirects
-    normally (``validate_redirects=False``).
+    Feeds are operator-curated constants, so the SSRF pinning the reader
+    needs (see _read_article -> _netsafe.safe_open) is not required here.
     """
-    cur = url
-    hops = 0
-    while True:
-        if validate_redirects:
-            p = urlparse(cur)
-            if p.scheme not in ("http", "https") or not p.hostname:
-                raise ValueError("bad redirect target")
-            resolve_public(p.hostname, p.port or (443 if p.scheme == "https" else 80))
-        with requests.get(cur, headers={"User-Agent": ua}, timeout=_FEED_TIMEOUT,
-                          stream=True, allow_redirects=not validate_redirects) as r:
-            if validate_redirects and r.is_redirect:
-                loc = r.headers.get("Location")
-                hops += 1
-                if not loc or hops > max_hops:
-                    raise ValueError("too many redirects")
-                cur = urljoin(cur, loc)
-                continue
-            r.raise_for_status()
-            raw = r.raw.read(max_bytes + 1, decode_content=True)
-            if len(raw) > max_bytes:
-                raise ValueError("response too large")
-            return raw
+    with requests.get(url, headers={"User-Agent": ua}, timeout=_FEED_TIMEOUT,
+                      stream=True) as r:
+        r.raise_for_status()
+        raw = r.raw.read(max_bytes + 1, decode_content=True)
+        if len(raw) > max_bytes:
+            raise ValueError("response too large")
+        return raw
 
 
 def _parse_date(s: str | None) -> float:
@@ -196,18 +176,23 @@ class _Lead(HTMLParser):
 
 
 def _read_article(url: str, ua: str) -> str:
-    """Fetch an article and return its lead (SSRF-guarded, size-capped)."""
-    p = urlparse(url)
-    if p.scheme not in ("http", "https") or not p.hostname:
-        return "bad article URL"
+    """Fetch an article lead via the SSRF-safe pinned fetch.
+
+    Article links come from feed items (attacker-influenceable), so this uses
+    _netsafe.safe_open, which resolves+validates+pins the IP for the initial
+    host AND every redirect hop (closing the DNS-rebinding TOCTOU).
+    """
     try:
-        # validate_redirects re-checks the initial host AND every redirect hop.
-        raw = _http_bytes(url, ua, _ART_MAX_BYTES, validate_redirects=True)
-    except ValueError as e:
+        with safe_open("GET", url, ua, follow_redirects=True, timeout=_FEED_TIMEOUT) as resp:
+            resp.raise_for_status()
+            raw = resp.raw.read(_ART_MAX_BYTES + 1, decode_content=True)
+    except SSRFBlocked as e:
         return f"can't read that article ({e})"
     except requests.RequestException as e:
         log.warning("scinews read %s: %s", url, e)
         return "could not fetch article"
+    if len(raw) > _ART_MAX_BYTES:
+        return "could not fetch article (too large)"
     parser = _Lead()
     try:
         parser.feed(raw.decode("utf-8", errors="replace"))
@@ -322,7 +307,11 @@ class ScinewsModule(BotModule):
         if not items:
             self.bot.privmsg(reply_to, "no headlines right now (feeds unreachable?)")
             return
-        self._last[reply_to] = (time.monotonic(), items)
+        now = time.monotonic()
+        # Evict stale entries so this map can't grow unbounded across many
+        # channels/nicks (PM keys are attacker-controlled).
+        self._last = {k: v for k, v in self._last.items() if now - v[0] <= _LIST_TTL}
+        self._last[reply_to] = (now, items)
         self.bot.privmsg(reply_to, f":: STEM news ({topic}) — {p}sci read <N> for details ::")
         for i, (src, title, _url) in enumerate(items, 1):
             self.bot.privmsg(reply_to, f"  {i}. [{strip_ctrl(src, 18)}] {strip_ctrl(title, 150)}")

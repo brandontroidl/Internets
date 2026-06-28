@@ -72,18 +72,21 @@ class TestProbersRefuseInternal:
 
 class TestHeadersParsing:
     def test_headers_format(self, monkeypatch):
-        # public host passes the guard; mock the HTTP round-trip.
-        _patch_getaddrinfo(monkeypatch, "93.184.216.34")
+        # _headers now fetches via _netsafe.safe_open; mock that context manager.
+        from contextlib import contextmanager
 
-        class FakeResp:
+        class Resp:
             status_code = 301
             is_redirect = True
+            is_permanent_redirect = False
             headers = {
                 "Server": "nginx", "Content-Type": "text/html; charset=utf-8",
                 "Location": "https://example.com/", "Strict-Transport-Security": "max-age=1",
             }
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-        monkeypatch.setattr(probe.requests, "get", lambda *a, **k: FakeResp())
+
+        @contextmanager
+        def fake_open(method, url, ua, **kw):
+            yield Resp()
+        monkeypatch.setattr(probe, "safe_open", fake_open)
         out = probe._headers("http://example.com", "ua")
         assert "HTTP 301" in out and "nginx" in out and "HSTS" in out and "-> https://example.com/" in out
