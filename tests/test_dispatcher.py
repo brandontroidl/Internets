@@ -507,3 +507,52 @@ class TestChainBudget:
         assert slow.calls == 1
         h = health_registry.get("budget_slow")
         assert h.total_failures >= 1                        # timeout booked as failure
+
+
+# ── coreless fall-through + current gap-fill ─────────────────────────────
+
+def _wr(source, temp, **kw):
+    from weather_providers import WeatherResult
+    return WeatherResult(source=source, temperature=temp, description=kw.pop("desc", "Clear"),
+                         location="x", **kw)
+
+
+class TestGapFill:
+    def test_coreless_result_falls_through(self):
+        """A non-None result with no temperature and no forecast is no-data:
+        the dispatcher skips it for the next provider instead of all-N/A."""
+        d = Dispatcher()
+        empty = _wr("NWS", None, desc="")            # is_empty() -> True
+        good = _wr("Open-Meteo", 20.0, humidity=50.0, wind_kph=5.0, wind_dir="N",
+                   pressure_mb=1013.0, visibility_m=16000.0, dewpoint_c=10.0, feels_like_c=20.0)
+        d.register(_StubProvider(result=empty), "nws")
+        d.register(_StubProvider(result=good), "openmeteo")
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out is good                           # coreless NWS skipped
+
+    def test_current_gap_fills_from_next_provider(self):
+        """A sparse primary (NWS: temp only) keeps its temp/conditions and has
+        its N/A secondary fields filled from the next provider, crediting both."""
+        d = Dispatcher()
+        sparse = _wr("NWS", 24.0, desc="Clear")      # all secondary fields None
+        full = _wr("Open-Meteo", 22.0, desc="Clouds", humidity=48.0, wind_kph=11.0,
+                   wind_dir="NW", pressure_mb=1013.0, visibility_m=16000.0,
+                   dewpoint_c=12.0, feels_like_c=23.0)
+        nws, om = _StubProvider(result=sparse), _StubProvider(result=full)
+        d.register(nws, "nws"); d.register(om, "openmeteo")
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out.temperature == 24.0 and out.description == "Clear"   # NWS core kept
+        assert out.humidity == 48.0 and out.pressure_mb == 1013.0       # filled
+        assert out.dewpoint_c == 12.0 and out.wind_kph == 11.0          # filled
+        assert "NWS" in out.source and "Open-Meteo" in out.source       # both credited
+        assert nws.calls == 1 and om.calls == 1                         # one extra call
+
+    def test_complete_primary_does_not_call_filler(self):
+        """If the primary is already complete, the chain stops - no extra call."""
+        d = Dispatcher()
+        full = _wr("NWS", 24.0, humidity=48.0, wind_kph=11.0, wind_dir="NW",
+                   pressure_mb=1013.0, visibility_m=16000.0, dewpoint_c=12.0, feels_like_c=23.0)
+        nws, om = _StubProvider(result=full), _StubProvider(result=full)
+        d.register(nws, "nws"); d.register(om, "openmeteo")
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out is full and nws.calls == 1 and om.calls == 0

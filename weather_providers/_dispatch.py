@@ -369,6 +369,10 @@ class Dispatcher:
         # the healthy fallbacks behind it within the outer command timeout.
         deadline = time.monotonic() + _CHAIN_BUDGET
 
+        # Current-capability gap-fill accumulator (see the success branch below).
+        primary: Any = None
+        merged = 0
+
         for pid in chain:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -410,19 +414,32 @@ class Dispatcher:
                 result = await asyncio.wait_for(
                     method(*args, **kwargs), timeout=call_timeout)
                 latency = time.monotonic() - start
-                if result is None:
-                    # Provider responded but has no data for this location (a
-                    # region it doesn't cover) - fall through to the next
-                    # provider rather than returning an empty answer.  We do
-                    # NOT record a success here: a no-data (or slow no-data)
-                    # result must not reset the breaker or mask a brownout,
-                    # so it can't keep a degraded provider looking healthy.
-                    log.debug("%s: %s no data - trying next", pid, capability)
+                if result is None or (hasattr(result, "is_empty") and result.is_empty()):
+                    # Provider responded but has no usable data for this location
+                    # (a region it doesn't cover, or a sparse response with no
+                    # core value) - fall through rather than returning an empty /
+                    # all-N/A answer.  We do NOT record a success: a no-data
+                    # result must not reset the breaker or mask a brownout, so it
+                    # can't keep a degraded provider looking healthy.
+                    log.debug("%s: %s no usable data - trying next", pid, capability)
                     continue
-                # Only real data counts as a success for the breaker / score.
+                # Real data: a success for the breaker / score.
                 rp.health.record_success(latency)
                 log.debug("%s: %s succeeded (%.2fs)", pid, capability, latency)
-                return result
+                # Gap-fill (current only): the first usable result is the primary.
+                # If it is sparse (a secondary field the formatter shows as N/A,
+                # e.g. NWS nulling dewpoint/pressure/visibility), keep walking the
+                # chain and fill ONLY the missing fields from the next usable
+                # provider(s), crediting both sources, rather than returning an
+                # all-N/A answer.  Bounded to 3 contributors and the chain
+                # deadline above.
+                if capability != "current" or not hasattr(result, "has_gaps"):
+                    return result
+                primary = result if primary is None else primary.fill_gaps(result)
+                merged += 1
+                if not primary.has_gaps() or merged >= 3:
+                    return primary
+                continue
             except Exception as e:
                 latency = time.monotonic() - start
                 etype = type(e).__name__
@@ -452,6 +469,10 @@ class Dispatcher:
                 )
                 continue
 
+        # Chain exhausted.  A sparse-but-usable current primary we never fully
+        # filled still beats nothing.
+        if primary is not None:
+            return primary
         log.error("All providers failed for '%s'", capability)
         return None
 

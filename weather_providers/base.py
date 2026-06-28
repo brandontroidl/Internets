@@ -17,7 +17,7 @@ MarineResult                  - wave height, swell, water temperature
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from math import asin, cos, radians, sin, sqrt
 from typing import Protocol, runtime_checkable
 
@@ -54,6 +54,20 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * 6371.0 * asin(min(1.0, sqrt(a)))
 
 
+# Secondary current-conditions fields the formatter renders as "N/A" when
+# missing.  Used by WeatherResult.has_gaps / fill_gaps for cross-provider
+# gap-filling (temperature/description are the core, never gap-filled).
+_CURRENT_GAP_FIELDS = (
+    "feels_like_c", "humidity", "wind_kph", "wind_dir",
+    "pressure_mb", "visibility_m", "dewpoint_c",
+)
+
+
+def _missing(v: object) -> bool:
+    """True if a field carries no value (None, or an empty wind-dir string)."""
+    return v is None or v == ""
+
+
 # ── Current conditions + daily forecast ──────────────────────────────
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +95,34 @@ class WeatherResult:
     dewpoint_c: float | None    = None
     forecast: list[ForecastDay] = field(default_factory=list)
 
+    def is_empty(self) -> bool:
+        """True if the provider responded but carries no usable payload: no
+        current temperature AND no forecast days.  Providers build results with
+        ``.get()``, so a sparse upstream response yields a non-None result with
+        everything None.  The dispatcher treats this like a None result and
+        falls through to the next provider, so the preferred provider missing
+        the data does not produce an all-N/A answer a fallback could serve."""
+        return self.temperature is None and not self.forecast
+
+    def has_gaps(self) -> bool:
+        """True if any secondary current-conditions field is missing.  The
+        dispatcher uses this to keep walking the provider chain and fill the
+        gaps (e.g. NWS station obs often null dewpoint/pressure/visibility)."""
+        return any(_missing(getattr(self, f)) for f in _CURRENT_GAP_FIELDS)
+
+    def fill_gaps(self, other: "WeatherResult") -> "WeatherResult":
+        """Return a copy with this result's MISSING secondary fields filled from
+        ``other``, crediting both sources.  Temperature, description, and
+        forecast are never overwritten - only the fields the formatter would
+        otherwise show as N/A.  Returns self unchanged if ``other`` adds
+        nothing."""
+        upd = {f: getattr(other, f) for f in _CURRENT_GAP_FIELDS
+               if _missing(getattr(self, f)) and not _missing(getattr(other, f))}
+        if not upd:
+            return self
+        src = self.source if other.source in self.source else f"{self.source} + {other.source}"
+        return replace(self, source=src, **upd)
+
 
 # ── Hourly forecast ──────────────────────────────────────────────────
 
@@ -103,6 +145,10 @@ class HourlyResult:
     source: str
     location: str
     hours: list[HourlyEntry] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        """True if the provider returned no hourly entries (fall through)."""
+        return not self.hours
 
 
 # ── Weather alerts ───────────────────────────────────────────────────
