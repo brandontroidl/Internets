@@ -14,6 +14,7 @@ functions returning a str so they are unit-testable without a bot.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import colorsys
@@ -432,6 +433,16 @@ def _cron(expr: str, now: _dt.datetime) -> str:
     if now.tzinfo is None:
         now = now.replace(tzinfo=_dt.timezone.utc)
     explain = _cron_explain(fields)
+    # Cheap impossible-date short-circuit: when day-of-week is unrestricted, a
+    # fire needs a real (month, day) pair.  If none exists (e.g. "0 0 30 2 *" =
+    # Feb 30), skip the full ~527k-iteration 366-day minute scan.  (With dow
+    # ALSO restricted, cron uses OR semantics, so the scan is still required.)
+    _mins, _hrs, _doms, _mons, _dows = sets
+    if _dows == set(range(0, 7)):
+        _DAYS_IN_MONTH = {1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30,
+                          7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+        if not any(d <= _DAYS_IN_MONTH[mon] for mon in _mons for d in _doms):
+            return f"{explain} :: next no fire within 1y"
     # scan forward minute-by-minute up to ~366 days for next fire times
     cur = now.replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)
     limit = now + _dt.timedelta(days=366)
@@ -533,7 +544,10 @@ class DevtoolsModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}cron <expr>  e.g. */15 0 * * 1-5")
             return
         now = _dt.datetime.now(tz=_dt.timezone.utc)
-        self.bot.privmsg(reply_to, strip_ctrl(_cron(arg[:_MAX_INPUT], now)))
+        # The next-fire scan can walk ~527k minutes; run it off the event loop
+        # so a never-matching expression can't freeze the whole bot.
+        result = await asyncio.to_thread(_cron, arg[:_MAX_INPUT], now)
+        self.bot.privmsg(reply_to, strip_ctrl(result))
 
     def help_lines(self, prefix: str) -> list[str]:
         return [

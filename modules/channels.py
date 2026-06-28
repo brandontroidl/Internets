@@ -151,12 +151,21 @@ class ChannelsModule(BotModule):
             self.bot.preply(nick, reply_to, f"No user data for {channel} yet.")
             return
 
+        # Cap the per-user NOTICE flood: a channel can accumulate hundreds to
+        # thousands of 90-day-retained nicks, and one .users (PM-reachable) would
+        # otherwise emit that many lines, starving the shared send queue for
+        # every other user.  Show the most-recently-seen N + a summary line.
+        _CAP = 20
+        ordered = sorted(users.values(), key=lambda u: u.get("last_seen", ""), reverse=True)
         self.bot.preply(nick, reply_to, f"Known users in {channel} ({len(users)}):")
-        for u in sorted(users.values(), key=lambda u: u.get("last_seen", ""), reverse=True):
+        for u in ordered[:_CAP]:
             last  = u.get("last_seen",  "?")[:19].replace("T", " ")
             first = u.get("first_seen", "?")[:19].replace("T", " ")
             self.bot.notice(nick, f"  {u['nick']}!{u.get('hostmask','?')}  "
                                   f"first: {first}  last: {last}")
+        if len(ordered) > _CAP:
+            self.bot.notice(nick, f"  ... and {len(ordered) - _CAP} more "
+                                  f"(showing the {_CAP} most recently seen)")
 
     # ── Verification machinery ───────────────────────────────────────────
 

@@ -1482,6 +1482,15 @@ def _():
     assert not _LANG_RE.match("123")
     assert not _LANG_RE.match("")
 
+@test("mathx: _bignum_report renders a result over the int->str digit cap")
+def _():
+    import math
+    from modules.mathx import _bignum_report
+    # factorial(100000) is ~456k digits, well over Python's default 4300 cap;
+    # str(value) would raise ValueError without the scoped limit bump.
+    out = _bignum_report("100000!", math.factorial(100000))
+    assert "digits" in out and "starts" in out
+
 @test("urbandictionary: _IDX_RE parses term/index correctly")
 def _():
     from modules.urbandictionary import _IDX_RE
