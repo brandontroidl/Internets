@@ -445,3 +445,65 @@ class TestAuthFailure:
         out2 = asyncio.run(d.dispatch("current", 0, 0, "x"))
         assert out2 == "ok"
         assert bad.calls == before                          # not called again
+
+
+# ── no-data (None) handling ──────────────────────────────────────────────
+
+class TestNoDataHandling:
+    def test_none_result_is_not_recorded_as_success(self):
+        """A provider returning None has no data for the location; it must
+        fall through WITHOUT counting as a success, so a slow-but-no-data
+        provider can't keep looking healthy / reset its breaker streak."""
+        from weather_providers._health import health_registry
+        d = Dispatcher()
+        nodata = _StubProvider(result=None)
+        good = _StubProvider(result="ok")
+        # Unknown ids → rank 99; registration order makes nodata lead.
+        d.register(nodata, "nd_primary")
+        d.register(good, "nd_fallback")
+
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out == "ok"                                  # fell through
+        assert nodata.calls == 1
+        h = health_registry.get("nd_primary")
+        # record_success was NOT called: no success/failure booked at all.
+        assert h.total_calls == 0
+        assert h.total_failures == 0
+
+
+# ── end-to-end chain time budget ─────────────────────────────────────────
+
+class TestChainBudget:
+    def test_slow_provider_times_out_and_sheds(self, monkeypatch):
+        """A provider slower than the per-call budget is cut off (counted as
+        a failure for the breaker) and the chain falls through to a healthy
+        provider instead of starving on the slow one."""
+        import weather_providers._dispatch as disp
+        from weather_providers._health import health_registry
+
+        # Shrink the per-call budget so the test runs in milliseconds.
+        monkeypatch.setattr(disp, "_PER_CALL_BUDGET", 0.05)
+
+        class _SlowProvider:
+            name = "Slow"
+            requires_key = False
+
+            def __init__(self):
+                self.calls = 0
+
+            async def get_weather(self, lat, lon, location, **kw):
+                self.calls += 1
+                await asyncio.sleep(0.5)   # > per-call budget
+                return "too-late"
+
+        d = Dispatcher()
+        slow = _SlowProvider()
+        fast = _StubProvider(result="fast-ok")
+        d.register(slow, "budget_slow")
+        d.register(fast, "budget_fast")
+
+        out = asyncio.run(d.dispatch("current", 0, 0, "x"))
+        assert out == "fast-ok"                             # timed out, fell through
+        assert slow.calls == 1
+        h = health_registry.get("budget_slow")
+        assert h.total_failures >= 1                        # timeout booked as failure
