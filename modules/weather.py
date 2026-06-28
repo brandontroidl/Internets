@@ -507,11 +507,17 @@ class WeatherModule(BotModule):
 
     def on_load(self) -> None:
         from weather_providers import configure
-        import secret_store
+        from .base import cred
         configure(self.bot.cfg)
-        self._ua = (secret_store.get("weather_user_agent")
-                    or self.bot.cfg["weather"]["user_agent"])
-        self._cooldown = int(self.bot.cfg["bot"]["api_cooldown"])
+        # cred(): secret_store first, then [weather].user_agent, else "" - never
+        # a bare KeyError.  The shipped template defines no [weather].user_agent
+        # (it lives in [secrets]), so the old hard subscript crashed weather out
+        # of .help on a fresh install when the secret was blank.
+        self._ua = cred(self.bot.cfg, "weather_user_agent", "weather", "user_agent")
+        if not self._ua:
+            log.warning("weather: no weather_user_agent configured - geocoding is "
+                        "disabled until [secrets].weather_user_agent is set")
+        self._cooldown = max(1, int(self.bot.cfg["bot"]["api_cooldown"]))
         # Home country for resolving bare, cross-country postal codes
         # (geocode() validates/normalizes; a bad value falls back to "us").
         self._default_country = self.bot.cfg["weather"].get("default_country", "us")

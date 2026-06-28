@@ -477,8 +477,11 @@ class RateLimiter:
     _CHANNEL_DEFAULT_BURST = 20  # commands per window before throttling
 
     def __init__(self, flood_cd: int, api_cd: int) -> None:
-        self._flood_cd = flood_cd
-        self._api_cd   = api_cd
+        # Floor at 1s: a zero/negative cooldown makes `now - ts < cd` never
+        # true, silently disabling the limiter.  A misconfigured threshold must
+        # not turn the gate off.
+        self._flood_cd = max(1, flood_cd)
+        self._api_cd   = max(1, api_cd)
         self._lock     = threading.Lock()
         self._flood: dict[str, float] = {}
         self._api:   dict[str, float] = {}

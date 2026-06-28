@@ -203,6 +203,12 @@ def _():
     src = inspect.getsource(Store._flush_loop)
     assert "try:" in src and "except" in src
 
+@test("RateLimiter: a 0/negative cooldown is floored, not silently disabled")
+def _():
+    rl = RateLimiter(flood_cd=0, api_cd=0)
+    assert rl.flood_check("n") is False   # first call recorded/allowed
+    assert rl.flood_check("n") is True    # immediate repeat flagged (cd floored to >=1s)
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
