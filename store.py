@@ -73,36 +73,31 @@ def _wrap_v2(payload: Any) -> dict:
     }
 
 
-def _unwrap(raw: Any, default: Any) -> Any:
-    """Unwrap a possibly-versioned envelope.
+class _StoreRejected(Exception):
+    """A store file is present but unusable (bad schema / missing-or-wrong
+    checksum / wrong shape).  Signals _read to QUARANTINE the file rather than
+    silently load empty and let the next flush overwrite the only copy, which
+    would lose locations, channel-rejoin state, and privacy opt-out flags."""
 
-    Returns the inner payload on success.  Returns *default* if the
-    envelope is v2 but its checksum doesn't match.  If *raw* is a
-    legacy v1 payload (no ``schema`` key) it is returned unchanged so
-    callers can re-wrap it on the next flush.
+
+def _unwrap(raw: Any) -> Any:
+    """Unwrap a possibly-versioned envelope and return the inner payload.
+
+    A legacy v1 payload (no ``schema`` key) is returned unchanged so callers
+    re-wrap it on the next flush.  Raises ``_StoreRejected`` if a v2 envelope
+    is present but fails verification, so the caller can preserve the file for
+    recovery instead of discarding it.
     """
     # v2 envelope: top-level dict with a "schema" key.
     if isinstance(raw, dict) and "schema" in raw:
-        schema = raw.get("schema")
-        if schema != _SCHEMA_VERSION:
-            log.warning(
-                "Store: unknown schema version %r — using default state.",
-                schema,
-            )
-            return default
+        if raw.get("schema") != _SCHEMA_VERSION:
+            raise _StoreRejected(f"unknown schema version {raw.get('schema')!r}")
         data = raw.get("data")
         stored_sum = raw.get("checksum")
         if not isinstance(stored_sum, str):
-            log.warning("Store: v2 envelope missing checksum — rejecting file.")
-            return default
-        computed = _checksum(data)
-        if computed != stored_sum:
-            log.warning(
-                "Store: checksum mismatch (file=%s computed=%s) — "
-                "rejecting file and using default state.",
-                stored_sum, computed,
-            )
-            return default
+            raise _StoreRejected("v2 envelope missing checksum")
+        if _checksum(data) != stored_sum:
+            raise _StoreRejected("checksum mismatch")
         return data
     # v1 (legacy): bare payload.
     return raw
@@ -151,35 +146,45 @@ class Store:
 
     @staticmethod
     def _read(path: str, default: Any) -> Any:
+        p = Path(path)
+        if not p.exists():
+            return default
         try:
-            p = Path(path)
-            if not p.exists():
-                return default
             size = p.stat().st_size
             if size > Store._MAX_FILE_SIZE:
-                log.warning(
-                    f"Store file {path} exceeds size limit ({size} bytes) — using default"
-                )
-                return default
+                raise _StoreRejected(f"exceeds size limit ({size} bytes)")
             raw = json.loads(p.read_text(encoding="utf-8"))
-            # Unwrap a v2 envelope (validates checksum) or accept a
-            # legacy v1 bare payload.  A checksum-fail returns *default*
-            # so we don't import tampered data into memory; the next
-            # flush will overwrite the file with a fresh v2 envelope.
-            data = _unwrap(raw, default)
-            # BUG-051: Validate loaded data matches expected type.
-            # A corrupted file returning a list instead of a dict (or vice versa)
-            # would crash on first access.
+            # Unwrap a v2 envelope (validates checksum) or accept a legacy v1
+            # bare payload.  _unwrap raises _StoreRejected on a bad envelope.
+            data = _unwrap(raw)
+            # BUG-051: a corrupted file returning a list instead of a dict (or
+            # vice versa) would crash on first access; reject it too.
             if type(data) is not type(default):
-                log.warning(
-                    f"Store file {path} has type {type(data).__name__}, "
-                    f"expected {type(default).__name__} — using default"
-                )
-                return default
+                raise _StoreRejected(
+                    f"type {type(data).__name__}, expected {type(default).__name__}")
             return data
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
-            log.warning(f"Store load {path}: {e!r}")
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, _StoreRejected) as e:
+            # Do NOT silently reset to empty and let the next flush clobber the
+            # only copy (which loses locations, channel-rejoin state, and
+            # privacy opt-out flags).  Quarantine the suspect file so it stays
+            # recoverable, then start from default.
+            Store._quarantine(p, e)
             return default
+
+    @staticmethod
+    def _quarantine(p: Path, reason: object) -> None:
+        """Move an unusable state file aside (keeping it for manual recovery)
+        instead of letting the next flush overwrite it.  Best-effort: a
+        failure here only logs."""
+        try:
+            if p.exists():
+                dest = p.with_name(f"{p.name}.corrupt.{int(time.time())}")
+                os.replace(str(p), str(dest))
+                log.error("Store: %s unusable (%r) - quarantined to %s",
+                          p.name, reason, dest.name)
+        except OSError as e:
+            log.error("Store: %s unusable (%r); quarantine failed: %r",
+                      p.name, reason, e)
 
     @staticmethod
     def _write(path: str, data: Any) -> bool:
@@ -204,6 +209,15 @@ class Store:
                         os.chmod(tmp_path, 0o600)
                     except OSError as e:
                         log.warning(f"Store chmod {tmp_path}: {e!r}")
+                # Keep a one-deep backup of the current good file before the
+                # atomic replace, so a bad write or accidental edit stays
+                # recoverable.  Best-effort: a backup failure must not block
+                # the write (p stays intact until os.replace).
+                if p.exists():
+                    try:
+                        Path(str(p) + ".bak").write_bytes(p.read_bytes())
+                    except OSError as e:
+                        log.warning(f"Store backup {p}: {e!r}")
                 os.replace(tmp_path, p)
                 tmp_path = None  # successfully renamed — nothing to clean up
                 return True

@@ -172,6 +172,31 @@ def _():
         assert s.loc_del("nick") is False
         s.stop()
 
+@test("Store: a corrupt state file is quarantined, not silently clobbered")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "loc.json"
+        p.write_text("{ not valid json ")
+        orig = p.read_text()
+        result = Store._read(str(p), {})
+        assert result == {}                  # loaded default, did not crash
+        assert not p.exists()                # original NOT left for the next flush to clobber
+        corrupt = list(Path(tmp).glob("loc.json.corrupt.*"))
+        assert len(corrupt) == 1             # preserved for recovery
+        assert corrupt[0].read_text() == orig
+        # A subsequent valid write/read round-trips and is not quarantined.
+        Store._write(str(p), {"nick": "90210"})
+        assert Store._read(str(p), {}) == {"nick": "90210"}
+
+@test("Store: _write keeps a one-deep .bak of the previous good file")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = str(Path(tmp) / "loc.json")
+        Store._write(p, {"a": "1"})          # first write: no prior file, no bak yet
+        Store._write(p, {"a": "2"})          # second write: bak holds the previous good copy
+        assert Store._read(p, {}) == {"a": "2"}
+        assert Store._read(p + ".bak", {}) == {"a": "1"}
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
@@ -1419,16 +1444,16 @@ def _():
     assert hasattr(Sender, "MAX_QUEUE")
     assert Sender.MAX_QUEUE > 0
 
-@test("BUG-051: Store._read validates loaded data type")
+@test("BUG-051: Store._read rejects a wrong-type file and quarantines it")
 def _():
     import tempfile, json
-    # Write a list where a dict is expected
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump([1, 2, 3], f)
-        f.flush()
-        result = Store._read(f.name, {})
-    assert result == {}  # should return default, not the list
-    os.unlink(f.name)
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "x.json"
+        p.write_text(json.dumps([1, 2, 3]))    # a list where a dict is expected
+        result = Store._read(str(p), {})
+        assert result == {}                     # returns default, not the list
+        assert not p.exists()                   # quarantined, not left to be clobbered
+        assert len(list(Path(tmp).glob("x.json.corrupt.*"))) == 1
 
 # ══════════════════════════════════════════════════════════════════════
 # Module edge-case tests
