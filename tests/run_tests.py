@@ -231,6 +231,19 @@ def _():
         assert s.channel_users("#x")                 # floored to >=1d, not wiped
         s.stop()
 
+@test("security: modules that emit upstream/user text route it through a sanitizer")
+def _():
+    # Completeness gate (enumerate the security-relevant modules, assert each
+    # sanitizes) — NOT a change-detector: these splice third-party/user text
+    # into bot-attributed IRC lines, so each MUST reference the canonical
+    # base.strip_ctrl. Catches a future module (or a removed call) that drifts.
+    for name in ("search", "seen", "tell", "stocks", "remind", "location"):
+        src = Path(f"modules/{name}.py").read_text(encoding="utf-8")
+        assert "strip_ctrl" in src, f"modules/{name}.py: missing canonical strip_ctrl sanitizer"
+    # weather keeps its own _sanitize (same C0/DEL regex); allow either.
+    wsrc = Path("modules/weather.py").read_text(encoding="utf-8")
+    assert "strip_ctrl" in wsrc or "_sanitize" in wsrc
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

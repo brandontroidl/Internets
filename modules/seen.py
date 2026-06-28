@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule, help_row
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.seen")
 
@@ -155,7 +155,10 @@ class SeenModule(BotModule):
             "ts": int(time.time()),
             "event": event,
             "channel": channel,
-            "detail": detail,
+            # Sanitize at record time so the stored-and-replayed last message /
+            # part-quit reason can't carry IRC format/colour/BEL/ANSI injection
+            # into bot-attributed .seen output (clean on disk and on replay).
+            "detail": strip_ctrl(detail, _DETAIL_MAX),
         }
         with self._lock:
             self._seen[nick.lower()] = entry

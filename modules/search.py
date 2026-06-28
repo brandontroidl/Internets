@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote_plus, unquote
 
 import requests
-from .base import BotModule, fetch_json, help_row
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.search")
 
@@ -27,7 +27,10 @@ _DDG_UDDG_RE = re.compile(r'[?&]uddg=([^&]+)')
 
 
 def _strip(s: str) -> str:
-    return _TAG_RE.sub("", html.unescape(s)).strip()
+    # html.unescape can turn "&#1;" back into a raw C0 byte, so strip_ctrl
+    # MUST run last - it is the canonical defense against IRC formatting/escape
+    # injection in the result text spliced into a bot-attributed line.
+    return strip_ctrl(_TAG_RE.sub("", html.unescape(s)).strip())
 
 
 def _extract_ddg_url(href: str) -> str:
@@ -70,7 +73,7 @@ def _ddg_web(query: str, ua: str) -> str:
 
         href, raw_title = links[0]
         title = _strip(raw_title)
-        url = _extract_ddg_url(href)
+        url = strip_ctrl(_extract_ddg_url(href))
         desc = _strip(snippets[0]) if snippets else ""
         if len(desc) > 200:
             desc = desc[:197] + "..."
@@ -101,7 +104,7 @@ def _brave_web(query: str, key: str, ua: str) -> str:
             return f"[Brave] no results for '{query}'"
         top = results[0]
         title = _strip(top.get("title", "?"))
-        url = top.get("url", "")
+        url = strip_ctrl(top.get("url", ""))
         desc = _strip(top.get("description", ""))
         if len(desc) > 200:
             desc = desc[:197] + "..."
@@ -127,7 +130,7 @@ def _brave_image(query: str, key: str, ua: str) -> str:
             return f"[Brave Image] no results for '{query}'"
         top = results[0]
         title = _strip(top.get("title", "?"))
-        url = top.get("url", top.get("source", ""))
+        url = strip_ctrl(top.get("url", top.get("source", "")))
         w = top.get("properties", {}).get("width", "?")
         h = top.get("properties", {}).get("height", "?")
         return f"[Brave Image] \x02{title}\x02 — {url} | {w}x{h}px"

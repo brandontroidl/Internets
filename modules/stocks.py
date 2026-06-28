@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 
-from .base import BotModule, fetch_json, help_row
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.stocks")
 
@@ -254,7 +254,7 @@ class StocksModule(BotModule):
                 f"{p}crypto <symbol>  e.g. {p}crypto BTC",
             )
             return
-        symbol = arg.strip().split()[0]
+        symbol = strip_ctrl(arg.strip().split()[0], 16)
         if self.bot.rate_limited(nick):
             self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
             return
@@ -269,7 +269,7 @@ class StocksModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}crypto <symbol>  e.g. {p}crypto BTC")
             return
-        symbol = arg.strip().split()[0]
+        symbol = strip_ctrl(arg.strip().split()[0], 16)
         if self.bot.rate_limited(nick):
             self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
             return
