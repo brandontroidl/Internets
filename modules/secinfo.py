@@ -120,7 +120,10 @@ def _pwn_sync(password: str, ua: str) -> str:
     chars of the SHA-1, then match the returned suffix list ourselves.
     """
     try:
-        sha1 = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
+        # SHA-1 is MANDATED by HIBP's k-anonymity API (only the first 5 hex of
+        # the digest leave); it is a protocol requirement, not a security hash,
+        # so usedforsecurity=False documents that and clears the weak-hash alert.
+        sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
         prefix, suffix = sha1[:5], sha1[5:]
         with requests.get(
             _HIBP_URL + prefix,

@@ -70,6 +70,7 @@ def _ssl_cert(arg: str) -> str:
         return f"{strip_ctrl(host, 60)}: {e}"
     fam, typ, proto, _, sockaddr = infos[0]
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2  # refuse SSLv3/TLS<1.2 on the probe
     try:
         with socket.socket(fam, typ, proto) as s:
             s.settimeout(_TIMEOUT)

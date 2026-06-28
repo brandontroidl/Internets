@@ -97,9 +97,9 @@ def _pollard_rho(n: int) -> int:
     if n % 2 == 0:
         return 2
     while True:
-        x = random.randrange(2, n)
+        x = random.randrange(2, n)  # nosec B311: Pollard's rho factorisation, not crypto
         y = x
-        c = random.randrange(1, n)
+        c = random.randrange(1, n)  # nosec B311: non-crypto factorisation randomness
         d = 1
         while d == 1:
             x = (x * x + c) % n

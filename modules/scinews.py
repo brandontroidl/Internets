@@ -241,8 +241,8 @@ def _read_article(url: str, ua: str) -> str:
     parser = _Lead()
     try:
         parser.feed(raw.decode("utf-8", errors="replace"))
-    except Exception:  # noqa: BLE001 — malformed HTML
-        pass
+    except Exception as e:  # noqa: BLE001 - malformed HTML, best-effort lead
+        log.debug("scinews: lead parse failed: %s", type(e).__name__)
     lead = _clean(parser.lead())
     if not lead:
         return "(no preview available)"
