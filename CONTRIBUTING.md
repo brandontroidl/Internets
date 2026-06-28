@@ -1,8 +1,10 @@
 # Contributing
 
 Developer guide for the Internets IRC bot (Python 3.14, asyncio, hot-reloadable
-modules). Read this alongside `README.md` (architecture) and `SECURITY.md`
-(vulnerability reporting). Everything below is enforced by CI in
+modules). Read this alongside `README.md` (architecture), `SECURITY.md`
+(vulnerability reporting), and `CODE_OF_CONDUCT.md` (the Contributor Covenant;
+participation in this project means agreeing to it). Everything below is
+enforced by CI in
 `.github/workflows/` - if it is not green there, it does not merge.
 
 ## Local setup
