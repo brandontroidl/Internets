@@ -209,6 +209,28 @@ def _():
     assert rl.flood_check("n") is False   # first call recorded/allowed
     assert rl.flood_check("n") is True    # immediate repeat flagged (cd floored to >=1s)
 
+@test("Store: opt-out preference survives the stale-user prune (privacy floor)")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _make_store(tmp, user_max_age_days=1)
+        s.user_join("#x", "Bob", "bob@h")
+        s.set_opt_out("Bob", True)
+        for ch in s._users.values():      # age every Bob entry far past the cutoff
+            if "bob" in ch:
+                ch["bob"]["last_seen"] = "2000-01-01T00:00:00+00:00"
+        s.prune_users()
+        assert s.is_opted_out("Bob")      # the opt-out preference is NOT pruned away
+        s.stop()
+
+@test("Store: user_max_age_days <= 0 is floored, not a total wipe")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _make_store(tmp, user_max_age_days=0)   # misconfig
+        s.user_join("#x", "Alice", "alice@h")        # fresh entry
+        s.prune_users()
+        assert s.channel_users("#x")                 # floored to >=1d, not wiped
+        s.stop()
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

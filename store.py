@@ -120,7 +120,9 @@ class Store:
         self._lf = loc_file
         self._cf = channels_file
         self._uf = users_file
-        self._user_max_age = timedelta(days=user_max_age_days)
+        # Floor at 1 day: a 0/negative age makes the prune cutoff == now, which
+        # wipes ALL tracked users (and their opt-out flags) on the first flush.
+        self._user_max_age = timedelta(days=max(1, user_max_age_days))
 
         self._loc_lock  = threading.Lock()
         self._chan_lock  = threading.Lock()
@@ -278,7 +280,11 @@ class Store:
             entries = self._users[ch]
             stale = [
                 nick for nick, data in entries.items()
+                # Never prune an opted-out record: the opt-out is a privacy
+                # PREFERENCE that must outlive the inactivity window, or the bot
+                # silently resumes tracking a user who asked it not to.
                 if _before(data.get("last_seen", ""), cutoff)
+                and not data.get("opted_out")
             ]
             for nick in stale:
                 del entries[nick]
