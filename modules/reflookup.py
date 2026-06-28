@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from urllib.parse import quote
 
 from defusedxml import ElementTree  # arXiv ATOM is 3rd-party XML — defuse XXE/billion-laughs.
@@ -184,16 +185,40 @@ def element_lookup(query: str) -> str:
 
 
 # ── Wikipedia ─────────────────────────────────────────────────────────────
+def _wiki_summary(title: str, ua: str) -> dict | None:
+    """REST summary for an exact (URL-encoded) title, or None on 404."""
+    data = fetch_json(
+        f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
+        ua=ua, timeout=10, allow_404=True,
+    )
+    return data if (data and isinstance(data, dict)) else None
+
+
+def _wiki_search_title(query: str, ua: str) -> str | None:
+    """Resolve free text to the best article title via opensearch (forgiving of
+    case/punctuation), or None.  Returns [term, [titles], [descs], [urls]]."""
+    data = fetch_json(
+        "https://en.wikipedia.org/w/api.php",
+        params={"action": "opensearch", "search": query, "limit": "1",
+                "namespace": "0", "format": "json"},
+        ua=ua, timeout=10, allow_404=True,
+    )
+    if isinstance(data, list) and len(data) >= 2 and isinstance(data[1], list) and data[1]:
+        return data[1][0]
+    return None
+
+
 def _wiki_sync(query: str, ua: str) -> str:
     try:
-        title = quote(query.strip().replace(" ", "_"), safe="")
-        data = fetch_json(
-            f"https://en.wikipedia.org/api/rest_v1/page/summary/{title}",
-            ua=ua,
-            timeout=10,
-            allow_404=True,
-        )
-        if not data or not isinstance(data, dict):
+        q = query.strip()
+        title = quote(q.replace(" ", "_"), safe="")
+        data = _wiki_summary(title, ua)
+        if data is None:
+            # Exact-title miss (wrong case/punctuation): resolve via search.
+            resolved = _wiki_search_title(q, ua)
+            if resolved:
+                data = _wiki_summary(quote(resolved.replace(" ", "_"), safe=""), ua)
+        if data is None:
             return f"no Wikipedia article for '{strip_ctrl(query, 60)}'"
         page_title = strip_ctrl(data.get("title", query), 120)
         url = strip_ctrl(
@@ -331,35 +356,135 @@ def _so_sync(query: str, ua: str) -> str:
 
 
 # ── RFC ───────────────────────────────────────────────────────────────────
-def _rfc_sync(number: str, ua: str) -> str:
+def _rfc_by_number(n: int, ua: str) -> str | None:
+    """Format one RFC from the rfc-editor JSON, or None if it does not exist."""
+    data = fetch_json(
+        f"https://www.rfc-editor.org/rfc/rfc{n}.json",
+        ua=ua, timeout=10, allow_404=True,
+    )
+    if not data or not isinstance(data, dict):
+        return None
+    title = strip_ctrl((data.get("title") or "(untitled)").strip(), 200)
+    status = strip_ctrl((data.get("status") or "").strip(), 60)
+    month = strip_ctrl((data.get("month") or "").strip(), 20)
+    year = strip_ctrl(str(data.get("year") or "").strip(), 10)
+    date = " ".join(p for p in (month, year) if p)
+    bits = [f"\x02RFC {n}\x02: {title}"]
+    if status:
+        bits.append(status)
+    if date:
+        bits.append(date)
+    return " :: ".join(bits)
+
+
+def _rfc_search_number(query: str, ua: str) -> int | None:
+    """Resolve a title/keyword to the best-matching RFC number via the IETF
+    datatracker, or None.  Mirrors the .wiki search fallback: rank an exact
+    title match over a prefix match over a substring match, then shorter title."""
+    data = fetch_json(
+        "https://datatracker.ietf.org/api/v1/doc/document/",
+        params={"name__startswith": "rfc", "title__icontains": query,
+                "format": "json", "limit": "20"},
+        ua=ua, timeout=12, allow_404=True,
+    )
+    objs = data.get("objects", []) if isinstance(data, dict) else []
+    ql = query.strip().lower()
+    best = None  # (rank, number)
+    for o in objs:
+        num = o.get("rfc")
+        if not num:
+            nm = o.get("name", "")
+            num = int(nm[3:]) if nm.startswith("rfc") and nm[3:].isdigit() else None
+        if not num:
+            continue
+        tl = (o.get("title") or "").strip().lower()
+        rank = (tl == ql, tl.startswith(ql), ql in tl, -len(tl))
+        if best is None or rank > best[0]:
+            best = (rank, int(num))
+    return best[1] if best else None
+
+
+def _rfc_sync(arg: str, ua: str) -> str:
     try:
-        n = number.strip()
-        if not n.isdigit():
-            return "usage: .rfc <number>  e.g. .rfc 2616"
-        data = fetch_json(
-            f"https://www.rfc-editor.org/rfc/rfc{int(n)}.json",
-            ua=ua,
-            timeout=10,
-            allow_404=True,
-        )
-        if not data or not isinstance(data, dict):
-            return f"no RFC {strip_ctrl(n, 20)}"
-        title = strip_ctrl(data.get("title", "(untitled)"), 200)
-        status = strip_ctrl(data.get("status", ""), 60)
-        month = strip_ctrl(data.get("month", ""), 20)
-        year = strip_ctrl(str(data.get("year", "")), 10)
-        date = " ".join(p for p in (month, year) if p)
-        bits = [f"\x02RFC {int(n)}\x02: {title}"]
-        if status:
-            bits.append(status)
-        if date:
-            bits.append(date)
-        return " :: ".join(bits)
+        a = arg.strip()
+        if a.isdigit():
+            return _rfc_by_number(int(a), ua) or f"no RFC {strip_ctrl(a, 20)}"
+        num = _rfc_search_number(a, ua)
+        if num is None:
+            return f"no RFC matching '{strip_ctrl(arg, 60)}'"
+        return _rfc_by_number(num, ua) or f"no RFC matching '{strip_ctrl(arg, 60)}'"
     except (ResponseTooLarge, KeyError, ValueError, TypeError) as e:
         log.warning(f"rfc lookup: {e}")
         return "lookup failed"
     except Exception as e:
         log.warning(f"rfc lookup: {e}")
+        return "lookup failed"
+
+
+# ── rtfm (tldr-pages: Unix / BSD / Linux command reference) ────────────────
+_TLDR_BASE = "https://raw.githubusercontent.com/tldr-pages/tldr/main/pages"
+_TLDR_PLATFORMS = ("common", "linux", "osx", "freebsd", "openbsd", "netbsd")
+_RTFM_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+_-]*$")
+
+
+def _http_text(url: str, ua: str, max_bytes: int = 65536) -> str | None:
+    """Size-capped raw text GET for a trusted host; None on 404."""
+    import requests  # noqa: PLC0415 — lazy import matches base.fetch_json
+    with requests.get(url, headers={"User-Agent": ua}, timeout=10, stream=True) as r:
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        raw = r.raw.read(max_bytes + 1, decode_content=True)
+        if len(raw) > max_bytes:
+            raise ResponseTooLarge("tldr page too large")
+        return raw.decode("utf-8", "replace")
+
+
+def _rtfm_sync(query: str, ua: str) -> str:
+    """tldr-pages summary for a command (host is hardcoded/trusted; only the
+    command name is user input and is whitelisted to a safe charset)."""
+    try:
+        name = query.strip().lower().replace(" ", "-")
+        if not _RTFM_NAME_RE.match(name) or len(name) > 40:
+            return "usage: .rtfm <command>  e.g. .rtfm tar"
+        text = plat = None
+        for p in _TLDR_PLATFORMS:
+            raw = _http_text(f"{_TLDR_BASE}/{p}/{name}.md", ua)
+            if raw:
+                text, plat = raw, p
+                break
+        if not text:
+            return (f"no tldr page for '{strip_ctrl(name, 40)}' "
+                    f"(try the full page: man {strip_ctrl(name, 40)})")
+
+        def _ub(t: str) -> str:
+            return re.sub(r"`([^`]*)`", r"\1", t)
+
+        desc = ""
+        examples: list[tuple[str, str]] = []
+        pending = None
+        for ln in text.splitlines():
+            s = ln.strip()
+            if s.startswith(">"):
+                d = s.lstrip(">").strip()
+                if d and not desc and not d.lower().startswith(("more info", "see also")):
+                    desc = d
+            elif s.startswith("- "):
+                pending = s[2:].strip().rstrip(":")
+            elif s.startswith("`") and pending:
+                cmd = s.strip("`").strip().replace("{{", "").replace("}}", "")
+                examples.append((pending, cmd))
+                pending = None
+        head = f"\x02{name}\x02 ({plat})"
+        if desc:
+            head += f": {_ub(desc)}"
+        parts = [head] + [f"{_ub(d)}: {c}" for d, c in examples[:3]]
+        return strip_ctrl(" :: ".join(parts), 420)
+    except (ResponseTooLarge, ValueError, TypeError) as e:
+        log.warning(f"rtfm lookup: {e}")
+        return "lookup failed"
+    except Exception as e:
+        log.warning(f"rtfm lookup: {e}")
         return "lookup failed"
 
 
@@ -443,6 +568,7 @@ class RefLookupModule(BotModule):
         "isbn": "cmd_isbn",
         "so": "cmd_so",
         "rfc": "cmd_rfc",
+        "rtfm": "cmd_rtfm",
         "arxiv": "cmd_arxiv",
         "element": "cmd_element",
     }
@@ -505,7 +631,7 @@ class RefLookupModule(BotModule):
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]
-            self.bot.privmsg(reply_to, f"{nick}: {p}rfc <number>  e.g. {p}rfc 2616")
+            self.bot.privmsg(reply_to, f"{nick}: {p}rfc <number|title>  e.g. {p}rfc 2616  {p}rfc hypertext transfer protocol")
             return
         result = await asyncio.to_thread(_rfc_sync, arg[:_MAX_INPUT], self._ua)
         self.bot.privmsg(reply_to, result)
@@ -529,13 +655,24 @@ class RefLookupModule(BotModule):
             return
         self.bot.privmsg(reply_to, strip_ctrl(element_lookup(arg[:_MAX_INPUT])))
 
+    async def cmd_rtfm(self, nick: str, reply_to: str, arg: str | None) -> None:
+        if not self._gate(nick):
+            return
+        if not arg or not arg.strip():
+            p = self.bot.cfg["bot"]["command_prefix"]
+            self.bot.privmsg(reply_to, f"{nick}: {p}rtfm <command>  e.g. {p}rtfm tar")
+            return
+        result = await asyncio.to_thread(_rtfm_sync, arg[:_MAX_INPUT], self._ua)
+        self.bot.privmsg(reply_to, result)
+
     def help_lines(self, prefix: str) -> list[str]:
         return [
             help_row(prefix, "wiki <query>", "Wikipedia summary + link"),
             help_row(prefix, "doi <doi>", "Crossref work metadata"),
             help_row(prefix, "isbn <isbn>", "Open Library book lookup"),
             help_row(prefix, "so <query>", "Top Stack Overflow question"),
-            help_row(prefix, "rfc <number>", "RFC title/status/date"),
+            help_row(prefix, "rfc <number|title>", "RFC by number or title search"),
+            help_row(prefix, "rtfm <command>", "Unix/Linux/BSD command reference (tldr)"),
             help_row(prefix, "arxiv <id|query>", "arXiv paper lookup"),
             help_row(prefix, "element <name|symbol|Z>", "Periodic-table entry (offline)"),
         ]
