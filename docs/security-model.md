@@ -32,8 +32,9 @@ Two dicts, both guarded by one lock `self._auth_lock` (`internets.py:225`):
   observed hostmask for that nick.
 
 The lock guards BOTH dicts together (the comment at line 225 says so) because `is_admin`
-reads both and must see a consistent pair. `_nick_hosts` is updated on every inbound
-PRIVMSG (`internets.py:1075-1076`), and on JOIN/NICK/CHGHOST/ACCOUNT events.
+reads both and must see a consistent pair. `_nick_hosts` is written ONLY on inbound
+PRIVMSG (`internets.py:1076`) and NICK (`1054-1055`); popped on QUIT (`1043`) and cleared
+on reconnect (`1254`). JOIN/CHGHOST/ACCOUNT mutate the persistent Store, not `_nick_hosts`.
 
 ### is_admin re-checks the live binding, fail-closed
 
@@ -122,23 +123,27 @@ Constants on the class: `_AUTH_MAX_FAILS = 5`, `_AUTH_LOCKOUT = 300` (seconds),
 ### A session is a routing handle, not an authz boundary
 
 The session keys on nick, but nick is a routing handle that the network can reassign.
-Authorization is therefore re-bound to the hostmask on every `is_admin` call, and the
-session is destroyed on any identity-changing event. Handled in `_handle_membership`
-(`internets.py:984`):
+Authorization is therefore re-bound to the hostmask on every `is_admin` call; the session
+(`_authed`) is popped only by QUIT (`1044`) and NICK (`1060`). Handled in
+`_handle_membership` (`internets.py:984`):
 
 - QUIT (`internets.py:1033-1046`): drop the cached hostmask AND pop any `_authed` entry -
   a reconnector reusing the nick must re-auth.
 - NICK (`internets.py:1047-1066`): the session is DROPPED, not migrated to the new nick.
   The comment at 1056-1059 records why: migrating let a malicious server or a
   nick-takeover launder an authed session onto an attacker-chosen nick.
-- CHGHOST / ACCOUNT (`internets.py:985-1004`): refresh the cached hostmask so the next
-  `is_admin` comparison is against the current value (a changed host then revokes).
+- CHGHOST / ACCOUNT (`internets.py:985-1004`): update the persistent Store via
+  `user_rename`; they do NOT write `_nick_hosts`. A host change reaches `is_admin` only
+  after the user's next PRIVMSG (`1076`) or NICK (`1055`); CHGHOST/ACCOUNT alone do not
+  revoke.
 - Global drops: `_authed.clear()` on reconnect/disconnect paths
   (`internets.py:1249-1253`, `1327-1329`; `admin_cmds.py:470-472`).
 
-Concurrency note: `is_admin` is called from `asyncio.to_thread` workers (e.g.
-`flood_limited` -> `is_admin`, `internets.py:377`), so the lock is load-bearing for
-correctness under free-threaded / GIL-free Python, not decorative.
+Concurrency note: the `_auth_lock` guards `_authed`/`_nick_hosts` against a torn read of
+the pair. Today both `is_admin` and the membership mutators run on the event-loop thread
+(`flood_limited` -> `flood_check` -> `is_admin`, `internets.py:377`), so the lock is
+defensive - load-bearing only if a future free-threaded / GIL-free build moves `is_admin`
+onto a worker thread.
 
 ---
 
@@ -174,7 +179,7 @@ So a half-configured install (key left at its example value, in either tier) beh
 "unset" - it never leaks a placeholder into an outbound request. The same filter is
 mirrored in `modules/base.py:cred` (the `_PLACEHOLDER_MARKERS` substring check, lines
 111-146), which is the helper modules actually call to fetch a key with a config.ini
-fallback for pre-2.4.0 upgrades.
+fallback for 2.4.0-and-earlier upgrades.
 
 ### Fail-closed file perms (`perms_ok`, line 161)
 
@@ -217,9 +222,11 @@ mandatory ROTATE-EVERYTHING banner (lines 654-664): the values were in git histo
 `list` prints the backend per key, never the value (lines 520-544). There is no flag to
 print a secret. Legitimate extraction is the explicit
 `python -c "import secret_store; print(secret_store.get('NAME'))"`. The explicit
-equality branches in `_cmd_list`/`migrate` (lines 528-543, 479-482) exist to break
-CodeQL's `py/clear-text-logging-sensitive-data` taint propagation; that is deliberate,
-do not "simplify" them back into a tainted flow.
+equality branches in `_cmd_list` (lines 535-543) exist to break CodeQL's
+`py/clear-text-logging-sensitive-data` taint propagation; that is deliberate, do not
+"simplify" them back into a tainted flow. Separately, `migrate`'s 0o600-tightening log
+line deliberately OMITS the config path (lines 479-482) for the same heuristic, which
+taints any variable flowing through that function - that omission is intentional too.
 
 ### Keyring removed in 3.0.0
 

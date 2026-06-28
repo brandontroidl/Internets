@@ -130,6 +130,9 @@ Read `modules/base.py` (the `BotModule` interface and its docstrings) and the
 "Architecture" section of `README.md` before writing a module. Every new file
 under `modules/`:
 
+- Starts from `modules/example.py`, the copy-and-fill skeleton (copy it, rename
+  the class + logger, fill `COMMANDS` + the `cmd_*` coroutine(s)) - the best
+  starting point.
 - Subclasses `modules.base.BotModule`.
 - Defines `COMMANDS: dict[str, str]` mapping each command word to an `async def`
   method name (validated at import by `__init_subclass__`).
@@ -174,7 +177,8 @@ at the top, elevating per-job only where a SARIF upload needs
     pass that fails CI on any MEDIUM-or-higher severity + HIGH-confidence finding
     (`-iii` = HIGH confidence floor, `-ll` = MEDIUM+ severity floor), then
     uploads SARIF to the Security tab. `[tool.bandit]` in
-    `pyproject.toml` excludes `tests`/`.venv`/`build`/`dist`.
+    `pyproject.toml` excludes
+    `tests`/`.venv`/`build`/`dist`/`.git`/`__pycache__`.
   - `pip-audit`: scans `requirements.lock --strict` (any CVE fails the job).
     Scanned against the lockfile, not the editable install (the local
     `internets-irc` has no PyPI entry). One documented exception:

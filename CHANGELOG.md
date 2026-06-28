@@ -190,7 +190,7 @@ closed on an unverifiable hostmask binding. See Removed / Security below.
   stuck at 0; now catches `ValueError`. `_flush_loop` ran `flush()` unguarded so
   one bad cycle silently killed the persistence thread (all future saves lost);
   it is now wrapped so a failure logs and the loop continues.
-- **Config bounds + misc** (`3f40b62`): refuse an empty `command_prefix` at
+- **Config bounds + misc**: refuse an empty `command_prefix` at
   load; `metrics.expose` rejects `is_unspecified` binds (`::0`,
   `::ffff:0.0.0.0`, trailing-space forms the literal denylist missed) while
   still allowing loopback; the secret-store env-var tier now applies the same
@@ -199,7 +199,7 @@ closed on an unverifiable hostmask binding. See Removed / Security below.
   the per-nick gate; `weather` reads its UA via `cred()` (the key lives in
   `[secrets]`; a bare subscript KeyError'd on a default install and dropped
   weather from `.help`).
-- **Honest counters + use-time prefix** (`b437bff`): the shutdown summary's
+- **Honest counters + use-time prefix**: the shutdown summary's
   `dropped=%d` was never incremented (only the Prometheus metric was) - `Sender`
   now has an `on_drop` callback so the printed count is real; core dispatch read
   the import-time `CMD_PREFIX` constant that a `.rehash` never refreshed, so a
@@ -426,7 +426,7 @@ regrouped to mirror those `.help` categories.
   now calls it on every loaded module.
 - **`BotModule.__init_subclass__`** validates the `COMMANDS` → handler
   contract at class-definition time - a typo'd method name or a
-  non-coroutine handler is now an ImportError at startup, not an
+  non-coroutine handler is now a TypeError at load (class-definition) time, not an
   `AttributeError` the first time a user runs the command.
 - **`modules/calc.py`** - `**` capped only the exponent, so a huge base
   (`(10**300)**9999`) could still build a 100k-digit integer.  The

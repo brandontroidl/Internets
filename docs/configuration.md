@@ -7,7 +7,7 @@ actual consumers cited inline as `file:line`.
 
 Two facts to hold first:
 
-- `config.py` itself parses only a small subset of the file (`[irc]`, four `[bot]` keys, and
+- `config.py` itself parses only a small subset of the file (`[irc]`, five `[bot]` keys, and
   `[logging]`) into module-level constants at import time. Most other keys are read lazily by
   the core (`internets.py`) or by individual modules off `bot.cfg` / the global `cfg`. This doc
   documents every key by its **actual reader**, not by whether `config.py` reads it.
@@ -148,9 +148,9 @@ default is also `"90"`).
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:448` context | Hash gating `.load`/`.unload`/`.reload`. |
+| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:456` context | Hash gating `.load`/`.unload`/`.reload`. |
 
-`get_hash()` (`botlog.py:168-174`) calls `reload_config()` first, then reads
+`get_hash()` (`botlog.py:164-174`) calls `reload_config()` first, then reads
 `cfg["admin"].get("password_hash","").strip()` - so the value is re-pulled live (honoring the
 `config.local.ini` overlay) on each check rather than frozen at import. Generate with
 `python hashpw.py --algo argon2`; put the line in `config.local.ini` so it is never committed.
@@ -178,7 +178,7 @@ ZIP+4) pin their own country and ignore this (`config.ini.example:94-101`).
 | `provider_priority` | str (comma list) | `""` | `weather_providers/__init__.py:494` | Ordering + dispatch tie-breaker, **not** an allowlist. Also accepts legacy key name `priority` as fallback. |
 
 `configure()` (`weather_providers/__init__.py:490-505`) parses the comma list, lowercases each
-entry, then **appends every other known provider after the listed ones** (`__init__.py:504`). A
+entry, then **appends every other known provider after the listed ones** (`__init__.py:505`). A
 subset just sorts those first; every supported provider still registers. This is intentional so a
 stale list written before the air-quality/wildfire/tides providers existed does not silently
 disable whole capabilities. Providers register only when their credentials are present; `nws` and
@@ -226,7 +226,7 @@ section exists, else uses `seen.json`. Retention (`_max_age_days = 180`) is hard
 module, not configurable (`modules/seen.py:70`). The generic `_state_file(cfg, section, default)`
 helper in `admin_cmds.py:1027-1032` follows the same `[section].file` convention for module state
 files; the literal key name `file` is hardcoded inside the helper (`cfg[section].get("file", default)`,
-`admin_cmds.py:1031`), so it implements the convention without taking the key as a parameter.
+`admin_cmds.py:1032`), so it implements the convention without taking the key as a parameter.
 
 ## Secret model
 
@@ -249,7 +249,7 @@ First non-placeholder hit wins. Env var always overrides the file.
 
 `config.py`'s credential constants go through `_secret_or_cfg()` (`config.py:24-31`), which calls
 `secret_store.get()` and falls back to `cfg[section][key]` only if the store returned nothing.
-Modules go through `modules/base.py:cred()` (`base.py:117-147`), which does the same: secret_store
+Modules go through `modules/base.py:cred()` (`base.py:117-148`), which does the same: secret_store
 first, then `cfg.get(section, key)` with placeholder-marker filtering, never a bare `KeyError`.
 
 ### Permission gate (`perms_ok`, `secret_store.py:161-175`)
@@ -383,5 +383,5 @@ Verified against the readers above. These are the discrepancies the next maintai
    means "use the default endpoint", not "hidden".
 
 No other key in `config.ini.example` is unread, and no `config.py`-parsed key is missing from the
-template (`[irc]`, the four `[bot]` keys, and `[logging]` are all present; the three credential
+template (`[irc]`, the five `[bot]` keys, and `[logging]` are all present; the three credential
 keys parsed from `[irc]` live in `[secrets]` and resolve via the documented fallback).

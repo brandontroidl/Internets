@@ -134,10 +134,12 @@ Imported piecemeal by modules; these are the load-bearing ones:
   the body, reads at most `max_bytes + 1` raw bytes, and raises
   `ResponseTooLarge` *before decode/parse* if the cap is exceeded. This is the
   JSON-bomb / OOM guard; modules with legitimately large payloads pass an
-  explicit `max_bytes=` (poke ~1 MB, numberfact's OnThisDay feed ~4 MB). The
+  explicit `max_bytes=` (e.g. `steam`, `geocode`, `ipintel`). (`poke` ~1 MB and
+  `numberfact`'s OnThisDay feed ~4 MB cap the same way but *inline*, streaming
+  against their own `_MAX_BODY_BYTES` rather than through `fetch_json`.) The
   `requests` import is lazy. `with requests.get(..., stream=True)` guarantees
   the socket is released on every exit path. `allow_404=True` returns `None` on
-  404 for lookup-or-miss semantics (dictionary word, pokémon name) instead of
+  404 for lookup-or-miss semantics (dictionary word) instead of
   raising. Never use bare `requests.get(...).json()` in a module.
 - **`resolve_public(host, port=0) -> list` (`base.py:73`)** - anti-SSRF DNS
   check. Returns `getaddrinfo` results; raises `ValueError` if the host is
@@ -216,7 +218,7 @@ temp/wind/pressure/distance formatting) is imported by `weather.py` only.
 
 | Command(s) | Does | Needs | File |
 |---|---|---|---|
-| `.weather`/`.w` `.forecast`/`.f` `.hourly`/`.h` `.nowcast`/`.nc` `.alerts`/`.al` `.aqi`/`.air` `.uv`/`.uvi` `.pollen`/`.allergy` `.astro`/`.sun` `.marine`/`.sea` `.history`/`.hist` `.wildfire`/`.fire` `.space`/`.aurora` `.tides`/`.tide` `.providers` | Capability-based weather dispatcher front-end; resolves location, calls `weather_providers`, formats normalized dataclasses. `.providers` is admin-only health/capability dump. Accepts city/zip/`lat,lon`/`-n nick` and per-provider `-flag`s. | UA + provider keys (most keyless; ~19 keyed providers register only when their key is present) | weather.py |
+| `.weather`/`.w` `.forecast`/`.f` `.hourly`/`.h` `.nowcast`/`.nc` `.alerts`/`.al` `.aqi`/`.air` `.uv`/`.uvi` `.pollen`/`.allergy` `.astro`/`.sun` `.marine`/`.sea` `.history`/`.hist` `.wildfire`/`.fire` `.space`/`.aurora` `.tides`/`.tide` `.providers` | Capability-based weather dispatcher front-end; resolves location, calls `weather_providers`, formats normalized dataclasses. `.providers` is admin-only health/capability dump. Accepts city/zip/`lat,lon`/`-n nick` and per-provider `-flag`s. | UA + provider keys (core chain keyless - nws + openmeteo cover most capabilities - but ~20 of 32 providers are key-gated and register only when their credential is present) | weather.py |
 | `.regloc` (`.register_location`) `.myloc` `.delloc` | Save / show / delete the caller's default location (stored in the core per-nick loc store via `bot.loc_set/loc_get/loc_del`, `location.py:48/54/65`; resolved via geocode). No `forget()` override; `.forgetme` wipes the location through `privacy.forgetme` -> `loc_del`. | local store | location.py |
 
 ### Network, DNS, lookup
@@ -285,7 +287,7 @@ temp/wind/pressure/distance formatting) is imported by `weather.py` only.
 | `.irpg`/`.idlerpg` | IdleRPG player lookup over the configurable XML endpoint (default Rizon `idlerpg.rizon.net/xml.php`). | UA + endpoint | idlerpg.py |
 | `.qdb` | Quote-DB lookup. Default endpoint baked in (bash-org-archive.com); `[qdb] api_url` overrides. | UA + endpoint | qdb.py |
 | `.mtg` | Magic: the Gathering card via Scryfall. | UA | mtg.py |
-| `.poke`/`.pokemon` | PokéAPI lookup (`allow_404` miss; ~1 MB cap). | UA | poke.py |
+| `.poke`/`.pokemon` | PokéAPI lookup (inline 404 miss; ~1 MB inline cap). | UA | poke.py |
 | `.dnd` | D&D 5e SRD spell/monster via dnd5eapi.co. | UA | dnd.py |
 | `.recipe`/`.meal` | TheMealDB recipe lookup. | UA | recipe.py |
 | `.cocktail`/`.drink` | TheCocktailDB recipe lookup. | UA | cocktail.py |

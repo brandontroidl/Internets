@@ -177,6 +177,9 @@ Lookup order, first hit wins (`config.py:24`, `_secret_or_cfg`):
 1. `INTERNETS_<NAME>` environment variable.
 2. `config.ini` `[secrets]` section - read **only** when perms are exactly `0600`; the
    store fails closed (returns empty) on looser perms.
+3. Legacy plaintext field in the value's own non-secret section (`_secret_or_cfg`,
+   `config.py:24`), e.g. `[irc] nickserv_password` (`config.py:86`) - consulted only when
+   both the env var and `[secrets]` are empty.
 
 Secrets covered: NickServ/SASL/server/oper passwords, every provider/API key, the
 `weather_user_agent` contact identifier. Manage via `python -m secret_store`
@@ -292,12 +295,13 @@ port = 9779
 `_main` calls `registry.enable()` then `registry.expose(host, port)`. A failure here logs
 `event=metrics_start_failed` and is non-fatal.
 
-**Bind guard (loopback-only):** `expose()` (`metrics.py:256`) refuses to start unless
+**Bind guard (rejects all-interfaces binds):** `expose()` (`metrics.py:256`) refuses to start unless
 `enable()` was called, and **rejects any all-interfaces bind** - empty host, `0.0.0.0`,
 `::`, `::0`, IPv4-mapped `::ffff:0.0.0.0`, whitespace variants - by parsing the host with
-`ipaddress` and testing `is_unspecified`, raising `ValueError`. Loopback is the only
-non-specific address allowed. This is an auth-less internal endpoint; put a reverse proxy
-in front to expose it off-host. The HTTP handler serves Prometheus text exposition at
+`ipaddress` and testing `is_unspecified`, raising `ValueError`. Only empty/unspecified hosts
+are refused; any specific address binds, including a routable interface IP - loopback is the
+intended default, not an enforced constraint; bind `127.0.0.1` and front with a reverse proxy
+to expose off-host. This is an auth-less internal endpoint. The HTTP handler serves Prometheus text exposition at
 `GET /metrics` only (everything else 404s) on a daemon thread; idempotent (a second
 `expose` no-ops). `registry.shutdown()` stops it (joined with a 2s timeout) and is called
 in `graceful_shutdown`.

@@ -69,7 +69,7 @@ populates the scalar fields; `get_forecast` populates `forecast` (a list of
 which `modules/weather.py` treats as no data.
 
 `PollenResult` normalizes three incompatible upstream models into one struct
-(`base.py:231`); the formatter renders whichever group a provider filled:
+(`base.py:278`); the formatter renders whichever group a provider filled:
 
 - Open-Meteo / CAMS (Europe): per-species grains/m3 (`alder` ... `ragweed`).
 - Google Pollen (global): tree/grass/weed Universal Pollen Index 0-5.
@@ -82,8 +82,8 @@ nearest-station/sensor/fire providers), and the category mappers `aqi_category`
 (US EPA), `uv_category` (WHO), `kp_category` (NOAA G-scale), `pollen_cat_12`,
 `pollen_cat_5`.
 
-The provider protocol is `WeatherProvider` (`base.py:370`, `@runtime_checkable`
-Protocol). Required: `name: str`, `requires_key: bool`, `get_weather`,
+The provider protocol is `WeatherProvider` (`base.py:417`, `@runtime_checkable`
+at `:416`). Required: `name: str`, `requires_key: bool`, `get_weather`,
 `get_forecast`. All other `get_*` methods are optional - a provider supports a
 capability iff it defines that method. The method names in the Protocol
 docstring MUST match `_dispatch.CAPABILITY_METHODS`; that mapping is what
@@ -183,7 +183,7 @@ fallbacks queued behind it (`_dispatch.py:134`):
   the loop breaks before trying the next provider and logs
   `dispatch_budget_exhausted`.
 - `_PER_CALL_BUDGET = 30.0` - any single provider call. Each call is wrapped in
-  `asyncio.wait_for(method(...), timeout=min(remaining, 30))` (`_dispatch.py:406`).
+  `asyncio.wait_for(method(...), timeout=min(remaining, 30))` (`_dispatch.py:414`).
   A hang raises `asyncio.TimeoutError`, caught as a failure - so a brownout
   provider also trips its breaker instead of silently consuming budget.
 
@@ -211,7 +211,7 @@ This is a load-bearing distinction (`_dispatch.py:413`):
 
 ### 4.5 Failure handling
 
-On any exception (`_dispatch.py:426`):
+On any exception (`_dispatch.py:443`):
 
 - Classify rate-limit via `_is_rate_limit_error` (`_dispatch.py:147`): prefers
   structured signals (`HTTPError.is_rate_limit`, `status == 429`), falls back to
@@ -311,7 +311,7 @@ logging at ERROR with "check the API key/entitlement". It still re-probes after
 the cooldown, so fixing the key recovers the provider automatically without a
 restart.
 
-The dispatcher gates on `is_callable()` *before* each call (`_dispatch.py:388`),
+The dispatcher gates on `is_callable()` *before* each call (`_dispatch.py:392`),
 so an open breaker means the provider is skipped entirely, not invoked and
 caught.
 
@@ -385,7 +385,7 @@ Per-provider daily call counter, reset at UTC midnight, compared to a per-tier
 limit (`_DEFAULT_QUOTA_LIMITS`, `__init__.py:131`). Visibility only, **not
 enforcement** - the dispatcher never refuses a call on quota. `record_call(pid)`
 is invoked once per attempted upstream call from inside `dispatch`
-(`_dispatch.py:398`), counting failures too so `quota_status` reflects reality.
+(`_dispatch.py:402`), counting failures too so `quota_status` reflects reality.
 `quota` is a module-global dict (readable directly); mutations are serialized
 under `_quota_lock`. Limits are best-effort approximations of vendor free
 tiers - several vendors publish monthly or per-minute caps that don't translate
@@ -427,7 +427,8 @@ provider ids: `-nws`, `-mm`/`-meteomatics`, `-wk`/`-aw`/`-apple`/`-appleweather`
 `-om`, `-vc`, `-acc`, `-owm`, `-wb`, `-wapi`, `-pw`/`-pirate`, `-sg`, `-tio`/
 `-tomorrow`, `-wwo`, `-ws`, `-an` (AirNow), `-pa`, `-waqi`, `-oaq`, `-iq`,
 `-yr`/`-metno`, `-ss`, `-cuv`, `-gdacs`, `-eccc`, `-power`, `-nifc`, `-firms`,
-`-swpc`, `-tc`/`-coops`, `-pc`/`-pollencom`, `-gp`/`-googlepollen`.
+`-swpc`, `-tc` (tidecheck), `-coops` (noaa_coops), `-pc`/`-pollencom`,
+`-gp`/`-googlepollen`.
 
 `_parse_weather_flags` (`modules/weather.py:410`) pulls flags out of anywhere in
 the line: `-l` (list providers for the capability), `-p <name>` (legacy explicit
@@ -459,8 +460,9 @@ nowcast at 8.
 ## 9. Location resolution (`modules/geocode.py`)
 
 `geocode(query, user_agent, *, default_country="us")` (`geocode.py:720`) ->
-`(lat, lon, display_name, cc)` or `None`. Called via `asyncio.to_thread` from
-the command layer (it uses blocking `requests`).
+`(lat, lon, display_name, cc)` or `None`. An `async def` awaited directly by the
+command layer (`modules/weather.py:565`); it offloads its own blocking `requests`
+calls to threads internally.
 
 ### 9.1 Pipeline order
 
