@@ -26,6 +26,26 @@ from audit_log import default as _audit
 log = logging.getLogger("internets")
 
 
+# Help-menu grouping for the compact `.help` index — modules shown by
+# category instead of one flat wall of names.  Any loaded module not listed
+# here falls into "More", so new modules still appear without edits;
+# categorize them when convenient.
+_MODULE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Weather/space", ("weather", "iss", "spacex", "apod", "astro2", "satpass")),
+    ("Science/math",  ("mathx", "physcalc", "numberfact", "scinews")),
+    ("Dev/net/sec",   ("calc", "netcalc", "encode", "devtools", "devutils", "httpcode",
+                       "qr", "pkginfo", "ghinfo", "dnsutils", "probe", "secinfo", "ipinfo")),
+    ("Reference",     ("dictionary", "urbandictionary", "reflookup", "translate",
+                       "search", "location")),
+    ("Media/finance", ("imdb", "lastfm", "youtube", "xkcd", "mtg", "poke", "dnd",
+                       "recipe", "cocktail", "steam", "twitch", "idlerpg", "hn",
+                       "reddit", "crypto", "fx", "stocks")),
+    ("Fun",           ("bofh", "cowsay", "fact", "catfact", "chuck", "dadjoke",
+                       "advice", "bored", "games", "dice", "qdb", "fml")),
+    ("Util/social",   ("remind", "tell", "notes", "seen", "channels", "urls", "privacy")),
+)
+
+
 class AdminCommandsMixin:
     """All ``cmd_*`` methods for IRCBot.  Mixed in as a base class."""
 
@@ -295,11 +315,20 @@ class AdminCommandsMixin:
         # ── Default: compact module list (progressive disclosure) ──────
         # Hidden (un-configured) modules show in the list for admins so
         # they know what's available to enable; non-admins don't see them.
-        visible = sorted(configured + (hidden if admin else []))
+        visible = set(configured + (hidden if admin else []))
         self.preply(nick, reply_to,
-            f"── Internets v{__version__} ──")
-        for line in _wrap_list(visible, "  Modules: ", 74):
-            self.preply(nick, reply_to, line)
+            f"── Internets v{__version__} — {len(visible)} modules ──")
+        shown: set[str] = set()
+        for label, mods in _MODULE_GROUPS:
+            inlist = sorted(m for m in mods if m in visible)
+            if inlist:
+                shown.update(inlist)
+                for line in _wrap_list(inlist, f"  {label}: ", 74):
+                    self.preply(nick, reply_to, line)
+        leftover = sorted(visible - shown)
+        if leftover:
+            for line in _wrap_list(leftover, "  More: ", 74):
+                self.preply(nick, reply_to, line)
         self.preply(nick, reply_to,
             f"  {p}help <module> lists its commands.  {p}help <cmd> shows details.")
         if admin:
