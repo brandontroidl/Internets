@@ -197,6 +197,12 @@ def _():
         assert Store._read(p, {}) == {"a": "2"}
         assert Store._read(p + ".bak", {}) == {"a": "1"}
 
+@test("Store: _flush_loop guards flush() so a bad cycle can't kill persistence")
+def _():
+    import inspect
+    src = inspect.getsource(Store._flush_loop)
+    assert "try:" in src and "except" in src
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

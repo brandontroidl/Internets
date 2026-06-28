@@ -235,7 +235,14 @@ class Store:
 
     def _flush_loop(self) -> None:
         while not self._stop.wait(timeout=_FLUSH_INTERVAL):
-            self.flush()
+            try:
+                self.flush()
+            except Exception:
+                # A flush failure must never kill the persistence thread, which
+                # would silently stop ALL future saves with no liveness signal.
+                # Log and keep going; dirty datasets stay dirty and retry next
+                # cycle.
+                log.exception("Store flush failed; persistence thread continuing")
 
     def flush(self) -> None:
         """Write any dirty datasets to disk.  Safe to call from any thread."""

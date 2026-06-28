@@ -1158,13 +1158,19 @@ class IRCBot(AdminCommandsMixin):
                 except asyncio.TimeoutError:
                     raise ConnectionResetError(
                         f"Read timeout ({self._READ_TIMEOUT}s)")
-                except asyncio.LimitOverrunError:
+                except (ValueError, asyncio.LimitOverrunError):
+                    # An over-limit line.  asyncio's readline() consumes/clears
+                    # the buffer and re-raises LimitOverrunError as ValueError,
+                    # so ValueError is the arm that actually fires here (the bare
+                    # LimitOverrunError is kept defensively).  Count it, then
+                    # drain any still-incoming tail to the next newline so a
+                    # truncated remainder is not parsed as a spurious line.
                     self._metrics["oversized_lines"] += 1
                     _LOG_CONN.warning(
                         "event=oversized_line limit=%d action=discard",
                         self._READ_LIMIT)
                     try: await self._reader.readuntil(b"\n")
-                    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError): pass
+                    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError): pass
                     continue
                 if not raw: raise ConnectionResetError("Server closed connection")
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
