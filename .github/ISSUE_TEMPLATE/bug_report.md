@@ -6,9 +6,10 @@ labels: ["bug"]
 assignees: ""
 ---
 
-**Do NOT paste the contents of `secrets.ini` or `config.local.ini` into
-this issue.** If you are not sure whether a value is sensitive, leave it
-out — a maintainer will ask if it is needed.
+**Do NOT paste the contents of `config.ini` (especially the `[secrets]`
+section) or `config.local.ini` into this issue.** If you are not sure
+whether a value is sensitive, leave it out — a maintainer will ask if
+it is needed.
 
 If you believe the bug has security impact, stop here and follow
 [`SECURITY.md`](../../SECURITY.md) instead of filing a public issue.

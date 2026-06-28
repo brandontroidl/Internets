@@ -42,12 +42,6 @@ bcrypt>=4.2.0
 PyJWT>=2.10.1
 cryptography>=44.0.0
 
-# OS-native keyring backend for the secret store (macOS Keychain,
-# Linux Secret Service / kwallet, Windows Credential Manager).
-# On BSD / headless Linux without D-Bus the keyring backend is "fail"
-# and the file backend takes over silently — no manual config needed.
-keyring>=25.0.0
-
 # Hardened XML parser used by modules/qdb.py.  Blocks billion-laughs
 # DoS in addition to stdlib's XXE protection.
 defusedxml>=0.7.1

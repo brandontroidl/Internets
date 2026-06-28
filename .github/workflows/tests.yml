@@ -49,6 +49,14 @@ jobs:
           pip install -r requirements.lock --require-hashes
           pip install -e ".[dev]"
 
+      - name: Stage config.ini for tests
+        # config.ini is gitignored in real deployments (it holds the
+        # user's [secrets]).  config.py reads it at import-time, so
+        # the test harness needs a placeholder copy of the credential-
+        # free template to load the bot at all.
+        shell: bash
+        run: cp config.ini.example config.ini
+
       - name: Run standalone test suite
         run: python tests/run_tests.py
 
@@ -72,6 +80,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.lock --require-hashes
           pip install -e ".[dev]"
+
+      - name: Stage config.ini for tests
+        shell: bash
+        run: cp config.ini.example config.ini
 
       - name: Run coverage
         run: |

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from xml.etree import ElementTree
+from defusedxml import ElementTree  # XML from a 3rd-party HTTP endpoint — defuse XXE/billion-laughs.
 
 import requests
 from .base import BotModule
@@ -13,18 +13,30 @@ log = logging.getLogger("internets.idlerpg")
 _ALIGNMENTS = {"g": "Good", "e": "Evil", "n": "Neutral"}
 
 
+_MAX_BODY_BYTES = 256 * 1024
+
+
 def _lookup_sync(player: str, base_url: str, ua: str) -> str:
     """Blocking IdleRPG lookup — run via asyncio.to_thread."""
     try:
-        r = requests.get(
+        # `with` releases the socket on every exit path — a stream=True
+        # response left unclosed leaks the connection / FD.
+        with requests.get(
             base_url,
             params={"player": player},
             headers={"User-Agent": ua},
             timeout=10,
-        )
-        r.raise_for_status()
+            stream=True,
+        ) as r:
+            r.raise_for_status()
+            # Cap the body before buffering all of it into RAM — defusedxml
+            # protects against XML attacks during parsing, but the raw
+            # response still has to be read first.
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+        if len(body) > _MAX_BODY_BYTES:
+            return "IdleRPG response too large"
+        text = body.decode("utf-8", errors="replace")
         # Strip IRC control codes that the XML may contain
-        text = r.text
         for ch in ("\x02", "\x03", "\x0f", "\x1f"):
             text = text.replace(ch, "")
 

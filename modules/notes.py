@@ -88,6 +88,15 @@ class NotesModule(BotModule):
     def is_configured(self) -> bool:
         return True
 
+    def forget(self, nick: str) -> int:
+        """Erase all notes owned by ``nick`` (privacy right-to-erasure)."""
+        with self._lock:
+            removed = self._notes.pop(nick.lower(), None)
+        if removed is None:
+            return 0
+        self._save_notes()   # re-acquires self._lock — must not hold it here
+        return len(removed)
+
     def _save_notes(self) -> None:
         """Atomic write: tempfile + os.replace, mode 0o600."""
         with self._lock:

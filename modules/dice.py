@@ -7,6 +7,11 @@ from .base import BotModule
 
 log = logging.getLogger("internets.dice")
 
+# Bandit B311 false-positive — dice rolls aren't a security primitive but
+# using SystemRandom keeps the scan clean and gives marginally better
+# entropy at no perceptible cost.
+_rng = random.SystemRandom()
+
 _DICE_RE = re.compile(r"^(?:(\d+)d)?(\d+)([+-]\d+)?$")
 
 
@@ -19,7 +24,7 @@ def _roll(expr: str) -> str:
     mod    = int(m.group(3)) if m.group(3) else 0
     if not 1 <= count <= 100:   return "dice count must be 1–100"
     if not 2 <= sides <= 10000: return "sides must be 2–10000"
-    rolls   = [random.randint(1, sides) for _ in range(count)]
+    rolls   = [_rng.randint(1, sides) for _ in range(count)]
     total   = sum(rolls) + mod
     maximum = sides * count + mod
     minimum = count + mod

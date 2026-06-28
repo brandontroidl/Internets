@@ -11,7 +11,7 @@ async def fetch(key, lat, lon, location, hours=12):
         for h in fd.get("hour",[]):
             try:
                 if datetime.fromisoformat(h.get("time","")) < now: continue
-            except Exception: pass
+            except Exception: pass  # nosec B110: best-effort cleanup
             if len(entries) >= hours: break
             try: tm = datetime.fromisoformat(h.get("time","")).strftime("%I %p").lstrip("0")
             except Exception: tm = h.get("time","")

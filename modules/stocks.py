@@ -5,9 +5,8 @@ import logging
 import time
 from typing import Any
 
-import requests
 
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.stocks")
 
@@ -44,14 +43,12 @@ def _fmt_number(n: float) -> str:
 # ── Finnhub ──────────────────────────────────────────────────────────────────
 
 def _finnhub_quote(symbol: str, key: str, ua: str) -> str:
-    r = requests.get(
+    d: dict[str, Any] = fetch_json(
         "https://finnhub.io/api/v1/quote",
         params={"symbol": symbol.upper(), "token": key},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
     )
-    r.raise_for_status()
-    d: dict[str, Any] = r.json()
     c = d.get("c", 0)  # current
     if c == 0:
         raise ValueError("no data")
@@ -69,14 +66,12 @@ def _finnhub_quote(symbol: str, key: str, ua: str) -> str:
 def _finnhub_crypto(symbol: str, key: str, ua: str) -> str:
     # Finnhub uses BINANCE:BTCUSDT style
     pair = f"BINANCE:{symbol.upper()}USDT"
-    r = requests.get(
+    d = fetch_json(
         "https://finnhub.io/api/v1/quote",
         params={"symbol": pair, "token": key},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
     )
-    r.raise_for_status()
-    d = r.json()
     c = d.get("c", 0)
     if c == 0:
         raise ValueError("no data")
@@ -92,14 +87,12 @@ def _finnhub_crypto(symbol: str, key: str, ua: str) -> str:
 # ── Alpha Vantage ────────────────────────────────────────────────────────────
 
 def _alphavantage_quote(symbol: str, key: str, ua: str) -> str:
-    r = requests.get(
+    gq = fetch_json(
         "https://www.alphavantage.co/query",
         params={"function": "GLOBAL_QUOTE", "symbol": symbol.upper(), "apikey": key},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
-    )
-    r.raise_for_status()
-    gq = r.json().get("Global Quote", {})
+    ).get("Global Quote", {})
     price = float(gq.get("05. price", 0))
     if price == 0:
         raise ValueError("no data")
@@ -117,7 +110,7 @@ def _alphavantage_quote(symbol: str, key: str, ua: str) -> str:
 
 
 def _alphavantage_crypto(symbol: str, key: str, ua: str) -> str:
-    r = requests.get(
+    er = fetch_json(
         "https://www.alphavantage.co/query",
         params={
             "function": "CURRENCY_EXCHANGE_RATE",
@@ -125,11 +118,9 @@ def _alphavantage_crypto(symbol: str, key: str, ua: str) -> str:
             "to_currency": "USD",
             "apikey": key,
         },
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
-    )
-    r.raise_for_status()
-    er = r.json().get("Realtime Currency Exchange Rate", {})
+    ).get("Realtime Currency Exchange Rate", {})
     price = float(er.get("5. Exchange Rate", 0))
     if price == 0:
         raise ValueError("no data")
@@ -143,14 +134,12 @@ def _alphavantage_crypto(symbol: str, key: str, ua: str) -> str:
 # ── Twelve Data ──────────────────────────────────────────────────────────────
 
 def _twelvedata_quote(symbol: str, key: str, ua: str) -> str:
-    r = requests.get(
+    d = fetch_json(
         "https://api.twelvedata.com/quote",
         params={"symbol": symbol.upper(), "apikey": key},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
     )
-    r.raise_for_status()
-    d = r.json()
     if d.get("code"):
         raise ValueError(d.get("message", "error"))
     price = float(d.get("close", 0))
@@ -170,14 +159,12 @@ def _twelvedata_quote(symbol: str, key: str, ua: str) -> str:
 
 
 def _twelvedata_crypto(symbol: str, key: str, ua: str) -> str:
-    r = requests.get(
+    d = fetch_json(
         "https://api.twelvedata.com/quote",
         params={"symbol": f"{symbol.upper()}/USD", "apikey": key},
-        headers={"User-Agent": ua},
+        ua=ua,
         timeout=10,
     )
-    r.raise_for_status()
-    d = r.json()
     if d.get("code"):
         raise ValueError(d.get("message", "error"))
     price = float(d.get("close", 0))

@@ -119,7 +119,7 @@ class TellModule(BotModule):
                 try:
                     os.unlink(tmp)
                 except Exception:
-                    pass
+                    pass  # nosec B110: best-effort cleanup
                 raise
         except Exception as e:
             log.warning(f"tell: failed to save {self._file}: {e}")
@@ -195,13 +195,37 @@ class TellModule(BotModule):
             try:
                 loop.create_task(asyncio.to_thread(self._save_sync))
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                # Async schedule failed — fall through to the synchronous
+                # write path below.  Visibility helps if scheduling ever
+                # breaks systematically.
+                log.debug("tell: async save schedule failed: %s", type(e).__name__)
         # Fallback: synchronous write (rare — only at startup/shutdown).
         try:
             self._save_sync()
         except Exception as e:
             log.debug(f"tell: sync save fallback failed: {e}")
+
+    def forget(self, nick: str) -> int:
+        """Erase every tell involving ``nick`` — both messages queued FOR
+        them and messages they SENT to others (privacy right-to-erasure)."""
+        target = nick.lower()
+        removed = 0
+        with self._lock:
+            # Messages queued for this nick as the recipient.
+            removed += len(self._tells.pop(target, []))
+            # Messages this nick sent to anyone else.
+            for key in list(self._tells):
+                kept = [e for e in self._tells[key]
+                        if str(e.get("from", "")).lower() != target]
+                removed += len(self._tells[key]) - len(kept)
+                if kept:
+                    self._tells[key] = kept
+                else:
+                    del self._tells[key]
+        if removed:
+            self._save_sync()
+        return removed
 
     # ---- commands --------------------------------------------------------
 

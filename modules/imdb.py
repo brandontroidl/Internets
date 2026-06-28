@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.imdb")
 
@@ -11,14 +10,12 @@ log = logging.getLogger("internets.imdb")
 def _lookup_sync(title: str, key: str, ua: str) -> str:
     """Blocking OMDb lookup — run via asyncio.to_thread."""
     try:
-        r = requests.get(
+        d = fetch_json(
             "https://www.omdbapi.com/",
             params={"t": title, "plot": "short", "r": "json", "apikey": key},
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
         )
-        r.raise_for_status()
-        d = r.json()
         if d.get("Response") != "True":
             return f"nothing found for '{title}'"
         rating = d.get("imdbRating", "N/A")

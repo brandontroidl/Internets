@@ -8,6 +8,221 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 (No unreleased changes.)
 
+## [2.7.0] — 2026-05-20
+
+### Changed — secret-store consolidation (BREAKING for fresh setups)
+
+- **`config.ini` is now gitignored**; `config.ini.example` is the
+  committed credential-free template.  The old separate `secrets.ini`
+  is gone — its `[secrets]` section is now appended to the bottom of
+  `config.ini` itself (still 0o600, still falls back to the OS keyring,
+  still overridden by `INTERNETS_<NAME>` env vars).  Rationale: a flat
+  0o600 file beside a flat 0o644 file isn't meaningfully more secure
+  than one 0o600 file holding both; the split mostly created friction.
+- **`secret_store.py`** — `SECRETS_FILE` now points at `config.ini`.
+  `set`/`delete` perform **text-based in-place edits** of the
+  `[secrets]` section (the old configparser round-trip stripped every
+  comment in the file).  `init` copies `config.ini.example → config.ini`;
+  `--force` is now a wholesale overwrite (the old configparser-based
+  merge was incompatible with comment preservation).  `migrate` auto-
+  chmods `config.ini` to 0o600 before writing, and `_scrub_config_ini`
+  is now section-aware so it never blanks the very `[secrets]` entries
+  it just populated.
+- **Migrating an existing install:**
+  `cd ~/your-bot-dir && { echo; cat secrets.ini; } >> config.ini && shred -u secrets.ini && chmod 600 config.ini`
+- **`modules/numberfact.py`** — rewritten as a Wikipedia / local-math
+  hybrid because numbersapi.com is defunct (it 301-redirects to
+  `rembrandtpublishing.com/<path>` which 404s).  `math` facts are now
+  computed locally; `date` (MM/DD) and `year` use Wikipedia's REST
+  On-This-Day and page-summary endpoints; `trivia` uses the number's
+  article summary with a math-fact fallback when Wikipedia returns
+  the boilerplate "natural number following X and preceding Y"
+  extract.  The `.numberfact` / `.nf` command surface is unchanged.
+
+### Removed (BREAKING)
+
+- **OS keyring backend removed.** `secret_store` is now two-tier:
+  `INTERNETS_<NAME>` env var → `config.ini[secrets]` (0600).  The bot
+  targets headless deployments where `keyring` has no usable backend
+  ("fail" backend), and the optional desktop-session integration
+  dragged in ~10 transitive dependencies (`keyring`, `jeepney`,
+  `secretstorage`, `jaraco-*`, `importlib-metadata`, `zipp`,
+  `more-itertools`) for no practical benefit.  `requirements.lock`
+  drops from 33 to 23 packages.  The `--backend` flag on
+  `secret_store set` / `delete` / `migrate` is gone (only one backend
+  remains).  If you stored secrets in the OS keyring, move them into
+  `config.ini[secrets]` before upgrading.
+- **`python -m secret_store get --reveal`** — the `--reveal` flag is
+  gone.  Printing a stored secret to stdout was a real exposure surface
+  (terminal scrollback, shell history, screen recording) and CodeQL's
+  `py/clear-text-logging-sensitive-data` query correctly flagged the
+  data flow — closing the alert by suppression would have been hiding
+  a finding that wasn't actually a false positive.  The same operator
+  use case (manual key rotation) is now explicit at the call site:
+
+      python -c "import secret_store; print(secret_store.get('omdb_key'))"
+
+  The CLI's `get <name>` still prints `(set, N chars, backend=...)`.
+
+### Fixed — concurrency, auth lifecycle & privacy (14-discipline audit)
+
+- **Admin-session laundering on identity change.**  A `NICK` change
+  *migrated* the authenticated session to the new nick (and `QUIT` left
+  it dangling).  A malicious server or a nick-takeover could launder an
+  admin session onto an attacker-chosen identity.  Auth is now
+  **revoked** on both `NICK` and `QUIT` — re-authentication required.
+- **Cross-thread races on `_nick_hosts` / `_chanops`.**  Both dicts were
+  mutated on the event-loop thread but read from `to_thread` workers
+  (`is_admin`, `is_chanop`) with no lock — a torn read or "dict changed
+  size during iteration" crash.  `_nick_hosts` is now guarded by
+  `_auth_lock`, `_chanops` by a new `_chanops_lock`.
+- **`_nick_hosts` grew unbounded** — every nick that ever spoke was
+  retained forever (no eviction on `QUIT`).  Now dropped on `QUIT`.
+- **No dead-connection detection.**  The bot sent keepalive `PING`s but
+  never tracked the `PONG` reply; a half-open TCP link sat idle for the
+  full 300 s read-timeout.  `_keepalive` now records inbound `PONG`s and
+  forces a reconnect after 240 s of silence.
+- **`.forgetme` was an incomplete right-to-erasure** — it wiped only the
+  saved location and channel user-tracking, leaving `.seen`, `.tell`,
+  `.notes`, and `.remind` data intact.  A `forget(nick)` hook was added
+  to `BotModule` and implemented by all four PII modules; `.forgetme`
+  now calls it on every loaded module.
+- **`BotModule.__init_subclass__`** validates the `COMMANDS` → handler
+  contract at class-definition time — a typo'd method name or a
+  non-coroutine handler is now an ImportError at startup, not an
+  `AttributeError` the first time a user runs the command.
+- **`modules/calc.py`** — `**` capped only the exponent, so a huge base
+  (`(10**300)**9999`) could still build a 100k-digit integer.  The
+  estimated result bit-length is now bounded too.
+
+### Fixed
+
+- **`modules/poke.py`** — raise the response cap from 256 KB to 1 MB so
+  gen-1 Pokémon (Mewtwo ≈ 425 KB, Charizard ≈ 343 KB, Charmander ≈ 299 KB)
+  no longer hit "PokéAPI response too large".  Also strip leading zeros
+  on numeric IDs so `.poke 06` resolves to `#6` (Charizard) instead of
+  404'ing against `/pokemon/06`.
+- **`modules/numberfact.py` — CPU-DoS via unbounded `n`.**  `.nf <n>
+  math` / `.nf <n>` parsed an arbitrarily large integer and ran O(√n)
+  trial division — a 19-digit input measured at ~90 s of CPU on a
+  worker thread.  Explicit `n` is now clamped to 10¹² (√n ≤ 10⁶).
+- **Streamed HTTP responses were never closed** — `fetch_json`
+  (`modules/base.py`) and the inline `stream=True` sites in `poke`,
+  `numberfact` (×3), `idlerpg`, `fml`, `search` left the socket open
+  on every path, leaking file descriptors over long uptimes.  All are
+  now wrapped in `with requests.get(...) as r:`.
+- **`config.py`** — a missing/unreadable `config.ini` now fails with an
+  actionable `SystemExit` ("run `python -m secret_store init`") instead
+  of a bare `KeyError: 'irc'` deep in import.
+- **`secret_store.delete()`** — no longer swallows `PermissionError`;
+  `_delete_file_secret` raises on a non-0600 file so a delete blocked
+  by bad perms is reported as an error, not silently as "not found".
+- **`modules/search.py`** — `_web_sync` / `_image_sync` logged provider
+  failures only at `debug`, so on a default `INFO` level a bad Brave
+  key or DDG markup drift produced no log line at all.  Both now
+  `log.warning` each provider failure; `_image_sync` distinguishes
+  "no key configured" from "the keyed call failed".
+- **`modules/units.py`** — km/h→mph used the imprecise divisor `1.609`;
+  now `1.609344` (exact), matching `km_mi`.
+- **Windows: `UnicodeDecodeError` reading `config.ini`** — pin
+  `encoding="utf-8"` on every `configparser.read()` call site
+  (`config.py:reload_config`, `secret_store.py` ×4).  Python's default
+  on Windows is cp1252, which choked on the em-dashes / box-drawing
+  in `config.ini.example`'s section headers — broke every Windows test
+  job at import-time.
+
+### Security
+
+- **`audit_log.py` — HMAC-keyed hash chain.**  The tamper-evident audit
+  chain used plain SHA-256, which anyone with a copy of `audit.log`
+  could recompute to forge entries (the algorithm is in the repo).  It
+  is now HMAC-SHA-256 under a 32-byte key auto-generated into a 0600
+  sidecar (`audit.log.key`) — a leaked log alone can no longer be
+  forged.  Records carry `"v": 2`; pre-2.7.0 entries still verify
+  (legacy SHA-256 fallback).  The log also rotates to
+  `audit.log.<timestamp>` past 5 MB instead of growing unbounded.
+- **`modules/seen.py` — retention pruning.**  Passively-collected
+  last-seen entries were kept forever; now pruned past `max_age_days`
+  (default 180), on load and on every flush — mirrors `store.py`'s
+  user-tracking prune.
+- **`scripts/regen-lockfile.sh`** now requires Python 3.10 specifically
+  and fails loudly otherwise — the lock must resolve on the lowest
+  supported Python so `python_version < "3.11"` conditional transitives
+  (e.g. `async-timeout`) are captured; a lock built on 3.14 silently
+  omitted them.
+- **Test coverage** — new `tests/test_fetch_json.py` pins the
+  `fetch_json` size-cap boundary, the 404 paths, and malformed-JSON
+  handling; `tests/test_secret_store.py` gains mid-file `[secrets]`
+  edit + newline-injection tests; `tests/test_modules_base.py` covers
+  the `BotModule.forget` hook and the `__init_subclass__` `COMMANDS`
+  validator.
+- **HTTP response size caps everywhere** — added `fetch_json(url, *, ua,
+  …, max_bytes=256 KB)` to `modules/base.py` and migrated every module
+  that called `requests.get(...).json()` through it: `imdb`, `dictionary`,
+  `urbandictionary`, `lastfm`, `twitch`, `stocks` (×6), `steam` (×3 —
+  GetOwnedGames bumped to 1 MB for power users), `search`, `youtube`,
+  `urls` (is.gd).  `idlerpg` (XML) and `fml` (HTML scrape) inlined the
+  same stream + cap pattern.  Twitch's OAuth POST got an inline 16 KB
+  cap too.  Closes the OOM / JSON-bomb gap a third-party-API audit
+  flagged (the rest of the codebase already followed this pattern via
+  `r.raw.read(MAX_BODY_BYTES + 1, decode_content=True)`).
+- **`modules/idlerpg.py`** — use `defusedxml.ElementTree` instead of the
+  stdlib parser for 3rd-party IdleRPG XML (Bandit B314 — XXE / billion-
+  laughs hardening).
+- **`metrics.py`** — annotate the all-interfaces refusal guard with
+  `# nosec B104` (the literals appear as a defensive *check*, not a
+  bind target; false positive).
+- **`secret_store.py`** — strip the secret *name* from the keyring-
+  failure debug log (CodeQL `py/clear-text-logging-sensitive-data` was
+  flagging the identifier).
+- **`weather_providers/__init__.py`** — replace WeatherKit's
+  "missing: <names>" log with a count-only message (same CodeQL query
+  was flagging the comprehension that bound key+value tuples).
+- **Random-pick sweep** — every `random.choice` / `random.randint` /
+  `random.uniform` call site routed through `random.SystemRandom`
+  (`internets.py`, `modules/bofh.py`, `modules/dice.py`, `modules/fml.py`,
+  `modules/numberfact.py`, `modules/xkcd.py`).  Clears Bandit B311
+  across the codebase without per-line suppressions.
+- **`except Exception: pass` → debug log** in five hot paths
+  (`internets.py` shadow-ban prefix parse and stdin-close on shutdown,
+  `admin_cmds.py` `_state_file`, `modules/tell.py` async-save scheduler,
+  `modules/seen.py` temp-file cleanup).  Same best-effort semantics,
+  but now observable in `--log-level=debug`.  The remaining ~25 broad
+  `except Exception: pass` sites (best-effort cleanup, fallback paths)
+  are annotated with `# nosec B110: best-effort cleanup` instead of
+  changed — they're intentional swallows with no observability gain.
+- **`assert` → `raise RuntimeError`** at two invariant checks that
+  would otherwise be stripped by `python -O` (Bandit B101):
+  `process_lock.py:_read_existing` and `weather_providers/_http.py:_get_session`.
+- **`# nosec B105`** on `weather_providers/weatherkit/__init__.py:105`
+  (`self._token = ""` is JWT-cache init, not a hardcoded password —
+  `_headers()` regenerates the token on first use).
+- **`# nosec B404 / B603 / B606`** on `internets.py`'s Windows
+  self-restart path (`subprocess.Popen` + `os.execv` with
+  `sys.executable` + `sys.argv` — interpreter-controlled, not user input).
+- **`secret_store._cmd_list` rewritten** with explicit if/elif branches
+  mapping the (taint-tracked) backend code to a literal display label —
+  CodeQL's data-flow analysis now sees `print(label)` as printing one
+  of four constants, breaking the `py/clear-text-logging-sensitive-data`
+  false positive that fired on the previous `print(f"{name} {backend}")`.
+- **`.github/workflows/security.yml`** —
+  `pip-audit -r requirements.lock` (audit only third-party deps, not
+  the local editable `internets-irc` install which has no PyPI entry),
+  `--ignore-vuln PYSEC-2025-183` (disputed pyjwt CVE; the alleged weak
+  encryption is the application's key-length choice, not the library —
+  Apple WeatherKit picks the key for our usage).
+- **`gitleaks-action`** — `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`
+  opts into Node 24 early; v2.3.9 still ships Node 20 and GitHub
+  retires Node 20 in Sep 2026.
+- **`secret_store.set_value()`** rejects a CR/LF in the value — the
+  file backend writes `name = value` as one line, so an embedded
+  newline could inject a fake section/key into `config.ini`.
+- **`.gitignore`** — added `seen.json`, `tells.json`, `notes.json`,
+  `reminders.json` (per-module PII state files that were not ignored).
+- Removed 7 now-dead `import requests` lines left behind by the
+  `fetch_json` migration; removed the OS-keyring transitive deps from
+  `requirements.lock` (jeepney, secretstorage, jaraco-*, etc.).
+
 ## [2.6.0] — 2026-05-20
 
 ### Added — 24 new modules

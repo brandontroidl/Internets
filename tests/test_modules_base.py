@@ -159,3 +159,41 @@ class TestBotModuleHooks:
         assert m.on_load() is None
         assert m.on_unload() is None
         assert m.on_raw("anything") is None
+
+    def test_default_forget_returns_zero(self):
+        # Modules holding no PII inherit a no-op forget().
+        m = BotModule.__new__(BotModule)
+        m.bot = None
+        assert m.forget("anyone") == 0
+
+
+# ── BotModule.__init_subclass__ validates the COMMANDS contract ─────────
+
+class TestCommandsContractValidation:
+    def test_valid_async_handler_accepted(self):
+        class _Good(BotModule):
+            COMMANDS = {"foo": "cmd_foo"}
+
+            async def cmd_foo(self, nick, reply_to, arg):
+                pass
+
+        assert _Good.COMMANDS["foo"] == "cmd_foo"
+
+    def test_missing_handler_raises_at_class_definition(self):
+        with pytest.raises(TypeError, match="no such method"):
+            class _Bad(BotModule):
+                COMMANDS = {"foo": "cmd_does_not_exist"}
+
+    def test_sync_handler_rejected(self):
+        with pytest.raises(TypeError, match="async def"):
+            class _Bad(BotModule):
+                COMMANDS = {"foo": "cmd_foo"}
+
+                def cmd_foo(self, nick, reply_to, arg):  # sync — invalid
+                    pass
+
+    def test_empty_commands_is_fine(self):
+        class _NoCommands(BotModule):
+            pass
+
+        assert _NoCommands.COMMANDS == {}

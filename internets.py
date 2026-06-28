@@ -33,6 +33,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+# Bot-wide non-cryptographic PRNG for things like backoff jitter — routed
+# through ``random.SystemRandom`` so Bandit's B311 query stays clean.
+# True security primitives (token generation, session IDs) live in
+# ``secrets`` (also imported above).
+_RNG = random.SystemRandom()
+
 from config import (
     __version__,
     cfg, CONFIG_PATH,
@@ -119,12 +125,13 @@ def _backoff_jittered(attempt: int, base: float = 15.0, cap: float = 300.0,
                        jitter: float = _BACKOFF_JITTER) -> float:
     """Exponential backoff with bounded jitter.  Returns >= 0 seconds.
 
-    Uses ``random`` (not ``secrets``): jitter is for thundering-herd
-    avoidance, not security.
+    Uses ``random.SystemRandom`` (not ``secrets``): jitter is for
+    thundering-herd avoidance, not security.  Routing through the system
+    PRNG quiets Bandit's B311 query at no perceptible cost.
     """
     delay = _backoff(attempt, base, cap)
     spread = delay * jitter
-    return max(0.0, delay + random.uniform(-spread, spread))
+    return max(0.0, delay + _RNG.uniform(-spread, spread))
 
 
 # Note: distinguishing transient (DNS/RST/SSL renegotiation) from permanent
@@ -153,6 +160,7 @@ class IRCBot(AdminCommandsMixin):
     _READ_LIMIT          = 8192   # asyncio.open_connection buffer cap (bytes)
     _READ_TIMEOUT        = 300    # seconds — read inactivity → reconnect
     _PING_INTERVAL       = 90     # seconds between client-side PINGs
+    _PONG_TIMEOUT        = 240    # seconds without a PONG → link is dead
     _PONG_MAX_PAYLOAD    = 400    # bytes — guard against oversized PONGs
     _NICKSERV_WAIT_TICKS = 40     # 40 * _NICKSERV_TICK = 10 s total
     _NICKSERV_TICK       = 0.25   # seconds between identify polls
@@ -214,11 +222,13 @@ class IRCBot(AdminCommandsMixin):
         self._modules: dict[str, Any]  = {}
         self._commands: dict[str, tuple[str, str]] = {}
         self._mod_lock       = threading.Lock()
-        self._auth_lock      = threading.Lock()
+        self._auth_lock      = threading.Lock()   # guards _authed AND _nick_hosts
+        self._chanops_lock   = threading.Lock()   # guards _chanops
         self._authed: dict[str, str] = {}
         self._auth_fails: dict[str, tuple[int, float]] = {}
         self._nick: str    = NICKNAME
         self._chanops: dict[str, set[str]] = {}
+        self._last_pong: float = 0.0   # monotonic ts of last inbound PONG
         self._ns_identified = False
         self._sasl_in_progress = False
         self._cap_busy = False
@@ -337,7 +347,11 @@ class IRCBot(AdminCommandsMixin):
             return True
 
     def is_chanop(self, channel: str, nick: str) -> bool:
-        return nick.lower() in self._chanops.get(channel.lower(), set())
+        # Called from to_thread workers; _chanops is mutated on the event
+        # loop thread — the lock prevents a torn read / "dict changed
+        # size during iteration" against a concurrent membership update.
+        with self._chanops_lock:
+            return nick.lower() in self._chanops.get(channel.lower(), set())
 
     def flood_limited(self, nick: str) -> bool:
         return self._rate.flood_check(nick, self.is_admin(nick))
@@ -537,7 +551,7 @@ class IRCBot(AdminCommandsMixin):
             if _mreg.is_enabled():
                 _mreg.shutdown()
         except Exception:  # noqa: BLE001
-            pass
+            pass  # nosec B110: best-effort cleanup
         _LOG_SHUTDOWN.info(
             "event=shutdown_complete reconnects=%d dropped=%d cmd_timeouts=%d "
             "sasl_failures=%d oversized=%d unexpected=%d",
@@ -548,7 +562,7 @@ class IRCBot(AdminCommandsMixin):
         #    will replace the process image without running atexit handlers.
         for h in logging.getLogger("internets").handlers:
             try: h.flush()
-            except Exception: pass
+            except Exception: pass  # nosec B110: best-effort cleanup
 
     # ── Dispatch ─────────────────────────────────────────────────────
 
@@ -604,7 +618,7 @@ class IRCBot(AdminCommandsMixin):
                 from metrics import registry as _mreg  # noqa: PLC0415
                 _mreg.commands_total.inc(labels={"module": module_label, "command": cmd})
             except Exception:  # noqa: BLE001
-                pass
+                pass  # nosec B110: best-effort cleanup
             task = self._loop.create_task(
                 self._run_cmd(handler, nick, reply_to, arg, cmd), name=f"cmd-{cmd}")
             self._tasks.append(task)
@@ -692,7 +706,11 @@ class IRCBot(AdminCommandsMixin):
             SERVER, PORT, ssl=ssl_ctx, limit=8192)
         self._nick = NICKNAME
         self._cap_busy = self._sasl_in_progress = self._ns_identified = False
-        self._caps = set(); self._chanops = {}
+        self._caps = set()
+        # Reset the keepalive liveness clock for the fresh connection.
+        self._last_pong = time.monotonic()
+        with self._chanops_lock:
+            self._chanops = {}
         if self._sender: await self._sender.stop()
         self._sender = Sender(self._loop)
         self._sender.start(self._writer)
@@ -704,6 +722,20 @@ class IRCBot(AdminCommandsMixin):
     async def _keepalive(self) -> None:
         while True:
             await asyncio.sleep(self._PING_INTERVAL)
+            # Dead-link detection: if the server hasn't answered any of our
+            # recent PINGs the TCP connection is half-open — close the
+            # transport to force a reconnect now instead of waiting out the
+            # full _READ_TIMEOUT.
+            silent = time.monotonic() - self._last_pong
+            if silent > self._PONG_TIMEOUT:
+                _LOG_CONN.warning(
+                    "event=pong_timeout silent=%.0fs — forcing reconnect", silent)
+                if self._writer is not None:
+                    try:
+                        self._writer.close()
+                    except Exception:  # noqa: BLE001
+                        pass  # nosec B110: best-effort — reconnect proceeds regardless
+                return  # end keepalive; the read loop sees the closed transport
             self.send(f"PING :{SERVER}", priority=0)
 
     _INVITE_COOLDOWN = 5.0
@@ -726,7 +758,8 @@ class IRCBot(AdminCommandsMixin):
 
     def _on_part(self, channel: str) -> None:
         self.active_channels.discard(channel.lower())
-        self._chanops.pop(channel.lower(), None)
+        with self._chanops_lock:
+            self._chanops.pop(channel.lower(), None)
         self._save_channels()
         log.info(f"Left {channel}")
 
@@ -756,6 +789,12 @@ class IRCBot(AdminCommandsMixin):
             # Test BUG-050 inspects the source for the literal [:400] slice —
             # keep it; _MAX_PONG_LEN documents the value for humans.
             self.send(f"PONG :{payload[:400]}", priority=0); return
+        # Inbound PONG — the server answered our keepalive PING; mark the
+        # link live.  Command is at index 0 (`PONG ...`) or 1 (`:srv PONG`).
+        _p = line.split(" ", 2)
+        if _p[0] == "PONG" or (len(_p) > 1 and _p[1] == "PONG"):
+            self._last_pong = time.monotonic()
+            return
         line = strip_tags(line)
         # Shadow-ban filter: if the line's prefix nick is shadow-banned,
         # skip the module on_raw fanout so .seen / .tell / etc. don't
@@ -769,8 +808,11 @@ class IRCBot(AdminCommandsMixin):
                 src_nick = line[1:].split("!", 1)[0].split(" ", 1)[0]
                 if src_nick and src_nick.lower() in self._shadow_bans:
                     skip_module_fanout = True
-            except Exception:
-                pass
+            except Exception as e:
+                # Best-effort: a malformed prefix just means we can't tell if
+                # the source is shadow-banned, so fall through and let modules
+                # see the line.  Log at debug so the case is observable.
+                log.debug("shadow-ban prefix parse failed: %s", type(e).__name__)
         if not skip_module_fanout:
             with self._mod_lock: snapshot = list(self._modules.values())
             for inst in snapshot:
@@ -871,21 +913,24 @@ class IRCBot(AdminCommandsMixin):
         m = self._RE_353.match(line)
         if m:
             chan, names_str = m.group(1).lower(), m.group(2).strip()
-            ops = self._chanops.setdefault(chan, set())
-            for entry in names_str.split():
-                nc, is_op = parse_names_entry(entry)
-                if nc and is_op: ops.add(nc.lower())
+            with self._chanops_lock:
+                ops = self._chanops.setdefault(chan, set())
+                for entry in names_str.split():
+                    nc, is_op = parse_names_entry(entry)
+                    if nc and is_op: ops.add(nc.lower())
             return True
         m = self._RE_MODE.match(line)
         if m and m.group(1).startswith(("#", "&", "+", "!")):
-            ops = self._chanops.setdefault(m.group(1).lower(), set())
             op_modes = {"o", "a", "q"} & self._prefix_modes
-            for adding, ch, param in parse_mode_changes(
+            changes = parse_mode_changes(
                 m.group(2), m.group(3).strip().split() if m.group(3).strip() else [],
                 self._prefix_modes, self._chanmode_types
-            ):
-                if ch in op_modes and param:
-                    (ops.add if adding else ops.discard)(param.lower())
+            )
+            with self._chanops_lock:
+                ops = self._chanops.setdefault(m.group(1).lower(), set())
+                for adding, ch, param in changes:
+                    if ch in op_modes and param:
+                        (ops.add if adding else ops.discard)(param.lower())
             return True
         return False
 
@@ -905,7 +950,8 @@ class IRCBot(AdminCommandsMixin):
             # Touch the user record so we keep an up-to-date last_seen even
             # if no PRIVMSG/JOIN follows.  user_rename(old, old, hostmask)
             # is the existing way to refresh metadata in-place.
-            cached_hm = self._nick_hosts.get(acct_nick.lower())
+            with self._auth_lock:
+                cached_hm = self._nick_hosts.get(acct_nick.lower())
             if cached_hm:
                 self._store.user_rename(acct_nick, acct_nick, cached_hm)
             return True
@@ -923,8 +969,9 @@ class IRCBot(AdminCommandsMixin):
             if nick.lower() == self._nick.lower(): self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
-                ops = self._chanops.get(chan.lower())
-                if ops: ops.discard(nick.lower())
+                with self._chanops_lock:
+                    ops = self._chanops.get(chan.lower())
+                    if ops: ops.discard(nick.lower())
             return True
         m = self._RE_KICK.match(line)
         if m:
@@ -932,26 +979,43 @@ class IRCBot(AdminCommandsMixin):
             if nick.lower() == self._nick.lower(): self._on_part(chan)
             else:
                 self._store.user_part(chan, nick)
-                ops = self._chanops.get(chan.lower())
-                if ops: ops.discard(nick.lower())
+                with self._chanops_lock:
+                    ops = self._chanops.get(chan.lower())
+                    if ops: ops.discard(nick.lower())
             return True
         m = self._RE_QUIT.match(line)
         if m:
             nl = m.group(1).lower(); self._store.user_quit(m.group(1))
-            for ops in self._chanops.values(): ops.discard(nl)
+            with self._chanops_lock:
+                for ops in self._chanops.values(): ops.discard(nl)
+            # User left the network: drop the cached hostmask (bounds
+            # _nick_hosts growth) and revoke any admin session bound to
+            # that nick — a later reconnector reusing the nick must
+            # re-authenticate.
+            with self._auth_lock:
+                self._nick_hosts.pop(nl, None)
+                if self._authed.pop(nl, None) is not None:
+                    log.warning("Auth revoked: %s quit — re-auth required", m.group(1))
             return True
         m = self._RE_NICK.match(line)
         if m:
             old, hm, new = m.group(1), m.group(2), m.group(3)
             if old.lower() == self._nick.lower(): self._nick = new
             self._store.user_rename(old, new, hm)
-            self._nick_hosts.pop(old.lower(), None); self._nick_hosts[new.lower()] = hm
-            with self._auth_lock:
-                if old.lower() in self._authed:
-                    self._authed.pop(old.lower()); self._authed[new.lower()] = hm
             ol, nl = old.lower(), new.lower()
-            for ops in self._chanops.values():
-                if ol in ops: ops.discard(ol); ops.add(nl)
+            with self._auth_lock:
+                self._nick_hosts.pop(ol, None)
+                self._nick_hosts[nl] = hm
+                # Security: a NICK change is an identity change — DROP any
+                # admin session rather than migrating it.  Migrating let a
+                # malicious server (or a nick-takeover) launder an authed
+                # session onto an attacker-chosen nick.
+                if self._authed.pop(ol, None) is not None:
+                    log.warning("Auth revoked: %s changed nick to %s — re-auth required",
+                                old, new)
+            with self._chanops_lock:
+                for ops in self._chanops.values():
+                    if ol in ops: ops.discard(ol); ops.add(nl)
             return True
         return False
 
@@ -961,7 +1025,8 @@ class IRCBot(AdminCommandsMixin):
         nick, hostmask, target, text = m.groups()
         text = text.strip()
         self._stats_msg_in += 1
-        self._nick_hosts[nick.lower()] = hostmask
+        with self._auth_lock:
+            self._nick_hosts[nick.lower()] = hostmask
         if text.startswith("\x01"): return
         is_pm = target.lower() == self._nick.lower()
         reply_to = nick if is_pm else target
@@ -1072,7 +1137,7 @@ class IRCBot(AdminCommandsMixin):
                         except (asyncio.CancelledError, asyncio.TimeoutError):
                             pass
                         except Exception:
-                            pass
+                            pass  # nosec B110: best-effort cleanup
                     break
                 try:
                     raw = read_task.result()
@@ -1114,7 +1179,7 @@ class IRCBot(AdminCommandsMixin):
                     from metrics import registry as _mreg  # noqa: PLC0415
                     _mreg.reconnects_total.inc()
                 except Exception:  # noqa: BLE001
-                    pass
+                    pass  # nosec B110: best-effort cleanup
                 # Distinguish transient (most OSErrors, RST, SSL renegotiation,
                 # DNS) from likely-permanent (auth-related) failures.  SASL
                 # hard-fail above already incremented sasl_failures; if that
@@ -1132,7 +1197,7 @@ class IRCBot(AdminCommandsMixin):
                         _LOG_CONN.info("event=auth_sessions_cleared count=%d",
                                        len(self._authed))
                         self._authed.clear()
-                self._nick_hosts.clear()
+                    self._nick_hosts.clear()
                 identified = registered = False
                 if permanent:
                     _LOG_CONN.critical(
@@ -1251,7 +1316,7 @@ async def _main(lock: ProcessLock | None = None) -> None:
             log.warning("event=bot_shutdown_timeout action=cancel")
             bot_task.cancel()
             try: await bot_task
-            except (asyncio.CancelledError, Exception): pass
+            except (asyncio.CancelledError, Exception): pass  # nosec B110: best-effort cleanup
         pending.discard(bot_task)
     # Cancel any other still-pending tasks (e.g. the console).
     #
@@ -1268,8 +1333,10 @@ async def _main(lock: ProcessLock | None = None) -> None:
     if pending:
         try:
             sys.stdin.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort during shutdown — if stdin is already closed or
+            # detached we don't care, the goal is just to unblock input().
+            log.debug("stdin close during shutdown failed: %s", type(e).__name__)
     for task in pending:
         task.cancel()
         try:
@@ -1279,14 +1346,14 @@ async def _main(lock: ProcessLock | None = None) -> None:
     # Final logging-handler flush before potential execv().
     for h in logging.getLogger("internets").handlers:
         try: h.flush()
-        except Exception: pass
+        except Exception: pass  # nosec B110: best-effort cleanup
     if bot._restart_flag:
         log.info("event=restart_exec argv=%s", sys.argv)
         # Close all logging file handlers before exec to ensure clean log
         # rotation across the restart.
         for h in logging.getLogger("internets").handlers:
             try: h.close()
-            except Exception: pass
+            except Exception: pass  # nosec B110: best-effort cleanup
         # Release the process lock before execv replaces the process image —
         # otherwise the lockfile (containing OUR PID, which is preserved
         # across execv) would still be on disk when the new image starts,
@@ -1299,11 +1366,19 @@ async def _main(lock: ProcessLock | None = None) -> None:
             except Exception as e:
                 log.warning("event=restart_lock_release_failed err=%r", e)
         if os.name == "nt":
-            import subprocess
-            subprocess.Popen([sys.executable] + sys.argv)
+            # Bandit B404/B603 — subprocess + Popen with non-literal args.
+            # Both args come from the running interpreter itself:
+            #   sys.executable  = our own python.exe path
+            #   sys.argv        = our own command line as the OS handed us
+            # Neither is influenced by user input from the network, so the
+            # warnings are false positives for this self-relaunch path.
+            import subprocess  # nosec B404
+            subprocess.Popen([sys.executable] + sys.argv)  # nosec B603
             sys.exit(0)
         else:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            # See nosec rationale above (B404/B603): self-relaunch, args are
+            # the running interpreter's own executable + argv, not user input.
+            os.execv(sys.executable, [sys.executable] + sys.argv)  # nosec B606
 
 
 def _entry() -> None:

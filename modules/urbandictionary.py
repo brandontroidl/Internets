@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
-import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.ud")
 
@@ -14,13 +13,13 @@ _IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 def _lookup_sync(term: str, index: int, user_agent: str) -> str:
     """Blocking HTTP call — run via asyncio.to_thread."""
     try:
-        r    = requests.get(
+        data = fetch_json(
             "https://api.urbandictionary.com/v0/define",
             params={"term": term},
-            headers={"User-Agent": user_agent},
+            ua=user_agent,
             timeout=10,
         )
-        defs = r.json().get("list", [])
+        defs = data.get("list", [])
         if not defs:
             return f"No results for '{term}'"
         total = len(defs)

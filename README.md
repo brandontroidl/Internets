@@ -1,12 +1,10 @@
-# Internets
-
-**v2.6.0** — Progressive-disclosure help, audit / fingerprint / shadow-ban admin tools, +24 entertainment / dev / live-data modules (2026-05-20)
+# Internets v3.0.0
 
 A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups — plus stateful IRC-native tools (seen, tell, remind, notes), API-driven entertainment modules (PokéAPI, MTG, D&D, ISS tracker, xkcd, APOD, recipes, cocktails, HN, Reddit, …), pure-local dev utilities, and a full admin toolkit. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
 
 Weather queries are served by a capability-based dispatcher across **14 providers**, ranked by the scientific accuracy of the underlying numerical models. The default chain leads with NWS (US gov NDFD + HRRR + WaveWatch III, no key), Meteomatics (ECMWF/ICON/GFS blend), Apple WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model + CAMS + ERA5, no key), and Visual Crossing (ERA5), then AccuWeather, OpenWeatherMap, WeatherBit, WeatherAPI, Pirate Weather, Stormglass (marine), Tomorrow.io, World Weather Online, and Weatherstack. Each provider is a sub-module package with one file per API endpoint. The dispatcher auto-discovers capabilities, applies the static accuracy rank first, then live health (success rate, latency, rate limits), and routes each request accordingly. Force any active provider with a per-command flag — e.g. `.w -aw 67127`, `.w -vc Tokyo`, `.f -nws`.
 
-Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are read from the OS keyring (preferred) or a gitignored 0600 `secrets.ini`. `config.ini` is committed as a credential-free template; personal non-secret overrides live in a gitignored `config.local.ini` overlay. See `secrets.ini.example` for the full key list and [Security](#security) below for the lookup order.
+Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are read from `INTERNETS_<NAME>` environment variables or the `[secrets]` section of a gitignored 0600 `config.ini`. `config.ini.example` is the committed credential-free template; personal non-secret overrides may also go in a gitignored `config.local.ini` overlay. See `config.ini.example` for the full key list and [Security](#security) below for the lookup order.
 
 **Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
 **Python:** 3.10+  
@@ -21,7 +19,7 @@ sender.py             Async outbound queue with token-bucket rate limiting
 store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
 hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
 
-secret_store.py       Tiered secret store: env → OS keyring → secrets.ini (0600)
+secret_store.py       Two-tier secret store: env var → config.ini[secrets] (0600)
 
 weather_providers/
   base.py             Dataclasses: WeatherResult, HourlyResult, AlertsResult, AirQualityResult, etc.
@@ -111,7 +109,6 @@ This pulls in every package listed below. `scrypt` is built into Python's `hashl
 | [`argon2-cffi`](https://pypi.org/project/argon2-cffi/) | Argon2id admin password hashing — recommended (memory-hard, GPU-resistant). |
 | [`bcrypt`](https://pypi.org/project/bcrypt/) | bcrypt admin password hashing — alternative to Argon2id. |
 | [`PyJWT`](https://pypi.org/project/PyJWT/) + [`cryptography`](https://pypi.org/project/cryptography/) | Apple WeatherKit JWT signing (ES256). Needed only if WeatherKit credentials are configured. |
-| [`keyring`](https://pypi.org/project/keyring/) | OS-native secret storage (macOS Keychain / Linux Secret Service / Windows Credential Manager). Falls back to a 0600 `secrets.ini` if missing. |
 | [`defusedxml`](https://pypi.org/project/defusedxml/) | Hardened XML parser used by `modules/qdb.py`. Blocks billion-laughs DoS on top of stdlib's XXE protection. |
 
 For development (tests, linting, security scans), install the editable dev extras:
@@ -136,26 +133,34 @@ Paste the output into `config.local.ini` under `[admin] password_hash`. Plaintex
 
 **Set up your config:**
 
-`config.ini` is the committed template — never edit it with real values. Two gitignored files hold everything personal:
+`config.ini.example` is the committed template — never edit it with real values. Your gitignored local files:
 
 | File | Purpose | What goes in it |
 |------|---------|-----------------|
-| `secrets.ini` (0600) | Credentials and PII | NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier |
-| `config.local.ini` | Non-secret personal settings | Server hostname, port, nickname, `user_modes`, `default_location`, admin `password_hash` |
+| `config.ini` (0600) | Settings + credentials | Everything: server / nickname / modules autoload, **plus** the `[secrets]` section (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) |
+| `config.local.ini` (optional) | Non-secret personal overrides | Loaded on top of `config.ini` — useful if you want a personal overlay file separate from the main config |
 
 **Quickest path** (works without any extra Python packages, foreground-friendly, works inside tmux / systemd / screen):
 
 ```
-python -m secret_store init        # copies secrets.ini.example → secrets.ini (0600)
-$EDITOR secrets.ini                # paste your real values
-$EDITOR config.local.ini           # set server, nickname, password_hash, etc.
+python -m secret_store init        # copies config.ini.example → config.ini (0600)
+$EDITOR config.ini                 # paste your real values (including [secrets])
 ```
 
-`secrets.ini.example` lists every supported key with signup URLs and tier limits inline. Edit `secrets.ini` like any other config file — the bot only reads it if perms are `0600`.
+`config.ini.example` lists every supported key with signup URLs and tier limits inline. Edit `config.ini` like any other config file — the bot only reads values from `[secrets]` if perms are `0600`.
 
-**OS keyring** is an optional upgrade if you're on a desktop session (macOS, Linux with kwallet/gnome-keyring, Windows): `pip install keyring`, then `python -m secret_store set <name> --backend keyring` per credential. Headless servers should stick with the file — the keyring backend needs D-Bus/desktop integration.
+**Upgrading from a pre-`[secrets]` deployment (had a separate `secrets.ini`):**
 
-**Environment variables** override both: `export INTERNETS_NICKSERV_PASSWORD=...` for container/CI setups.
+```bash
+# Inside your bot directory, after git pull:
+{ echo; cat secrets.ini; } >> config.ini       # append [secrets] from old file
+shred -u secrets.ini                            # securely remove the old file
+chmod 600 config.ini                            # required — bot refuses 0644
+```
+
+Then restart the bot.  `INTERNETS_<NAME>` environment variables still win over the file, so anything stored there keeps working untouched.
+
+**Environment variables** override the file: `export INTERNETS_NICKSERV_PASSWORD=...` for container/CI setups.
 
 Useful commands:
 
@@ -163,10 +168,10 @@ Useful commands:
 python -m secret_store status                # backends available
 python -m secret_store list                  # all known secrets + which backend holds each
 python -m secret_store get <name>            # non-revealing: prints "(set, N chars, backend=X)"
-python -m secret_store get <name> --reveal   # actually print the value
-python -m secret_store set <name>            # prompt for value, store in best available backend
-python -m secret_store delete <name>         # remove from all backends
-python -m secret_store migrate               # upgrade from 2.4.0 — move keys out of config.ini
+python -c "import secret_store; print(secret_store.get('<name>'))"   # extract the value (for rotation)
+python -m secret_store set <name>            # prompt for value, store in config.ini[secrets]
+python -m secret_store delete <name>         # remove from config.ini[secrets]
+python -m secret_store migrate               # sweep plaintext from other sections into [secrets]
 ```
 
 See [Security](#security) below for the threat model and visibility guarantees.
@@ -244,14 +249,14 @@ Admin session (via PM):
 <Internets> 'weather' unloaded. 'weather' loaded (19 commands).
 
 <alice> .version
-<Internets> Internets 2.6.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
+<Internets> Internets 3.0.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
 ```
 
 CLI startup:
 
 ```
 $ python internets.py --version
-Internets 2.6.0
+Internets 3.0.0
 
 $ python internets.py
 2026-05-20 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
@@ -261,7 +266,7 @@ $ python internets.py
 2026-05-20 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
 2026-05-20 14:00:03 [INFO] internets.conn: Joined #mychannel
 > status
-  version  = 2.6.0
+  version  = 3.0.0
   nick     = Internets
   channels = #mychannel
   modules  = advice, apod, bofh, bored, calc, catfact, channels, chuck, cocktail, cowsay, crypto, dadjoke, devutils, dice, dictionary, dnd, fact, fml, fx, games, hn, httpcode, idlerpg, imdb, ipinfo, iss, lastfm, location, mtg, notes, numberfact, poke, qdb, qr, recipe, reddit, remind, search, seen, spacex, steam, stocks, tell, translate, twitch, urbandictionary, urls, weather, xkcd, youtube
@@ -279,19 +284,19 @@ The bot reads `config.ini` at startup. Relevant sections:
 
 **`[admin]`** — Hashed password for admin authentication. Supports `scrypt$`, `bcrypt$`, and `argon2$` prefixes.
 
-**`[weather]`** — User-Agent template and default unit system. The actual contact identifier (URL or email) lives in `secrets.ini` as `weather_user_agent`.
+**`[weather]`** — User-Agent template and default unit system. The actual contact identifier (URL or email) lives in `config.ini[secrets]` as `weather_user_agent`.
 
-**`[weather_providers]`** — `provider_priority` is a comma-separated list controlling registration order and the final tie-breaker after the accuracy rank + live health scores. NWS and Open-Meteo need no credentials. Every other provider's key lives in `secrets.ini` (`weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key`, plus `meteomatics_username` / `meteomatics_password`, and four WeatherKit fields). Providers without credentials are silently skipped at startup; their per-command flag is hidden from `.help` and rejected by `-l`.
+**`[weather_providers]`** — `provider_priority` is a comma-separated list controlling registration order and the final tie-breaker after the accuracy rank + live health scores. NWS and Open-Meteo need no credentials. Every other provider's key lives in `config.ini[secrets]` (`weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key`, plus `meteomatics_username` / `meteomatics_password`, and four WeatherKit fields). Providers without credentials are silently skipped at startup; their per-command flag is hidden from `.help` and rejected by `-l`.
 
-**`[stocks]`** — Multi-provider failover for `.stock` / `.crypto`. Keys (`finnhub_key`, `alphavantage_key`, `twelvedata_key`) live in `secrets.ini`. Configure at least one to enable the module.
+**`[stocks]`** — Multi-provider failover for `.stock` / `.crypto`. Keys (`finnhub_key`, `alphavantage_key`, `twelvedata_key`) live in `config.ini[secrets]`. Configure at least one to enable the module.
 
-**`[imdb]`** / **`[lastfm]`** / **`[youtube]`** / **`[steam]`** / **`[twitch]`** — Each module reads its credential(s) from `secrets.ini` via the secret store (`omdb_key`, `lastfm_key`, `youtube_key`, `steam_key`, `twitch_client_id` + `twitch_client_secret`). See `secrets.ini.example` for signup URLs and free-tier limits. `[steam]` keeps the non-secret `steamids_file` path (default `steamids.json`).
+**`[imdb]`** / **`[lastfm]`** / **`[youtube]`** / **`[steam]`** / **`[twitch]`** — Each module reads its credential(s) from `config.ini[secrets]` via the secret store (`omdb_key`, `lastfm_key`, `youtube_key`, `steam_key`, `twitch_client_id` + `twitch_client_secret`). See `config.ini.example` for signup URLs and free-tier limits. `[steam]` keeps the non-secret `steamids_file` path (default `steamids.json`).
 
 **`[idlerpg]`** — `api_url` for the IdleRPG XML endpoint (default: Rizon's `http://idlerpg.rizon.net/xml.php`). No key required.
 
 **`[qdb]`** — `api_url` for a QDB-compatible XML endpoint. qdb.us is defunct; leave blank to keep `.qdb` hidden, or set it to any working QDB-compatible endpoint. No key required.
 
-**`[search]`** — Web search defaults to DuckDuckGo (free, no key). Image search and an upgraded web tier need `brave_key` in `secrets.ini` (Brave Search API, 2,000 queries/month free).
+**`[search]`** — Web search defaults to DuckDuckGo (free, no key). Image search and an upgraded web tier need `brave_key` in `config.ini[secrets]` (Brave Search API, 2,000 queries/month free).
 
 **`[logging]`** — Log level, output file, rotation, and optional debug file.  The
 main log is rotated at `max_bytes` (default 5 MB) keeping `backup_count` old
@@ -561,17 +566,17 @@ WeatherKit is a built-in provider for Apple Developer Program members. It is not
 
 2. Go to Keys and create a new key with **WeatherKit** capability. Download the `.p8` private key file.
 
-3. Store the four values in `secrets.ini` (or via the keyring):
+3. Store the four values in `config.ini[secrets]`:
 
 ```ini
-; secrets.ini, under [secrets]
+; config.ini, under [secrets]
 weatherkit_team_id    = YOUR_TEAM_ID
 weatherkit_service_id = com.example.weatherkit-client
 weatherkit_key_id     = YOUR_KEY_ID
 weatherkit_key_file   = /path/to/AuthKey_XXXXXXXX.p8
 ```
 
-The `weatherkit_key_file` field is a *path* to the `.p8` file, not its contents — keep the key file outside `secrets.ini`.
+The `weatherkit_key_file` field is a *path* to the `.p8` file, not its contents — keep the key file outside `config.ini`.
 
 4. The bot signs JWT/ES256 tokens with the private key. Tokens are cached and refreshed before expiry. Apple requires the source to display as "Apple Weather" — the bot handles this via the `[Apple Weather]` tag in output.
 
@@ -593,23 +598,22 @@ If `PyJWT` / `cryptography` are not installed or any of the four values are miss
 
 ## Security
 
-**Secret store.** Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are *never* read from `config.ini`. Lookup order, first hit wins:
+**Secret store.** Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) live in the `[secrets]` section of a **gitignored** `config.ini`. Lookup order, first hit wins:
 
 1. `INTERNETS_<NAME>` environment variable
-2. OS keyring (optional — `pip install keyring`, then macOS Keychain / Linux Secret Service / Windows Credential Manager)
-3. Gitignored `secrets.ini` (0600 perms strictly enforced)
+2. Gitignored `config.ini` `[secrets]` section (0600 perms strictly enforced)
 
-The committed `config.ini` is a credential-free *structural* template — section names, non-secret defaults, comments. Personal non-secret overrides (server hostname, modes, default location, admin password hash) live in `config.local.ini` (also gitignored). See `secrets.ini.example` for the full key list with signup URLs and tier limits inline.
+`config.ini.example` is the committed credential-free *structural* template — section names, non-secret defaults, comments, plus a placeholder `[secrets]` section listing every supported key with signup URLs and tier limits inline. Personal non-secret overrides may also go in an optional gitignored `config.local.ini` overlay.
 
-These values are **not hashed**. Hashing is one-way; the bot has to send the literal password / API key on the wire, so the correct primitive is encryption-at-rest. The OS keyring backend provides OS-mediated, per-user-session encryption with no plaintext on disk; for headless setups the 0600 `secrets.ini` is the practical default.
+These values are **not hashed**. Hashing is one-way; the bot has to send the literal password / API key on the wire, so the correct primitive is encryption-at-rest, not hashing. OS-keyring support was removed in v3.0.0 — the bot targets headless deployments where `keyring` has no usable backend; the 0600 `config.ini` (or `INTERNETS_*` env vars) is the storage.
 
 **Visibility guarantees:**
 
 - The bot never logs the *value* of any secret. Module `on_load()` logs presence only.
 - Outbound IRC traffic is scrubbed for credential prefixes (`PASS`, `NS IDENTIFY`, `OPER`, `AUTHENTICATE`) before being logged by `sender.py`.
-- `python -m secret_store get <name>` prints `(set, N chars, backend=<env|keyring|file>)`. `--reveal` is required to print the actual value.
+- `python -m secret_store get <name>` prints only `(set, N chars, backend=<env|file>)` — never the value. There is **no CLI flag to print the secret** (closes a scrollback / shell-history exposure surface). For legitimate extraction (key rotation), use `python -c "import secret_store; print(secret_store.get('<name>'))"` so the intent is explicit at the call site.
 - `python -m secret_store list` shows the backend per secret, never the values.
-- `secrets.ini` is read only when `stat().st_mode & 0o777 == 0o600`. The store fails closed (returns empty) if perms are looser.
+- `config.ini` `[secrets]` is read only when `stat().st_mode & 0o777 == 0o600`. The store fails closed (returns empty) if perms are looser.
 - Unconfigured providers and modules are hidden: the `BotModule.is_configured()` hook makes `.help` skip them, weather flags for unconfigured providers don't appear in `.w -l`, and forcing such a provider returns "not active" without making an API call.
 
 **Authentication:** Admin passwords are hashed with scrypt (default), bcrypt, or argon2. Constant-time comparison via `hmac.compare_digest`. Brute-force lockout after 5 failures (5-minute cooldown). Sessions are tracked by nickname *and* hostmask — if a nick's hostmask changes after authentication (e.g. someone else takes the nick), the session is automatically invalidated. Sessions are also cleared on disconnect. Auth commands are restricted to PM. All auth state is protected by a dedicated `threading.Lock` for GIL-free Python compatibility.

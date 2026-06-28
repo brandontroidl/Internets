@@ -17,6 +17,10 @@ from .base import BotModule
 
 log = logging.getLogger("internets.xkcd")
 
+# Bandit B311 false-positive — picking which xkcd to show isn't a security
+# decision, but SystemRandom keeps the scan clean without per-line nosec.
+_rng = random.SystemRandom()
+
 _LATEST = "https://xkcd.com/info.0.json"
 _BYNUM  = "https://xkcd.com/{n}/info.0.json"
 _MAX_BODY_BYTES = 64 * 1024
@@ -53,7 +57,7 @@ def _fetch_sync(num: int | None, ua: str) -> str:
             return "xkcd unavailable"
         max_n = int(latest.get("num", 1))
         # xkcd 404 doesn't exist as a comic — skip it.
-        choice = random.randint(1, max_n)
+        choice = _rng.randint(1, max_n)
         if choice == 404:
             choice = 405
         d = _get_json(_BYNUM.format(n=choice), ua)

@@ -6,6 +6,12 @@ from .base import BotModule
 
 log = logging.getLogger("internets.bofh")
 
+# Bandit B311 flags the bare ``random`` module across the codebase even
+# when the use is non-cryptographic (picking an excuse to print).  Route
+# entertainment-grade picks through SystemRandom so the static check
+# stays clean without per-line ``# nosec`` annotations.
+_rng = random.SystemRandom()
+
 # Classic BOFH excuse list — sourced from the community-maintained canon.
 _EXCUSES: list[str] = [
     "clock speed",
@@ -123,7 +129,7 @@ class BofhModule(BotModule):
 
     async def cmd_bofh(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Generate a random BOFH excuse."""
-        excuse = random.choice(_EXCUSES)
+        excuse = _rng.choice(_EXCUSES)
         self.bot.privmsg(reply_to, f"[BOFH] Your excuse: {excuse}")
 
     def help_lines(self, prefix: str) -> list[str]:

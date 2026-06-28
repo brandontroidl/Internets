@@ -6,8 +6,8 @@ used by the bot core, modules, and logging.
 Outbound credentials (NickServ/SASL/server/oper passwords, API keys) are
 pulled from ``secret_store`` first and fall back to the matching field
 in ``config.ini`` only if the secret store has no value.  Run
-``python -m secret_store migrate`` once to move plaintext out of
-``config.ini`` into the OS keyring (or gitignored ``secrets.ini``).
+``python -m secret_store migrate`` once to move any plaintext out of the
+non-secret sections of ``config.ini`` into its ``[secrets]`` section.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import secret_store
 
-__version__ = "2.6.0"
+__version__ = "3.0.0"
 
 
 def _secret_or_cfg(secret_name: str, section: str, key: str, default: str = "") -> str:
@@ -50,15 +50,31 @@ def reload_config() -> list[str]:
     Every reload path — startup, SIGHUP, cmd_rehash, get_hash —
     must go through here so the overlay stays intact.
 
+    Reads are pinned to UTF-8: the committed config.ini.example uses
+    em-dashes and box-drawing characters in its section headers, and
+    ``configparser.read()`` otherwise falls back to the platform locale
+    (cp1252 on Windows), which raises UnicodeDecodeError on the very
+    first non-ASCII byte.
+
     Returns the list of files actually read (for caller logging).
     """
-    files = cfg.read(CONFIG_PATH)
+    files = cfg.read(CONFIG_PATH, encoding="utf-8")
     if _LOCAL_CONFIG.exists():
-        files += cfg.read(str(_LOCAL_CONFIG))
+        files += cfg.read(str(_LOCAL_CONFIG), encoding="utf-8")
     return files
 
 
 read_files = reload_config()
+
+# Fail loud and actionable if config.ini is absent/unreadable.  Without
+# this, the first `cfg["irc"]["server"]` access below raises a bare
+# `KeyError: 'irc'` that gives the operator no idea the file is missing.
+if not read_files:
+    raise SystemExit(
+        f"config.ini not found or unreadable at {CONFIG_PATH}\n"
+        "Run `python -m secret_store init` to create it from "
+        "config.ini.example, then edit in your settings + [secrets]."
+    )
 
 # ── IRC settings ─────────────────────────────────────────────────────
 

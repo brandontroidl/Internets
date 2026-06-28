@@ -1,0 +1,275 @@
+; ────────────────────────────────────────────────────────────────────
+;  Internets bot config — TEMPLATE.
+;
+;  Copy this file to config.ini and chmod 600:
+;
+;      cp config.ini.example config.ini
+;      chmod 600 config.ini
+;      $EDITOR config.ini          # paste your real values
+;
+;  Or run:  python -m secret_store init      # does the above for you
+;
+;  config.ini is gitignored.  Edit it freely — your changes never get
+;  committed.  Secrets live in the [secrets] section at the bottom of
+;  this file; the bot refuses to read them if perms are loose (anything
+;  other than 0o600).
+;
+;  Personal non-secret overrides may also go in a separate config.local.ini
+;  overlay (also gitignored, loaded on top of this file by config.py).
+;
+;  Secret lookup order (first hit wins):
+;    1. environment variable:   INTERNETS_<NAME_UPPER>=value
+;    2. [secrets] section in this file (0o600 enforced)
+;
+;  Visibility guarantees:
+;    - The bot never logs values from [secrets].
+;    - Outbound IRC messages are scrubbed for credential prefixes
+;      (PASS, IDENTIFY, OPER, AUTHENTICATE) before being logged.
+;    - `python -m secret_store get <name>` confirms presence only —
+;      it never prints the value (no flag does).
+;    - `python -m secret_store list` shows backend per secret, not the
+;      values themselves.
+; ────────────────────────────────────────────────────────────────────
+
+[irc]
+server = irc.example.org
+port = 6697
+; ssl = true  → SSL/TLS connection (port 6697)
+; ssl = false → plain TCP         (port 6667)
+ssl = true
+; ssl_verify = false for servers with self-signed certs (default: true)
+ssl_verify = true
+nickname = Internets
+realname = IRC Bot
+; No channels listed here — the bot is invite-only.
+; /INVITE Internets #yourchannel   to add it to a channel.
+; Joined channels are saved to channels.json and rejoined on restart.
+;
+; NickServ / SASL / server / oper passwords live in [secrets] below
+; (or in INTERNETS_* environment variables).
+
+oper_name =
+
+; User modes to set on connect (after MOTD). Applied before OPER.
+; Common modes: +i (invisible), +w (wallops), +x (host cloaking)
+user_modes = +iwx
+
+; Oper-only modes to set after successful OPER (381 numeric).
+oper_modes =
+
+; Server notice mask — set after OPER.  Requires +s in oper_modes.
+oper_snomask =
+
+[bot]
+command_prefix = .
+api_cooldown = 10
+flood_cooldown = 3
+default_location = 38.0000,-97.0000
+locations_file = locations.json
+channels_file  = channels.json
+users_file     = users.json
+; Prune user tracking entries older than this many days (default 90).
+user_max_age_days = 90
+modules_dir    = modules
+; Name of the IRC services bot for channel ownership verification.
+services_nick  = ChanServ
+; Comma-separated list of modules to load automatically on startup.
+; A loaded module that's missing its API key shows no commands in
+; `.help` until the key is added to [secrets] below.
+autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes
+
+[admin]
+; Admin password hash for .load / .unload / .reload — generate with
+; `python hashpw.py --algo argon2` and place the line in config.local.ini
+; (so it's not committed).  Leave blank here.  Plaintext passwords are
+; rejected at startup.
+password_hash =
+
+[weather]
+; Default unit system: "us" (°F, mph, inHg) or "metric" (°C, km/h, hPa).
+; The geocoder / weather-API User-Agent contact identifier is NOT set
+; here — it lives in [secrets].weather_user_agent at the bottom of this
+; file (Nominatim and several weather APIs require a real URL or email).
+units = us
+
+[weather_providers]
+; Provider priority order, ranked by scientific accuracy.  This is the
+; registration order and a final tie-breaker after the dispatcher's
+; accuracy ranks + live health scores.
+;
+; Providers register only when their credentials are present in
+; [secrets] (nws + openmeteo are key-free and always available).
+;
+; All 14 supported providers (most → least accurate):
+;   nws meteomatics weatherkit openmeteo visualcrossing accuweather
+;   openweathermap weatherbit weatherapi pirateweather stormglass
+;   tomorrowio worldweatheronline weatherstack
+provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, accuweather, openweathermap, weatherbit, weatherapi, pirateweather, stormglass, tomorrowio, worldweatheronline, weatherstack
+
+[steam]
+; Path for the nick → SteamID JSON cache (not a secret, just a path).
+steamids_file = steamids.json
+
+[idlerpg]
+; IdleRPG XML endpoint — default is Rizon's.  Override if you point
+; at a different network.
+api_url = http://idlerpg.rizon.net/xml.php
+
+[qdb]
+; QDB-compatible XML endpoint.  qdb.us is defunct as of 2024.
+; Leave blank to keep the .qdb command hidden.
+api_url =
+
+[metrics]
+; Optional Prometheus text-format exporter.  Off by default.
+; Set enable = true to start an HTTP listener on host:port serving
+; /metrics in Prometheus text format.  NEVER bind to 0.0.0.0 — the
+; endpoint is unauthenticated and exposes internal counters.
+enable = false
+host = 127.0.0.1
+port = 9779
+
+[logging]
+level = INFO
+log_file = internets.log
+; Log rotation — main log and debug log are both rotated.
+max_bytes    = 5242880      ; 5 MB per file before rotating
+backup_count = 3            ; keep 3 rotated copies (.1, .2, .3)
+; Optional: separate debug log capturing ALL output including protocol
+; traffic.  Leave blank to disable.
+debug_file =
+
+; ════════════════════════════════════════════════════════════════════
+;
+;                         [secrets]  — sensitive
+;
+; Everything below is read by secret_store.py when no INTERNETS_* env
+; var overrides it.  Strict 0o600 enforced — the bot refuses to read
+; this file if perms are looser.
+;
+; Any of these can instead be supplied via an environment variable,
+; which always wins over the file:
+;     export INTERNETS_<NAME_UPPER>=value
+;
+; ════════════════════════════════════════════════════════════════════
+
+[secrets]
+
+; ── IRC authentication ──────────────────────────────────────────────
+; All four are sent reversibly on the wire — they CANNOT be hashed.
+; The secret store gives encryption-at-rest; hashing would break auth.
+
+; NickServ / SASL identify password (most networks use the same value).
+nickserv_password =
+
+; SASL PLAIN password — set this only if it differs from
+; nickserv_password.  If empty, the bot falls back to nickserv_password.
+sasl_password =
+
+; PASS sent on connect, before NICK/USER.  Required by some bouncers.
+server_password =
+
+; /OPER password (oper_name lives in [irc] above).
+oper_password =
+
+
+; ── PII / contact identifier ────────────────────────────────────────
+; Nominatim and several weather APIs require a real contact in the
+; User-Agent.  Prefer a URL over an email when possible, e.g.
+; "Internets/3.0.0 (https://github.com/youruser/yourrepo)".
+
+weather_user_agent =
+
+
+; ── Weather provider keys ───────────────────────────────────────────
+; NWS and Open-Meteo need no key — leave them off this list.
+; A provider with a missing key is silently inactive: its flag (e.g.
+; -owm) is hidden from .help, and forcing it returns "not active".
+
+; WeatherAPI.com — free tier: 1M calls/month
+; https://www.weatherapi.com/signup.aspx
+weatherapi_key =
+
+; Tomorrow.io — free tier: 500 calls/day
+; https://app.tomorrow.io/signup
+tomorrowio_key =
+
+; OpenWeatherMap — free tier: 60 calls/min, 1M calls/month
+; https://home.openweathermap.org/users/sign_up
+openweathermap_key =
+
+; Visual Crossing — free tier: 1000 calls/day
+; https://www.visualcrossing.com/sign-up
+visualcrossing_key =
+
+; Pirate Weather — free tier: 20,000 calls/month (Dark Sky replacement)
+; https://pirateweather.net/getting-started
+pirateweather_key =
+
+; Weatherstack — free tier: 250 calls/month (current only)
+; https://weatherstack.com/signup/free
+weatherstack_key =
+
+; Meteomatics — username + password (free trial available)
+; https://www.meteomatics.com/en/sign-up-for-free-weather-api-test-account/
+meteomatics_username =
+meteomatics_password =
+
+; AccuWeather — free tier: 50 calls/day
+; https://developer.accuweather.com/user/register
+accuweather_key =
+
+; World Weather Online — free tier: 500 calls/day
+; https://www.worldweatheronline.com/weather-api/
+worldweatheronline_key =
+
+; WeatherBit — free tier: 50 calls/day
+; https://www.weatherbit.io/account/create
+weatherbit_key =
+
+; Stormglass (marine specialist) — free tier: 10 calls/day
+; https://stormglass.io/sign-up
+stormglass_key =
+
+; Apple WeatherKit — Apple Developer Program (500K calls/month)
+; Requires PyJWT + cryptography: pip install internets-irc[weatherkit]
+; https://developer.apple.com/weatherkit/
+weatherkit_team_id =
+weatherkit_service_id =
+weatherkit_key_id =
+; weatherkit_key_file is a *path* to the .p8 private key file — kept
+; outside this secrets section because it's typically owned by the
+; bot user already.  Store the path, not the key contents.
+weatherkit_key_file =
+
+
+; ── Other module keys ───────────────────────────────────────────────
+; A loaded module with a missing key shows no commands in .help.
+
+; OMDb (movies)               — https://www.omdbapi.com/apikey.aspx
+omdb_key =
+
+; Last.fm                     — https://www.last.fm/api/account/create
+lastfm_key =
+
+; YouTube Data API v3         — https://console.cloud.google.com/apis/credentials
+youtube_key =
+
+; Stocks / crypto (any one of the three enables the module)
+; Finnhub                     — https://finnhub.io/register
+finnhub_key =
+; Alpha Vantage               — https://www.alphavantage.co/support/#api-key
+alphavantage_key =
+; Twelve Data                 — https://twelvedata.com/account
+twelvedata_key =
+
+; Steam Web API               — https://steamcommunity.com/dev/apikey
+steam_key =
+
+; Twitch Helix                — https://dev.twitch.tv/console/apps
+twitch_client_id =
+twitch_client_secret =
+
+; Brave Search (optional)     — https://brave.com/search/api/
+;   .sw/.g fall back to DuckDuckGo if missing; image search needs Brave.
+brave_key =

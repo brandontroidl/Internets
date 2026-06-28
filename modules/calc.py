@@ -74,8 +74,15 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
             raise ValueError(f"unsupported operator: {type(node.op).__name__}")
         left, right = _safe_eval(node.left, depth + 1), _safe_eval(node.right, depth + 1)
         if isinstance(node.op, ast.Pow):
+            # Cap BOTH operands of `**`.  Capping only the exponent still
+            # let a huge base (e.g. (10**300)**9999) build a multi-hundred-
+            # -thousand-digit int — a CPU/memory amplification.  Bound the
+            # estimated result bit-length too.
             if isinstance(right, (int, float)) and abs(right) > 10000:
                 raise ValueError("exponent too large")
+            if isinstance(left, int) and isinstance(right, int) and right > 0:
+                if left.bit_length() * right > 100_000:
+                    raise ValueError("result too large")
         return op(left, right)
     if isinstance(node, ast.UnaryOp):
         op = _UNARY_OPS.get(type(node.op))

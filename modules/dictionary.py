@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
-import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.dictionary")
 
@@ -17,16 +16,13 @@ def _lookup_sync(word: str, index: int, ua: str) -> str:
     Uses the Free Dictionary API (dictionaryapi.dev) — no key required.
     """
     try:
-        r = requests.get(
+        entries = fetch_json(
             f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
+            allow_404=True,
         )
-        if r.status_code == 404:
-            return f"no definition found for '{word}'"
-        r.raise_for_status()
-        entries = r.json()
-        if not entries or not isinstance(entries, list):
+        if entries is None or not entries or not isinstance(entries, list):
             return f"no definition found for '{word}'"
 
         # Flatten all definitions across all meanings

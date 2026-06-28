@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import requests
-from .base import BotModule
+from .base import BotModule, fetch_json
 
 log = logging.getLogger("internets.youtube")
 
@@ -30,17 +29,15 @@ def _search_sync(query: str, key: str, ua: str) -> str:
     """Blocking YouTube search — run via asyncio.to_thread."""
     try:
         # Step 1: search
-        r = requests.get(
+        items = fetch_json(
             "https://www.googleapis.com/youtube/v3/search",
             params={
                 "part": "snippet", "order": "relevance", "type": "video",
                 "maxResults": "1", "q": query, "key": key,
             },
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
-        )
-        r.raise_for_status()
-        items = r.json().get("items", [])
+        ).get("items", [])
         if not items:
             return f"no results for '{query}'"
 
@@ -48,16 +45,14 @@ def _search_sync(query: str, key: str, ua: str) -> str:
         title = items[0]["snippet"]["title"]
 
         # Step 2: get video details (duration, view count, likes)
-        r2 = requests.get(
+        vids = fetch_json(
             "https://www.googleapis.com/youtube/v3/videos",
             params={
                 "part": "contentDetails,statistics", "id": vid_id, "key": key,
             },
-            headers={"User-Agent": ua},
+            ua=ua,
             timeout=10,
-        )
-        r2.raise_for_status()
-        vids = r2.json().get("items", [])
+        ).get("items", [])
         if not vids:
             return f"\x02YouTube\x02 {title} | https://www.youtube.com/watch?v={vid_id}"
 

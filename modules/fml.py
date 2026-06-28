@@ -9,6 +9,11 @@ import re
 import requests
 from .base import BotModule
 
+# Bandit B311 false-positive — picking which scraped quote to print is
+# not security-relevant, but routing through SystemRandom keeps scans
+# clean without per-line ``# nosec``.
+_rng = random.SystemRandom()
+
 log = logging.getLogger("internets.fml")
 
 # Match an FML article's BODY anchor on the random page.  The site
@@ -42,16 +47,24 @@ def _strip_tags(s: str) -> str:
 def _lookup_sync(ua: str) -> str:
     """Fetch a random FML quote — blocking, run via asyncio.to_thread."""
     try:
-        r = requests.get(
+        # `with` releases the socket on every exit path — a stream=True
+        # response left unclosed leaks the connection / FD.
+        with requests.get(
             "https://www.fmylife.com/random",
             headers={
                 "User-Agent": ua,
                 "Accept": "text/html",
             },
             timeout=15,
-        )
-        r.raise_for_status()
-        raw_matches = _FML_ARTICLE.findall(r.text)
+            stream=True,
+        ) as r:
+            r.raise_for_status()
+            # Cap the page at 512 KB — FML's /random is normally ~200 KB.
+            body = r.raw.read(512 * 1024 + 1, decode_content=True)
+        if len(body) > 512 * 1024:
+            return "fmylife.com response too large"
+        text = body.decode("utf-8", errors="replace")
+        raw_matches = _FML_ARTICLE.findall(text)
         if not raw_matches:
             return "could not parse FML page — site layout may have changed"
 
@@ -77,7 +90,7 @@ def _lookup_sync(ua: str) -> str:
             qid, raw = raw_matches[0]
             candidates = [(qid, _strip_tags(raw))]
 
-        qid, text = random.choice(candidates)
+        qid, text = _rng.choice(candidates)
         if len(text) > 400:
             text = text[:397] + "..."
         return f"[fml #{qid}] {text}"

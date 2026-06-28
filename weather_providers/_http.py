@@ -119,7 +119,13 @@ def _loop_key() -> int:
 
 async def _get_session(timeout: int) -> "aiohttp.ClientSession":
     """Return a cached aiohttp ClientSession keyed by event loop."""
-    assert _HAS_AIOHTTP
+    # Bandit B101 — replace `assert _HAS_AIOHTTP` with a real check so
+    # the guard survives `python -O`.  This function is only reachable
+    # from code paths that already checked the flag, so the raise is
+    # purely defensive (broken-invariant report, not user input).
+    if not _HAS_AIOHTTP:
+        raise RuntimeError(
+            "_get_session called without aiohttp — caller forgot to check _HAS_AIOHTTP")
     key = _loop_key()
     sess = _session_cache.get(key)
     if sess is not None and not sess.closed:
@@ -161,7 +167,7 @@ def _atexit_close() -> None:
         finally:
             loop.close()
     except Exception:  # noqa: BLE001
-        pass
+        pass  # nosec B110: best-effort cleanup
 
 
 atexit.register(_atexit_close)
@@ -239,7 +245,7 @@ async def _get_json_aiohttp(
                 try:
                     body_snip = (await resp.text())[:200]
                 except Exception:  # noqa: BLE001
-                    pass
+                    pass  # nosec B110: best-effort cleanup
                 raise HTTPError(
                     f"HTTP {status} for {url} {body_snip!r}",
                     status=status,
@@ -300,11 +306,11 @@ def _requests_get(
         try:
             body_snip = r.text[:200]
         except Exception:  # noqa: BLE001
-            pass
+            pass  # nosec B110: best-effort cleanup
         try:
             r.close()
         except Exception:  # noqa: BLE001
-            pass
+            pass  # nosec B110: best-effort cleanup
         raise HTTPError(
             f"HTTP {status} for {url} {body_snip!r}",
             status=status,
@@ -327,7 +333,7 @@ def _requests_get(
         try:
             r.close()
         except Exception:  # noqa: BLE001
-            pass
+            pass  # nosec B110: best-effort cleanup
 
     try:
         return _json.loads(b"".join(chunks))

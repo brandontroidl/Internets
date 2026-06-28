@@ -1,7 +1,5 @@
 """PID-based process lock with stale-detection.
 
-# TODO(internets.py): wrap _main in `with ProcessLock(...)`.
-
 Prevents two instances of the bot from running concurrently against the
 same on-disk state.  Two concurrent writers would race on the JSON
 state files (locations / channels / users / secrets) and silently
@@ -258,7 +256,11 @@ class ProcessLock:
         """Return ``(pid, start_time, hostname)`` from the existing
         lockfile, or ``None`` if it's missing / unreadable / malformed.
         """
-        assert self._path is not None
+        # Bandit B101 — replace assert with a real RuntimeError so the
+        # invariant survives `python -O`.  Reaching here without a path
+        # would indicate a programming error in the caller.
+        if self._path is None:
+            raise RuntimeError("_read_existing called before path was set")
         try:
             text = self._path.read_text(encoding="utf-8").strip()
         except OSError:

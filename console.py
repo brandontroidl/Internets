@@ -6,7 +6,7 @@ dispatches debug, loglevel, status, and shutdown commands.
 SECURITY MODEL: the console grants admin-equivalent capability (debug
 toggle, log-level changes, graceful shutdown) to anyone with stdin
 access on the bot's host.  This is intentional — anyone with local
-shell access can already kill the process, read secrets.ini, etc., so
+shell access can already kill the process, read config.ini, etc., so
 the console is not an additional attack surface in that context.  But
 it MUST NOT run when stdin is shared with an untrusted user.  Pass
 ``--no-console`` for daemonised / systemd-managed deployments, or run
