@@ -1435,10 +1435,14 @@ def _():
     # Must NOT use os.sep string comparison
     assert "os.sep" not in load_fn
 
-@test("BUG-042: asyncio.open_connection has explicit limit")
+@test("BUG-042: asyncio.open_connection uses the _READ_LIMIT buffer cap")
 def _():
-    source = Path("internets.py").read_text(encoding="utf-8")
-    assert "limit=8192" in source or "limit = 8192" in source
+    from internets import IRCBot
+    # Assert the runtime constant and its wiring, not a bare source literal:
+    # the read buffer cap is the named _READ_LIMIT (8192) and _connect passes
+    # that constant to open_connection, so the value has one source of truth.
+    assert IRCBot._READ_LIMIT == 8192
+    assert "limit=self._READ_LIMIT" in inspect.getsource(IRCBot._connect)
 
 @test("BUG-033: LimitOverrunError handled in main loop")
 def _():

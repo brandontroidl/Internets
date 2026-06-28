@@ -294,6 +294,16 @@ class IRCBot(AdminCommandsMixin):
             self._sender.enqueue(msg, priority)
             self._stats_msg_out += 1
 
+    def _bump_dropped_metric(self) -> None:
+        """Increment the bot's dropped-message counter on a Sender drop.
+
+        Passed to the Sender as an on_drop callback so the shutdown summary
+        (dropped=%d) reports a REAL count instead of a counter that was never
+        incremented.  Invoked on the event-loop thread (the Sender drops inside
+        _safe_put, scheduled via call_soon_threadsafe), so the += is safe.
+        """
+        self._metrics["dropped_messages"] += 1
+
     def privmsg(self, target: str, msg: str) -> None:
         if " " in target or not target:
             log.warning(f"privmsg: invalid target {target!r}"); return
@@ -576,6 +586,18 @@ class IRCBot(AdminCommandsMixin):
 
     # ── Dispatch ─────────────────────────────────────────────────────
 
+    def _cmd_prefix(self) -> str:
+        """Live command prefix, read from cfg at USE-TIME.
+
+        config.py computes CMD_PREFIX as an import-time constant that a
+        SIGHUP / .rehash does NOT refresh.  Reading cfg here means a
+        command_prefix change in config.ini takes effect on the next rehash
+        without a restart, instead of the core dispatch staying frozen on the
+        old prefix while modules (which read cfg live) see the new one.  Falls
+        back to the frozen CMD_PREFIX if the key is somehow absent.
+        """
+        return self.cfg["bot"].get("command_prefix", CMD_PREFIX)
+
     def _dispatch(self, nick: str, reply_to: str, cmd: str,
                   arg: str | None, is_pm: bool) -> None:
         # Shadow-bans drop ALL commands silently — no privmsg/notice reply,
@@ -586,7 +608,7 @@ class IRCBot(AdminCommandsMixin):
             log.debug(f"shadow-banned cmd dropped: {nick}!{cmd!r}")
             return
         if cmd in ("auth", "deauth") and not is_pm:
-            self.privmsg(reply_to, f"{nick}: {CMD_PREFIX}{cmd} must be used in PM."); return
+            self.privmsg(reply_to, f"{nick}: {self._cmd_prefix()}{cmd} must be used in PM."); return
         if self.flood_limited(nick):
             self.notice(nick, f"{nick}: slow down ({FLOOD_CD}s cooldown)"); return
         # Channel-wide gate — catches coordinated floods across nicks
@@ -718,10 +740,11 @@ class IRCBot(AdminCommandsMixin):
                     "are DISABLED for this connection. Acceptable only for "
                     "trusted networks with self-signed certs.",
                     SERVER, PORT)
-        # Note: 8192 must remain as a literal here too — test BUG-042 inspects
-        # the source for ``limit=8192``.  _READ_LIMIT documents the value.
+        # Use the named _READ_LIMIT constant for the asyncio read buffer cap so
+        # the value has one source of truth.  BUG-042 asserts the runtime
+        # constant rather than grepping the source for a bare literal.
         self._reader, self._writer = await asyncio.open_connection(
-            SERVER, PORT, ssl=ssl_ctx, limit=8192)
+            SERVER, PORT, ssl=ssl_ctx, limit=self._READ_LIMIT)
         self._nick = NICKNAME
         self._cap_busy = self._sasl_in_progress = self._ns_identified = False
         self._caps = set()
@@ -730,7 +753,7 @@ class IRCBot(AdminCommandsMixin):
         with self._chanops_lock:
             self._chanops = {}
         if self._sender: await self._sender.stop()
-        self._sender = Sender(self._loop)
+        self._sender = Sender(self._loop, on_drop=self._bump_dropped_metric)
         self._sender.start(self._writer)
         self._stats_connect_ts = time.time()
         _LOG_CONN.info("event=connect_ok host=%s port=%d", SERVER, PORT)
@@ -1058,8 +1081,9 @@ class IRCBot(AdminCommandsMixin):
             self._store.user_join(target, nick, hostmask)
         with self._mod_lock: all_cmds = set(self._CORE) | set(self._commands)
         cmd = arg = None
-        if text.startswith(CMD_PREFIX):
-            parts = text[len(CMD_PREFIX):].split(None, 1)
+        prefix = self._cmd_prefix()
+        if text.startswith(prefix):
+            parts = text[len(prefix):].split(None, 1)
             if parts:
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else None
@@ -1292,13 +1316,20 @@ class IRCBot(AdminCommandsMixin):
         except Exception as e:
             _LOG_SIGNAL.error("event=rehash_failed err=%s", e)
             return
-        # Clear admin sessions: secrets may have changed.
+        # reload_config() refreshes the live cfg dict, so values read at
+        # use-time (e.g. command_prefix via _cmd_prefix) take effect now.  The
+        # import-time credential CONSTANTS (NS_PW/OPER_PW/SERVER_PW) are NOT
+        # refreshed by a rehash; wiring a live cred-reload is intentionally out
+        # of scope.  We clear admin sessions defensively so a stale session
+        # can't outlive an operator-intended config change — this does NOT
+        # reload the on-wire credentials, so the log says exactly that.
         n = 0
         with self._auth_lock:
             n = len(self._authed)
             self._authed.clear()
         if n:
-            _LOG_SIGNAL.info("event=rehash_sessions_cleared count=%d", n)
+            _LOG_SIGNAL.info(
+                "event=rehash_sessions_cleared count=%d note=defensive_no_cred_reload", n)
 
 
 # ── Entry point ──────────────────────────────────────────────────────

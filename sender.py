@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from typing import Callable
 
 log = logging.getLogger("internets.sender")
 
@@ -42,13 +43,18 @@ class Sender:
     REFILL: float = 1.5
     MAX_QUEUE: int = 200  # BUG-056: Bound queue to prevent OOM during disconnects
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop,
+                 on_drop: Callable[[], None] | None = None) -> None:
         self._loop   = loop
         self._q:      asyncio.PriorityQueue[tuple[int, int, str]] = asyncio.PriorityQueue(maxsize=self.MAX_QUEUE)
         self._seq     = 0
         self._seq_lk  = threading.Lock()       # protects _seq from concurrent enqueue
         self._writer:  asyncio.StreamWriter | None = None
         self._task:    asyncio.Task[None] | None   = None
+        # Optional callback the bot passes so a drop bumps its real
+        # dropped-message counter (surfaced in the shutdown summary), not just
+        # the Prometheus metric.  Runs on the event-loop thread inside _drop.
+        self._on_drop = on_drop
 
     def start(self, writer: asyncio.StreamWriter) -> None:
         """Begin draining the queue to *writer*.  Call from the event loop."""
@@ -67,6 +73,20 @@ class Sender:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+    def _drop(self) -> None:
+        """Record one outbound drop: bump the Prometheus metric AND, if the bot
+        wired one, its in-process counter (the honest shutdown-summary source).
+
+        Runs in the event-loop thread (called from _safe_put).  The bot
+        callback must never raise into the send path, so it's guarded.
+        """
+        _bump_dropped()
+        if self._on_drop is not None:
+            try:
+                self._on_drop()
+            except Exception:  # noqa: BLE001
+                pass  # nosec B110: a counter bump must never break sending
 
     def _safe_put(self, item: tuple[int, int, str]) -> None:
         """Put an item on the queue, dropping if full.  Runs in event loop thread.
@@ -101,7 +121,7 @@ class Sender:
                             f"Send queue full — evicted pri={evicted[0]} "
                             f"to make room for priority-0 traffic"
                         )
-                        _bump_dropped()
+                        self._drop()
                         self._q.put_nowait(item)
                         return
                 except Exception as e:  # pragma: no cover — defensive
@@ -110,7 +130,7 @@ class Sender:
                 log.error("Send queue full — UNABLE to enqueue priority-0 message")
             else:
                 log.warning("Send queue full — dropping message")
-                _bump_dropped()
+                self._drop()
 
     def enqueue(self, msg: str, priority: int = 1) -> None:
         """Thread-safe enqueue.  Safe to call from any thread."""
