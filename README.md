@@ -60,6 +60,7 @@ modules/
   youtube.py          YouTube video search with stats
   dictionary.py       English dictionary definitions (Free Dictionary API)
   ipinfo.py           IP/hostname geolocation lookup (ip-api.com)
+  ipintel.py          IP reputation: DNSBL/DShield/GreyNoise/Tor/AbuseIPDB
   urls.py             URL shortener (is.gd) and expander
   steam.py            Steam user status, games, and nick-to-ID registration
   twitch.py           Twitch stream, channel, and game lookup (Helix API)
@@ -422,6 +423,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.cvss <vector>` | Compute CVSS v3.1 base score |
 | `.cipher <name>` | Cipher reference (size/status) |
 | `.ipinfo <ip/host>` | IP/hostname geolocation |
+| `.ip <ip/host>` / `.rep` | IP reputation: DNSBL/DShield/GreyNoise/Tor/AbuseIPDB |
 
 **Reference and language**
 
