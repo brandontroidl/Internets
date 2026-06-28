@@ -92,10 +92,11 @@ addopts = "--strict-markers"
 branch = true
 source = ["."]
 # CORE-ONLY coverage.  modules/* and weather_providers/* (the SSRF /
-# dispatch / parsing bulk of the codebase) are omitted below, so the
-# reported percentage and the fail_under gate measure the CORE only
-# (top-level orchestration modules), NOT the whole repo.  Do not read
-# the headline number as repo-wide coverage.
+# dispatch / parsing bulk of the codebase) are omitted below, as are the
+# two integration-level entry points (internets.py async event loop,
+# console.py stdin loop), so the reported percentage and the fail_under
+# gate measure the unit-testable CORE only, NOT the whole repo.  Do not
+# read the headline number as repo-wide coverage.
 omit = [
     "tests/*",
     "build/*",
@@ -103,6 +104,11 @@ omit = [
     ".venv/*",
     "weather_providers/*",  # excluded - keeps coverage core-only
     "modules/*",            # excluded - keeps coverage core-only
+    # Integration-level entry points: the async IRC event loop and the stdin
+    # console loop need a live/mock connection to exercise, not unit tests.
+    # They are integration-tested, not measured by this unit-coverage gate.
+    "internets.py",
+    "console.py",
 ]
 
 [tool.coverage.report]
