@@ -897,6 +897,31 @@ def _():
     assert bot.is_admin("admin")   # exact
     assert not bot.is_admin("other")
 
+@test("admin auth: fails closed on an unverifiable hostmask binding")
+def _():
+    from internets import IRCBot
+    bot = IRCBot()
+    # The TOCTOU sentinel: a binding stored as "unknown" (admin quit during the
+    # verify-password window, re-created by cmd_auth) must NEVER grant admin —
+    # otherwise a later nick-grabber inherits a nick-only admin session.
+    bot._authed["a"] = "unknown"
+    bot._nick_hosts["a"] = "a@host"
+    assert not bot.is_admin("a")
+    assert "a" not in bot._authed          # sentinel binding revoked on check
+    # No current hostmask to compare against → deny (never grant nick-only).
+    bot._authed["b"] = "b@host"
+    bot._nick_hosts.pop("b", None)
+    assert not bot.is_admin("b")
+    # Changed hostmask (a different user now holds the nick) → deny and revoke.
+    bot._authed["c"] = "c@old"
+    bot._nick_hosts["c"] = "c@new"
+    assert not bot.is_admin("c")
+    assert "c" not in bot._authed
+    # A current, matching hostmask still grants (regression guard).
+    bot._authed["d"] = "d@host"
+    bot._nick_hosts["d"] = "d@host"
+    assert bot.is_admin("d")
+
 @test("PRIVMSG regex captures full user@host as hostmask")
 def _():
     import re
