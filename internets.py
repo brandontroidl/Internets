@@ -337,14 +337,24 @@ class IRCBot(AdminCommandsMixin):
     def is_admin(self, nick: str) -> bool:
         k = nick.lower()
         with self._auth_lock:
-            if k not in self._authed: return False
+            if k not in self._authed:
+                return False
             stored = self._authed[k]
             current = self._nick_hosts.get(k)
-            if current and stored != "unknown" and current != stored:
+            # Fail CLOSED: grant only when the CURRENT hostmask is known and
+            # matches the one bound at auth time.  A sentinel ("unknown"), a
+            # missing current hostmask, or a changed one all DENY.  A sentinel
+            # or a demonstrably-changed binding is revoked.  (Previously an
+            # "unknown"/missing value skipped the comparison and returned True,
+            # so a nick-only admin session re-created during the auth TOCTOU
+            # outlived the admin's disconnect and any nick-grabber inherited it.)
+            if current and stored != "unknown" and current == stored:
+                return True
+            if stored == "unknown" or (current and current != stored):
                 del self._authed[k]
-                log.warning(f"Auth revoked for {nick}: hostmask changed ({stored} → {current})")
-                return False
-            return True
+                log.warning("Auth revoked for %s: hostmask unverifiable or changed "
+                            "(stored=%s current=%s)", nick, stored, current)
+            return False
 
     def is_chanop(self, channel: str, nick: str) -> bool:
         # Called from to_thread workers; _chanops is mutated on the event
@@ -1158,13 +1168,19 @@ class IRCBot(AdminCommandsMixin):
                 except asyncio.TimeoutError:
                     raise ConnectionResetError(
                         f"Read timeout ({self._READ_TIMEOUT}s)")
-                except asyncio.LimitOverrunError:
+                except (ValueError, asyncio.LimitOverrunError):
+                    # An over-limit line.  asyncio's readline() consumes/clears
+                    # the buffer and re-raises LimitOverrunError as ValueError,
+                    # so ValueError is the arm that actually fires here (the bare
+                    # LimitOverrunError is kept defensively).  Count it, then
+                    # drain any still-incoming tail to the next newline so a
+                    # truncated remainder is not parsed as a spurious line.
                     self._metrics["oversized_lines"] += 1
                     _LOG_CONN.warning(
                         "event=oversized_line limit=%d action=discard",
                         self._READ_LIMIT)
                     try: await self._reader.readuntil(b"\n")
-                    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError): pass
+                    except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, ValueError): pass
                     continue
                 if not raw: raise ConnectionResetError("Server closed connection")
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")

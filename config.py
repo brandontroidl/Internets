@@ -94,8 +94,10 @@ OPER_SNOMASK = cfg["irc"].get("oper_snomask",   "").strip()
 # ── Bot settings ─────────────────────────────────────────────────────
 
 CMD_PREFIX  = cfg["bot"]["command_prefix"]
-API_CD      = int(cfg["bot"]["api_cooldown"])
-FLOOD_CD    = int(cfg["bot"].get("flood_cooldown", "3"))
+# Floor cooldowns at 1s so a 0/negative value can't silently disable the
+# per-nick rate limiter (RateLimiter also clamps, defence in depth).
+API_CD      = max(1, int(cfg["bot"]["api_cooldown"]))
+FLOOD_CD    = max(1, int(cfg["bot"].get("flood_cooldown", "3")))
 MODULES_DIR = Path(cfg["bot"].get("modules_dir", "modules"))
 AUTO_LOAD   = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
 

@@ -31,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .base import strip_ctrl
+
 from .base import BotModule, help_row
 
 log = logging.getLogger("internets.remind")
@@ -343,6 +345,13 @@ class RemindModule(BotModule):
             return
         if len(message) > MAX_MSG_LEN:
             self.bot.privmsg(reply_to, f"{nick}: message too long (max {MAX_MSG_LEN} chars)")
+            return
+        # Strip IRC control bytes at capture so a stored-then-replayed reminder
+        # (possibly across restarts, bot-attributed) can't carry format/colour/
+        # BEL/ANSI injection - covers both the immediate ack and delayed delivery.
+        message = strip_ctrl(message, MAX_MSG_LEN)
+        if not message:
+            self.bot.privmsg(reply_to, f"{nick}: message is empty")
             return
 
         # Only deliver in channels (privmsg replies have reply_to == nick, which

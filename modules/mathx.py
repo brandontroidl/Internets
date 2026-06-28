@@ -12,10 +12,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import math
 import random
 import re
 import statistics
+import sys
 from .base import BotModule, help_row, strip_ctrl
 
 _MAX_INPUT = 200
@@ -394,7 +396,17 @@ def _fib(n: int) -> int:
 
 
 def _bignum_report(label: str, value: int) -> str:
-    s = str(value)
+    # Python caps int->str at sys.get_int_max_str_digits() (default 4300) as a
+    # DoS guard, but .bignum results are intentionally huge (factorial(100000)
+    # is ~456k digits), so str(value) raises ValueError across most of the
+    # capped range.  Raise the limit just for this controlled conversion (the
+    # input caps already bound the size to ~1M digits), then restore it.
+    prev = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(2_000_000)
+        s = str(value)
+    finally:
+        sys.set_int_max_str_digits(prev)
     if len(s) <= _BIG_DIGIT_THRESHOLD:
         return f"{label} = {_fmt_int(value)}"
     return (f"{label} = {len(s)} digits :: starts {s[:20]} ... ends {s[-20:]}")
@@ -551,7 +563,10 @@ class MathxModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}bignum <expr>  e.g. 50! fib(100) 2^256")
             return
-        self.bot.privmsg(reply_to, strip_ctrl(_bignum(arg[:_MAX_INPUT])))
+        # Big-int math (factorial/fib/power up to ~1M digits) is heavy CPU; run
+        # it off the event loop so a user can't freeze the whole bot per call.
+        result = await asyncio.to_thread(_bignum, arg[:_MAX_INPUT])
+        self.bot.privmsg(reply_to, strip_ctrl(result))
 
     async def cmd_const(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._gate(nick):

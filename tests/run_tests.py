@@ -172,6 +172,43 @@ def _():
         assert s.loc_del("nick") is False
         s.stop()
 
+@test("Store: a corrupt state file is quarantined, not silently clobbered")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "loc.json"
+        p.write_text("{ not valid json ")
+        orig = p.read_text()
+        result = Store._read(str(p), {})
+        assert result == {}                  # loaded default, did not crash
+        assert not p.exists()                # original NOT left for the next flush to clobber
+        corrupt = list(Path(tmp).glob("loc.json.corrupt.*"))
+        assert len(corrupt) == 1             # preserved for recovery
+        assert corrupt[0].read_text() == orig
+        # A subsequent valid write/read round-trips and is not quarantined.
+        Store._write(str(p), {"nick": "90210"})
+        assert Store._read(str(p), {}) == {"nick": "90210"}
+
+@test("Store: _write keeps a one-deep .bak of the previous good file")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = str(Path(tmp) / "loc.json")
+        Store._write(p, {"a": "1"})          # first write: no prior file, no bak yet
+        Store._write(p, {"a": "2"})          # second write: bak holds the previous good copy
+        assert Store._read(p, {}) == {"a": "2"}
+        assert Store._read(p + ".bak", {}) == {"a": "1"}
+
+@test("Store: _flush_loop guards flush() so a bad cycle can't kill persistence")
+def _():
+    import inspect
+    src = inspect.getsource(Store._flush_loop)
+    assert "try:" in src and "except" in src
+
+@test("RateLimiter: a 0/negative cooldown is floored, not silently disabled")
+def _():
+    rl = RateLimiter(flood_cd=0, api_cd=0)
+    assert rl.flood_check("n") is False   # first call recorded/allowed
+    assert rl.flood_check("n") is True    # immediate repeat flagged (cd floored to >=1s)
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
@@ -897,6 +934,31 @@ def _():
     assert bot.is_admin("admin")   # exact
     assert not bot.is_admin("other")
 
+@test("admin auth: fails closed on an unverifiable hostmask binding")
+def _():
+    from internets import IRCBot
+    bot = IRCBot()
+    # The TOCTOU sentinel: a binding stored as "unknown" (admin quit during the
+    # verify-password window, re-created by cmd_auth) must NEVER grant admin —
+    # otherwise a later nick-grabber inherits a nick-only admin session.
+    bot._authed["a"] = "unknown"
+    bot._nick_hosts["a"] = "a@host"
+    assert not bot.is_admin("a")
+    assert "a" not in bot._authed          # sentinel binding revoked on check
+    # No current hostmask to compare against → deny (never grant nick-only).
+    bot._authed["b"] = "b@host"
+    bot._nick_hosts.pop("b", None)
+    assert not bot.is_admin("b")
+    # Changed hostmask (a different user now holds the nick) → deny and revoke.
+    bot._authed["c"] = "c@old"
+    bot._nick_hosts["c"] = "c@new"
+    assert not bot.is_admin("c")
+    assert "c" not in bot._authed
+    # A current, matching hostmask still grants (regression guard).
+    bot._authed["d"] = "d@host"
+    bot._nick_hosts["d"] = "d@host"
+    assert bot.is_admin("d")
+
 @test("PRIVMSG regex captures full user@host as hostmask")
 def _():
     import re
@@ -1419,16 +1481,16 @@ def _():
     assert hasattr(Sender, "MAX_QUEUE")
     assert Sender.MAX_QUEUE > 0
 
-@test("BUG-051: Store._read validates loaded data type")
+@test("BUG-051: Store._read rejects a wrong-type file and quarantines it")
 def _():
     import tempfile, json
-    # Write a list where a dict is expected
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump([1, 2, 3], f)
-        f.flush()
-        result = Store._read(f.name, {})
-    assert result == {}  # should return default, not the list
-    os.unlink(f.name)
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "x.json"
+        p.write_text(json.dumps([1, 2, 3]))    # a list where a dict is expected
+        result = Store._read(str(p), {})
+        assert result == {}                     # returns default, not the list
+        assert not p.exists()                   # quarantined, not left to be clobbered
+        assert len(list(Path(tmp).glob("x.json.corrupt.*"))) == 1
 
 # ══════════════════════════════════════════════════════════════════════
 # Module edge-case tests
@@ -1444,6 +1506,15 @@ def _():
     assert not _LANG_RE.match("e")
     assert not _LANG_RE.match("123")
     assert not _LANG_RE.match("")
+
+@test("mathx: _bignum_report renders a result over the int->str digit cap")
+def _():
+    import math
+    from modules.mathx import _bignum_report
+    # factorial(100000) is ~456k digits, well over Python's default 4300 cap;
+    # str(value) would raise ValueError without the scoped limit bump.
+    out = _bignum_report("100000!", math.factorial(100000))
+    assert "digits" in out and "starts" in out
 
 @test("urbandictionary: _IDX_RE parses term/index correctly")
 def _():
