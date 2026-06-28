@@ -244,6 +244,27 @@ def _():
     wsrc = Path("modules/weather.py").read_text(encoding="utf-8")
     assert "strip_ctrl" in wsrc or "_sanitize" in wsrc
 
+@test("audit_log: an unreadable existing key is not silently regenerated (tamper-evidence)")
+def _():
+    from audit_log import AuditLog
+    with tempfile.TemporaryDirectory() as tmp:
+        a = AuditLog(Path(tmp) / "audit.log")
+        a._load_key()                       # generate the .key sidecar
+        kp = a._key_path
+        original = kp.read_bytes()
+        a._key = None                        # force a reload
+        class _BadPath:                      # simulate a transient read error
+            def exists(self): return True
+            def read_text(self, **k): raise OSError("transient")
+        a._key_path = _BadPath()
+        raised = False
+        try:
+            a._load_key()
+        except RuntimeError:
+            raised = True
+        assert raised                        # fail-closed; did NOT regenerate
+        assert kp.read_bytes() == original   # the real key was not truncated
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

@@ -134,14 +134,30 @@ class AuditLog:
             return self._key
         if self._key_path.exists():
             try:
-                self._key = bytes.fromhex(
-                    self._key_path.read_text(encoding="ascii").strip())
-                if len(self._key) >= 32:
-                    return self._key
-                log.warning("audit_log: key file too short — regenerating")
-            except (OSError, ValueError) as e:
-                log.warning("audit_log: key load failed (%s) — regenerating",
-                            type(e).__name__)
+                raw = self._key_path.read_text(encoding="ascii").strip()
+            except OSError as e:
+                # An EXISTING key that is merely unreadable (transient FS error,
+                # a perms hiccup) must NOT be regenerated: the O_TRUNC below
+                # would silently void every prior record's HMAC.  Fail closed -
+                # the audit caller catches this, the operator fixes the file.
+                raise RuntimeError(
+                    f"audit_log: existing key unreadable ({type(e).__name__}); "
+                    "refusing to overwrite tamper-evidence") from e
+            try:
+                self._key = bytes.fromhex(raw)
+            except ValueError:
+                self._key = b""
+            if len(self._key) >= 32:
+                return self._key
+            # The existing key is genuinely malformed/short.  Move it aside
+            # (not O_TRUNC over it) so the old chain stays recoverable, then
+            # write a fresh key into the now-vacant path.
+            log.warning("audit_log: key file invalid/short - backing up and regenerating")
+            try:
+                self._key_path.replace(
+                    self._key_path.with_name(self._key_path.name + ".bad"))
+            except OSError as e:
+                log.error("audit_log: could not back up bad key (%s)", type(e).__name__)
         # Generate a fresh 32-byte key, written 0600 from creation.
         key = secrets.token_bytes(32)
         try:
