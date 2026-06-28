@@ -302,9 +302,9 @@ class TestProviderRegistration:
     def test_weatherbit_registered_as_factory(self):
         assert "weatherbit" in _PROVIDER_FACTORIES
 
-    def test_factory_count_is_30(self):
-        # Sanity guard for the doc claim "30 provider packages".
-        assert len(_PROVIDER_FACTORIES) == 30
+    def test_factory_count_is_32(self):
+        # Sanity guard for the doc claim "32 provider packages".
+        assert len(_PROVIDER_FACTORIES) == 32
 
     def test_known_provider_set(self):
         expected = {
@@ -321,6 +321,8 @@ class TestProviderRegistration:
             "sunrisesunset", "currentuvindex", "gdacs", "eccc",
             "nasapower", "nifc", "firms", "swpc",
             "tidecheck", "noaa_coops",
+            # Pollen providers (US / global).
+            "pollendotcom", "google_pollen",
         }
         assert set(_PROVIDER_FACTORIES) == expected
 
@@ -399,8 +401,10 @@ class TestGlobalDispatch:
         cfg.add_section("weather_providers")
         cfg.set("weather_providers", "provider_priority", "openmeteo")
         configure(cfg)
-        # Only openmeteo should be registered now.
-        assert global_dispatcher.provider_ids == ["openmeteo"]
+        # provider_priority is an ordering, not an allowlist: the listed
+        # provider registers first; unlisted keyless providers still append.
+        assert global_dispatcher.provider_ids[0] == "openmeteo"
+        assert "nws" in global_dispatcher.provider_ids
 
     def test_reconfigure_replaces_set(self):
         from configparser import ConfigParser
@@ -414,7 +418,9 @@ class TestGlobalDispatch:
         cfg2.set("weather_providers", "provider_priority", "nws")
         configure(cfg2)
 
-        assert global_dispatcher.provider_ids == ["nws"]
+        # Reconfigure rebuilds from scratch: nws now sorts first (its
+        # priority), replacing openmeteo as the lead provider.
+        assert global_dispatcher.provider_ids[0] == "nws"
 
 
 # ── auth-failure (401/403) handling ─────────────────────────────────────

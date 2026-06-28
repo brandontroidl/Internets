@@ -105,7 +105,7 @@ DEFAULT_RELIABILITY: dict[str, dict[str, int]] = {
     "nowcast":     {"pirateweather": 1, "meteomatics": 2, "openmeteo": 3, "metno": 4},
     # Air-quality-only / specialist capabilities added this session.
     "uv":          {"openmeteo": 1, "currentuvindex": 2},
-    "pollen":      {"openmeteo": 1},
+    "pollen":      {"google_pollen": 1, "pollendotcom": 2, "openmeteo": 3},
     "wildfire":    {"nifc": 1, "firms": 2},
     "space_weather": {"swpc": 1},
     "tides":       {"noaa_coops": 1, "tidecheck": 2},
@@ -373,6 +373,12 @@ class Dispatcher:
                 result = await method(*args, **kwargs)
                 latency = time.monotonic() - start
                 rp.health.record_success(latency)
+                if result is None:
+                    # Provider succeeded but has no data for this location (a
+                    # region it doesn't cover) — fall through to the next
+                    # provider rather than returning an empty answer.
+                    log.debug("%s: %s no data — trying next", pid, capability)
+                    continue
                 log.debug("%s: %s succeeded (%.2fs)", pid, capability, latency)
                 return result
             except Exception as e:

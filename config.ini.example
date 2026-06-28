@@ -97,10 +97,14 @@ units = us
 ; registration order and a final tie-breaker after the dispatcher's
 ; accuracy ranks + live health scores.
 ;
+; This is an ORDERING, not an allowlist: listing a subset just puts those
+; first — every other supported provider still registers (after the listed
+; ones), so adding a provider never requires editing this line.
+;
 ; Providers register only when their credentials are present in
 ; [secrets] (nws + openmeteo are key-free and always available).
 ;
-; All 30 supported provider packages (most → least accurate for the
+; All 32 supported provider packages (most → least accurate for the
 ; general weather capabilities):
 ;   nws meteomatics weatherkit openmeteo visualcrossing accuweather
 ;   openweathermap weatherbit weatherapi pirateweather stormglass
@@ -267,6 +271,12 @@ tidecheck_key =
 ; NASA FIRMS (global active-fire detections) — free MAP_KEY
 ; https://firms.modaps.eosdis.nasa.gov/api/area/
 firms_key =
+
+; Google Pollen API (global pollen: tree/grass/weed index) — a Google Maps
+; Platform key with the Pollen API enabled.  Optional: Pollen.com (US) and
+; Open-Meteo (Europe) provide pollen with no key.
+; https://developers.google.com/maps/documentation/pollen
+google_pollen_key =
 
 ; Apple WeatherKit — Apple Developer Program (500K calls/month)
 ; Requires PyJWT + cryptography: pip install internets-irc[weatherkit]

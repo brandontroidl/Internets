@@ -432,6 +432,21 @@ def _f_tidecheck(cfg):
     from .tidecheck import TideCheckProvider
     return TideCheckProvider(key)
 
+def _f_pollendotcom(cfg):
+    # Keyless, but reverse-geocodes lat/lon → US ZIP via Nominatim, so it
+    # needs the configured User-Agent.
+    ua = _cred(cfg, "weather_user_agent", "weather_user_agent")
+    from .pollendotcom import PollenDotComProvider
+    return PollenDotComProvider(ua)
+
+def _f_google_pollen(cfg):
+    key = _cred(cfg, "google_pollen_key", "google_pollen_key")
+    if not key:
+        log.info("google_pollen: skipped (no google_pollen_key)")
+        return None
+    from .google_pollen import GooglePollenProvider
+    return GooglePollenProvider(key)
+
 
 _reg("nws",                 _f_nws)
 _reg("meteomatics",         _f_meteomatics)
@@ -463,6 +478,8 @@ _reg("firms",               _f_firms)
 _reg("swpc",                _f_swpc)
 _reg("tidecheck",           _f_tidecheck)
 _reg("noaa_coops",          _f_noaa_coops)
+_reg("pollendotcom",        _f_pollendotcom)
+_reg("google_pollen",       _f_google_pollen)
 
 
 # ── Global dispatcher ────────────────────────────────────────────────
@@ -478,6 +495,14 @@ def configure(cfg: ConfigParser) -> None:
                            fallback=cfg.get("weather_providers", "priority", fallback="")).strip()
     if priority_str:
         order = [p.strip().lower() for p in priority_str.split(",") if p.strip()]
+        # provider_priority is an ORDERING preference (and a dispatch
+        # tie-breaker), NOT an allowlist.  Append every other known provider
+        # after the listed ones so providers added after this config file was
+        # written still register (they simply sort last).  Without this, a
+        # stale list silently disables whole capabilities — e.g. a config
+        # predating the air-quality/wildfire/space-weather/tides providers
+        # would never load them.
+        order += [p for p in _PROVIDER_FACTORIES if p not in order]
     else:
         order = list(_PROVIDER_FACTORIES.keys())
 
