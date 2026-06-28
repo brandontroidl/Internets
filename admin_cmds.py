@@ -169,7 +169,17 @@ class AdminCommandsMixin:
             self.preply(nick, reply_to, f"{nick}: wrong password.")
             return
         if ok:
-            hostmask = self._nick_hosts.get(k, "unknown")
+            hostmask = self._nick_hosts.get(k)
+            if not hostmask or hostmask == "unknown":
+                # Fail closed: never persist a binding we cannot later verify.
+                # If the hostmask is unknown at this instant (e.g. the admin
+                # quit during the verify-password await, which drops it), refuse
+                # rather than store the "unknown" sentinel — that sentinel would
+                # grant nick-only admin that outlives the disconnect.
+                self.preply(nick, reply_to,
+                    f"{nick}: can't confirm your hostmask right now — re-send the command.")
+                log.warning("Auth refused for %s: no current hostmask to bind", nick)
+                return
             with self._auth_lock:
                 self._auth_fails.pop(k, None)
                 self._authed[k] = hostmask
