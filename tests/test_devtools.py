@@ -8,9 +8,34 @@ import uuid
 
 sys.path.insert(0, ".")
 
+import signal as _signal
+
+import pytest
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from modules.devtools import (
     _jwt, _semver, _uuid5, _uuid_inspect, _tz, _unix, _color, _cron,
     _parse_color, _nearest_css, _semver_parse,
+)
+
+# The tz/signal helpers exercise POSIX-only capabilities: zoneinfo needs an IANA
+# tz database (present on Linux/BSD/macOS; Windows runners have neither a system
+# db nor the optional tzdata package) and SIGKILL does not exist on Windows. The
+# bot targets POSIX; guard these so the suite stays green on the Windows CI
+# runner (which is in the matrix for encoding coverage, not these features).
+# Capability-based, not a platform string, so a misconfigured POSIX host is
+# caught too.
+try:
+    ZoneInfo("America/New_York")
+    _HAS_TZDATA = True
+except ZoneInfoNotFoundError:
+    _HAS_TZDATA = False
+
+_needs_tzdata = pytest.mark.skipif(
+    not _HAS_TZDATA, reason="no IANA tz database (install the tzdata package on Windows)"
+)
+_needs_posix_signals = pytest.mark.skipif(
+    not hasattr(_signal, "SIGKILL"), reason="POSIX signals (SIGKILL) not on this platform"
 )
 
 
@@ -108,11 +133,13 @@ class TestUuid5:
 
 
 class TestTz:
+    @_needs_tzdata
     def test_clock_convert(self):
         out = _tz("15:00", "America/New_York", "UTC")
         # EST in January (anchor 2000-01-01) -> 20:00 UTC
         assert "20:00" in out
 
+    @_needs_tzdata
     def test_iso_convert(self):
         out = _tz("2026-07-01T12:00", "UTC", "Asia/Tokyo")
         assert "21:00" in out  # JST = UTC+9
@@ -123,19 +150,23 @@ class TestTz:
     def test_unknown_to(self):
         assert "unknown zone" in _tz("15:00", "UTC", "Not/AZone")
 
+    @_needs_tzdata
     def test_bad_time(self):
         assert "bad time" in _tz("notatime", "UTC", "UTC")
 
 
 class TestUnix:
+    @_needs_posix_signals
     def test_signal_by_name(self):
         out = _unix("SIGKILL")
         assert "SIGKILL" in out and "9" in out
 
+    @_needs_posix_signals
     def test_signal_no_prefix(self):
         out = _unix("kill")
         assert "SIGKILL" in out
 
+    @_needs_posix_signals
     def test_signal_by_number(self):
         out = _unix("9")
         assert "SIGKILL" in out
