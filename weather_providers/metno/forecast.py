@@ -32,7 +32,7 @@ async def fetch(lat: float, lon: float, location: str, days: int = 4) -> Weather
         t = item.get("time", "")
         try:
             dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # nosec B112: skip a malformed timeseries entry
             continue
         d = item.get("data", {})
         det = d.get("instant", {}).get("details", {})
