@@ -11,7 +11,7 @@ import json
 import logging
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.poke")
 
@@ -19,14 +19,10 @@ _URL = "https://pokeapi.co/api/v2/pokemon"
 # PokéAPI responses are huge (moves + sprites): Mewtwo ≈ 425 KB,
 # Charizard ≈ 343 KB, Pikachu ≈ 274 KB.  1 MB leaves comfortable headroom.
 _MAX_BODY_BYTES = 1024 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _fetch_sync(name: str, ua: str) -> str:
@@ -102,7 +98,7 @@ class PokeModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}poke <name|id>          Pokémon info from PokéAPI"]
+        return [help_row(prefix, "poke <name|id>", "Pokémon info from PokéAPI")]
 
 
 def setup(bot: object) -> PokeModule:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.dictionary")
 
@@ -45,8 +45,8 @@ def _lookup_sync(word: str, index: int, ua: str) -> str:
         if len(defn) > 400:
             defn = defn[:397] + "..."
 
-        pos_str = f" ({pos})" if pos else ""
-        return f"[{idx + 1}/{total}] \x02{word}\x02{pos_str} — {defn}"
+        pos_str = f" ({strip_ctrl(pos)})" if pos else ""
+        return f"[{idx + 1}/{total}] \x02{strip_ctrl(word)}\x02{pos_str} — {strip_ctrl(defn)}"
     except Exception as e:
         log.warning(f"Dictionary lookup: {e}")
         return "lookup failed"
@@ -82,7 +82,7 @@ class DictionaryModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}dict/.dictionary <word> [/N]   Dictionary definition  e.g. {prefix}dict ephemeral /2"
+            help_row(prefix, "dict/.dictionary <word> [/N]", f"Dictionary definition  e.g. {prefix}dict ephemeral /2")
         ]
 
 

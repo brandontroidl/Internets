@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.spacex")
 
@@ -33,29 +33,25 @@ _ROCKET_URL = "https://api.spacexdata.com/v4/rockets/{}"
 _PAD_URL = "https://api.spacexdata.com/v4/launchpads/{}"
 _LANDING = "https://www.spacex.com/launches/"
 _MAX_BODY_BYTES = 64 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _get_json(url: str, ua: str) -> Any | None:
     try:
-        r = requests.get(
+        with requests.get(
             url,
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=10, stream=True,
-        )
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            log.warning("spacex: response too large from %s", url)
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        ) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                log.warning("spacex: response too large from %s", url)
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except requests.RequestException as e:
         log.warning(f"spacex request {url}: {e}")
         return None
@@ -148,7 +144,7 @@ class SpacexModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}spacex                  Next scheduled SpaceX launch"]
+        return [help_row(prefix, "spacex", "Next scheduled SpaceX launch")]
 
 
 def setup(bot: object) -> SpacexModule:

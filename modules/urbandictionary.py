@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.ud")
 
@@ -21,13 +21,13 @@ def _lookup_sync(term: str, index: int, user_agent: str) -> str:
         )
         defs = data.get("list", [])
         if not defs:
-            return f"No results for '{term}'"
+            return f"No results for '{strip_ctrl(term)}'"
         total = len(defs)
         idx   = max(1, min(index, total)) - 1
         defn  = defs[idx]["definition"].replace("\r", "").replace("\n", " ").strip()
         if len(defn) > 400:
             defn = defn[:397] + "..."
-        return f"[{idx+1}/{total}] {defn}"
+        return f"[{idx+1}/{total}] {strip_ctrl(defn)}"
     except Exception as e:
         log.warning(f"UD lookup: {e}")
         return "lookup failed"
@@ -60,7 +60,7 @@ class UDModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         """Return Urban Dictionary help text."""
-        return [f"  {prefix}u/.urbandictionary <word> [/N]   Urban Dictionary  e.g. {prefix}u yolo /2"]
+        return [help_row(prefix, "u/.urbandictionary <word> [/N]", f"Urban Dictionary  e.g. {prefix}u yolo /2")]
 
 
 def setup(bot: object) -> UDModule:

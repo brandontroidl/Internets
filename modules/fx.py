@@ -22,7 +22,7 @@ import logging
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.fx")
 
@@ -30,14 +30,10 @@ _URL = "https://api.frankfurter.dev/v1/latest"
 _MAX_BODY_BYTES = 16 * 1024
 _CCY_RE = re.compile(r"^[A-Za-z]{3}$")
 _MAX_AMOUNT = 1e12
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
-def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+def _strip_ctrl(s, max_len=400):
+    return strip_ctrl(s, max_len)
 
 
 def _fmt_amount(n: float) -> str:
@@ -50,20 +46,20 @@ def _fmt_amount(n: float) -> str:
 
 def _fetch_sync(src: str, dst: str, amount: float, ua: str) -> str:
     try:
-        r = requests.get(
+        with requests.get(
             _URL,
             params={"base": src, "symbols": dst},
             headers={"User-Agent": ua, "Accept": "application/json"},
             timeout=8, stream=True,
-        )
-        if r.status_code == 404:
-            return "unknown currency code"
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            log.warning("fx response too large")
-            return "fx response too large"
-        d = json.loads(body.decode("utf-8", errors="replace"))
+        ) as r:
+            if r.status_code == 404:
+                return "unknown currency code"
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                log.warning("fx response too large")
+                return "fx response too large"
+            d = json.loads(body.decode("utf-8", errors="replace"))
     except requests.RequestException as e:
         log.warning(f"fx request: {e}")
         return "fx API unavailable"
@@ -128,7 +124,7 @@ class FxModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}fx <from> <to> [amount]  FX conversion via frankfurter.dev (ECB)",
+            help_row(prefix, "fx <from> <to> [amount]", "FX conversion via frankfurter.dev (ECB)"),
         ]
 
 

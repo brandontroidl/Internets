@@ -2,7 +2,7 @@
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json
-from ..base import HistoricalResult
+from ..base import HistoricalResult, ms_to_kph
 
 _B = "https://api.weatherbit.io/v2.0"
 
@@ -28,6 +28,7 @@ async def fetch(key, lat, lon, location, target_date=""):
         avg_c=d.get("temp"),
         description="",
         precip_mm=d.get("precip"),
-        max_wind_kph=d.get("max_wind_spd"),
+        # units=M -> max_wind_spd is m/s; convert to km/h like the siblings.
+        max_wind_kph=ms_to_kph(d.get("max_wind_spd")),
         avg_humidity=d.get("rh"),
     )

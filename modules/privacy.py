@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.privacy")
 
@@ -303,10 +303,10 @@ class PrivacyModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}forgetme                                  Erase all data the bot holds about you (PM-only)",
-            f"  {prefix}privacy                                   Show what the bot stores about you (PM-only)",
-            f"  {prefix}optout                                    Mark yourself opted-out of future tracking",
-            f"  {prefix}optin                                     Undo a previous {prefix}optout",
+            help_row(prefix, "forgetme", "Erase all data the bot holds about you (PM-only)"),
+            help_row(prefix, "privacy", "Show what the bot stores about you (PM-only)"),
+            help_row(prefix, "optout", "Mark yourself opted-out of future tracking"),
+            help_row(prefix, "optin", f"Undo a previous {prefix}optout"),
         ]
 
     def is_configured(self) -> bool:

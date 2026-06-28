@@ -11,6 +11,8 @@ from typing import Optional
 
 import requests
 
+from .base import strip_ctrl
+
 log = logging.getLogger("internets.geocode")
 
 # ---------------------------------------------------------------------------
@@ -122,12 +124,6 @@ _MAX_NAME_CHARS = 160
 # inflates the cost of the upstream request.
 _MAX_QUERY_CHARS = 200
 
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
-
-
 def _strip_ctrl(s: object, max_len: int = _MAX_NAME_CHARS) -> str:
     """Drop IRC control bytes from upstream strings and cap length.
 
@@ -135,9 +131,7 @@ def _strip_ctrl(s: object, max_len: int = _MAX_NAME_CHARS) -> str:
     OSM data: anyone with an OSM account can put ``\r\nQUIT :pwned`` in a
     place name.  We must never splice raw OSM strings into an IRC line.
     """
-    text = "" if s is None else str(s)
-    cleaned = "".join(ch for ch in text if ch not in _IRC_CTRL_BYTES)
-    return cleaned[:max_len]
+    return strip_ctrl(s, max_len)
 
 # ---------------------------------------------------------------------------
 # US state display formatting (full name → USPS abbreviation)
@@ -476,19 +470,19 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
         if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
             return _store(None)
         try:
-            r = await asyncio.to_thread(
+            with await asyncio.to_thread(
                 _get, "https://nominatim.openstreetmap.org/reverse",
                 params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1},
                 headers=hdrs,
-            )
-            d = _read_json_capped(r)
-            if not isinstance(d, dict):
-                return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
-            addr = d.get("address", {})
-            if not isinstance(addr, dict):
-                addr = {}
-            name, cc = _format_name(addr, f"{lat:.4f},{lon:.4f}")
-            return _store((lat, lon, name, cc))
+            ) as r:
+                d = _read_json_capped(r)
+                if not isinstance(d, dict):
+                    return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
+                addr = d.get("address", {})
+                if not isinstance(addr, dict):
+                    addr = {}
+                name, cc = _format_name(addr, f"{lat:.4f},{lon:.4f}")
+                return _store((lat, lon, name, cc))
         except Exception:
             return _store((lat, lon, f"{lat:.4f},{lon:.4f}", ""))
 
@@ -509,11 +503,11 @@ async def geocode(query: str, user_agent: str) -> tuple[float, float, str, str] 
                 params["countrycodes"] = cc
 
         try:
-            r = await asyncio.to_thread(
+            with await asyncio.to_thread(
                 _get, "https://nominatim.openstreetmap.org/search",
                 params=params, headers=hdrs,
-            )
-            hits = _read_json_capped(r)
+            ) as r:
+                hits = _read_json_capped(r)
         except Exception as e:
             log.warning(f"Geocode '{candidate}': {e}")
             return _store(None)

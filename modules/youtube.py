@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.youtube")
 
@@ -39,10 +39,10 @@ def _search_sync(query: str, key: str, ua: str) -> str:
             timeout=10,
         ).get("items", [])
         if not items:
-            return f"no results for '{query}'"
+            return f"no results for '{strip_ctrl(query)}'"
 
         vid_id = items[0]["id"]["videoId"]
-        title = items[0]["snippet"]["title"]
+        title = strip_ctrl(items[0]["snippet"]["title"])
 
         # Step 2: get video details (duration, view count, likes)
         vids = fetch_json(
@@ -105,7 +105,7 @@ class YoutubeModule(BotModule):
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}yt/.youtube <search>   YouTube search  e.g. {prefix}yt cat videos"]
+        return [help_row(prefix, "yt/.youtube <search>", f"YouTube search  e.g. {prefix}yt cat videos")]
 
 
 def setup(bot: object) -> YoutubeModule:

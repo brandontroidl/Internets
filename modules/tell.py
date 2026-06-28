@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.tell")
 
@@ -366,9 +366,9 @@ class TellModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}tell <nick> <msg>      Leave a message for <nick>",
-            f"  {prefix}tell-cancel            Cancel all your pending tells",
-            f"  {prefix}tell-list              List your pending tells",
+            help_row(prefix, "tell <nick> <msg>", "Leave a message for <nick>"),
+            help_row(prefix, "tell-cancel", "Cancel all your pending tells"),
+            help_row(prefix, "tell-list", "List your pending tells"),
         ]
 
 

@@ -213,6 +213,94 @@ def _format_marine(r: object) -> str:
     return " :: ".join(parts)
 
 
+def _format_uv(r: object) -> str:
+    from weather_providers import UVResult
+    if not isinstance(r, UVResult):
+        raise TypeError(f"expected UVResult, got {type(r).__name__}")
+    source = _sanitize(r.source, 30)
+    parts: list[str] = []
+    if r.uv_index is not None:
+        cat = f" ({_sanitize(r.category, 12)})" if r.category else ""
+        parts.append(f"UV index {r.uv_index:.1f}{cat}")
+    else:
+        parts.append("UV index N/A")
+    if r.uv_max is not None:
+        parts.append(f"Peak today {r.uv_max:.1f}")
+    parts.append(f"[{source}]")
+    return " :: ".join(parts)
+
+
+def _format_pollen(r: object) -> str:
+    from weather_providers import PollenResult
+    if not isinstance(r, PollenResult):
+        raise TypeError(f"expected PollenResult, got {type(r).__name__}")
+    source = _sanitize(r.source, 30)
+    taxa = [("Alder", r.alder), ("Birch", r.birch), ("Grass", r.grass),
+            ("Mugwort", r.mugwort), ("Olive", r.olive), ("Ragweed", r.ragweed)]
+    parts = [f"{name} {val:.0f}" for name, val in taxa if val is not None]
+    if not parts:
+        return f"No pollen data (CAMS covers Europe only). [{source}]"
+    parts.append("grains/m³")
+    parts.append(f"[{source}]")
+    return " :: ".join(parts)
+
+
+def _format_wildfire(r: object) -> str:
+    from weather_providers import WildfireResult
+    if not isinstance(r, WildfireResult):
+        raise TypeError(f"expected WildfireResult, got {type(r).__name__}")
+    source = _sanitize(r.source, 30)
+    if not r.fire_count:
+        return f"No active fires detected nearby. [{source}]"
+    parts: list[str] = [f"{r.fire_count} active fire(s) nearby"]
+    if r.nearest_km is not None:
+        nm = f" {_sanitize(r.nearest_name, 40)}" if r.nearest_name else ""
+        parts.append(f"Nearest{nm} {r.nearest_km:.0f}km")
+    if r.max_acres is not None:
+        parts.append(f"Largest {r.max_acres:,.0f} acres")
+    parts.append(f"[{source}]")
+    return " :: ".join(parts)
+
+
+def _format_space(r: object) -> str:
+    from weather_providers import SpaceWeatherResult
+    if not isinstance(r, SpaceWeatherResult):
+        raise TypeError(f"expected SpaceWeatherResult, got {type(r).__name__}")
+    source = _sanitize(r.source, 30)
+    parts: list[str] = []
+    if r.kp_index is not None:
+        cat = f" ({_sanitize(r.kp_category, 20)})" if r.kp_category else ""
+        parts.append(f"Kp {r.kp_index:.1f}{cat}")
+    if r.aurora_pct is not None:
+        parts.append(f"Aurora chance {r.aurora_pct:.0f}%")
+    if not parts:
+        parts.append("Space weather data unavailable")
+    parts.append(f"[{source}]")
+    return " :: ".join(parts)
+
+
+def _format_tides(r: object) -> str:
+    from weather_providers import TideResult
+    if not isinstance(r, TideResult):
+        raise TypeError(f"expected TideResult, got {type(r).__name__}")
+    source = _sanitize(r.source, 30)
+    parts: list[str] = []
+    if r.station:
+        parts.append(f"Station {_sanitize(r.station, 40)}")
+    if r.next_high_time:
+        h = f" ({r.next_high_m:.1f}m)" if r.next_high_m is not None else ""
+        parts.append(f"Next high {_sanitize(r.next_high_time, 30)}{h}")
+    if r.next_low_time:
+        lo = f" ({r.next_low_m:.1f}m)" if r.next_low_m is not None else ""
+        parts.append(f"Next low {_sanitize(r.next_low_time, 30)}{lo}")
+    if r.water_temp_c is not None:
+        parts.append(f"Water {cf(r.water_temp_c)}")
+    if len(parts) <= (1 if r.station else 0):
+        parts.append("No tide data available")
+    parts.append(f"[{source}]")
+    return " :: ".join(parts)
+
+
 # ── Module ────────────────────────────────────────────────────────────
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -256,6 +344,33 @@ _PROVIDER_FLAGS: dict[str, str] = {
     "worldweatheronline": "worldweatheronline", "wwo":    "worldweatheronline",
     # Weatherstack
     "weatherstack":       "weatherstack", "ws":           "weatherstack",
+    # AirNow (US EPA air quality — air_quality only)
+    "airnow":             "airnow",      "an":            "airnow",
+    # PurpleAir (crowdsourced PM2.5 — air_quality only)
+    "purpleair":          "purpleair",   "pa":            "purpleair",
+    # WAQI / OpenAQ / IQAir (air_quality)
+    "waqi":               "waqi",
+    "openaq":             "openaq",      "oaq":           "openaq",
+    "iqair":              "iqair",       "iq":            "iqair",
+    # MET Norway / Yr (current/forecast/hourly/alerts/nowcast)
+    "metno":              "metno",       "yr":            "metno",
+    # SunriseSunset.io (astronomy)
+    "sunrisesunset":      "sunrisesunset", "ss":          "sunrisesunset",
+    # currentuvindex.com (uv)
+    "currentuvindex":     "currentuvindex", "cuv":        "currentuvindex",
+    # GDACS / ECCC (alerts)
+    "gdacs":              "gdacs",
+    "eccc":               "eccc",
+    # NASA POWER (historical)
+    "nasapower":          "nasapower",   "power":         "nasapower",
+    # NIFC / NASA FIRMS (wildfire)
+    "nifc":               "nifc",
+    "firms":              "firms",
+    # NOAA SWPC (space_weather)
+    "swpc":               "swpc",
+    # TideCheck / NOAA CO-OPS (tides)
+    "tidecheck":          "tidecheck",   "tc":            "tidecheck",
+    "noaa_coops":         "noaa_coops",  "coops":         "noaa_coops",
 }
 
 
@@ -351,6 +466,11 @@ class WeatherModule(BotModule):
         "history":   "cmd_history",   "hist": "cmd_history",
         "marine":    "cmd_marine",    "sea":  "cmd_marine",
         "nowcast":   "cmd_nowcast",   "nc":   "cmd_nowcast",
+        "uv":        "cmd_uv",        "uvi":  "cmd_uv",
+        "pollen":    "cmd_pollen",    "allergy": "cmd_pollen",
+        "wildfire":  "cmd_wildfire",  "fire": "cmd_wildfire",
+        "space":     "cmd_space",     "aurora": "cmd_space",
+        "tides":     "cmd_tides",     "tide": "cmd_tides",
         "providers": "cmd_providers",
     }
 
@@ -384,6 +504,11 @@ class WeatherModule(BotModule):
         saved = self.bot.loc_get(nick)
         if saved:
             return saved, None
+        # Fall back to the operator-configured default_location if set, so the
+        # bot answers .weather out of the box before anyone runs regloc.
+        default = self.bot.cfg["bot"].get("default_location", "").strip()
+        if default:
+            return default, None
         p = self.bot.cfg["bot"]["command_prefix"]
         return None, f"{nick}: no location saved — use {p}regloc <city or zip> first."
 
@@ -616,6 +741,31 @@ class WeatherModule(BotModule):
         else:
             self.bot.privmsg(reply_to, f"{nick}: nowcast unavailable — no provider supports precipitation nowcasting.")
 
+    async def cmd_uv(self, nick: str, reply_to: str, arg: str | None) -> None:
+        from weather_providers import get_uv
+        await self._weather_cmd("uv", "uv", nick, reply_to, arg,
+            get_uv, _format_uv, "UV data unavailable right now.")
+
+    async def cmd_pollen(self, nick: str, reply_to: str, arg: str | None) -> None:
+        from weather_providers import get_pollen
+        await self._weather_cmd("pollen", "pollen", nick, reply_to, arg,
+            get_pollen, _format_pollen, "pollen data unavailable — CAMS covers Europe only.")
+
+    async def cmd_wildfire(self, nick: str, reply_to: str, arg: str | None) -> None:
+        from weather_providers import get_wildfire
+        await self._weather_cmd("wildfire", "wildfire", nick, reply_to, arg,
+            get_wildfire, _format_wildfire, "wildfire data unavailable right now.")
+
+    async def cmd_space(self, nick: str, reply_to: str, arg: str | None) -> None:
+        from weather_providers import get_space_weather
+        await self._weather_cmd("space", "space_weather", nick, reply_to, arg,
+            get_space_weather, _format_space, "space-weather data unavailable right now.")
+
+    async def cmd_tides(self, nick: str, reply_to: str, arg: str | None) -> None:
+        from weather_providers import get_tides
+        await self._weather_cmd("tides", "tides", nick, reply_to, arg,
+            get_tides, _format_tides, "tide data unavailable — no station near this location.")
+
     async def cmd_providers(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Show provider health and capability status.  Admin only."""
         if not self.bot.is_admin(nick):
@@ -630,39 +780,34 @@ class WeatherModule(BotModule):
             self.bot.preply(nick, reply_to, line)
 
     def help_lines(self, prefix: str) -> list[str]:
-        # Only advertise flags for providers that are actually loaded.  If
-        # you don't have an OpenWeatherMap key, `-owm` never appears here.
+        """Compact, grouped help.
+
+        Seven lines + the ``[weather]`` header — small enough to clear the
+        send queue's 5-message burst near-instantly and stay well within a
+        10-msg/3-sec network flood limit (output is token-bucketed in
+        sender.py regardless).  Commands are grouped by theme rather than
+        listed one-per-line, and provider flags are summarised with a
+        pointer to ``-l`` instead of dumping all of them — so this stays
+        compact no matter how many providers are loaded.
+        """
+        p = prefix
         from weather_providers import dispatcher
-        active = set(dispatcher.provider_ids)
-        flag_chunks: list[str] = []
-        for pid in dispatcher.provider_ids:  # already in registration order
-            if pid in active:
-                flag_chunks.append(_flag_examples_for(pid))
-        # Wrap flag list across two lines so it stays under ~80 cols.
-        flag_str = "  ".join(flag_chunks) if flag_chunks else "(no providers loaded)"
-        # Cheap split at the midpoint of the chunk list.
-        mid = (len(flag_chunks) + 1) // 2
-        flag_l1 = "  ".join(flag_chunks[:mid]) if mid else flag_str
-        flag_l2 = "  ".join(flag_chunks[mid:]) if mid else ""
+        n = len(dispatcher.provider_ids)
+
+        def row(label: str, body: str) -> str:
+            # \x02 = IRC bold; label padded inside the codes so the visible
+            # columns line up.  Two leading spaces match the other modules.
+            return f"  \x02{label:<8}\x02 {body}"
+
         lines = [
-            f"  {prefix}weather/.w  [-flag] [loc|-n nick]   Current conditions",
-            f"  {prefix}forecast/.f [-flag] [loc|-n nick]   Multi-day forecast",
-            f"  {prefix}hourly/.h   [-flag] [loc|-n nick]   Hourly forecast (12h)",
-            f"  {prefix}alerts/.al  [-flag] [loc|-n nick]   Active weather alerts",
-            f"  {prefix}aqi/.air    [-flag] [loc|-n nick]   Air quality index",
-            f"  {prefix}astro/.sun  [-flag] [loc|-n nick]   Sunrise, sunset, moon",
-            f"  {prefix}history/.hist [-flag] [YYYY-MM-DD] [loc]  Past weather",
-            f"  {prefix}marine/.sea [-flag] [loc|-n nick]   Ocean conditions",
-            f"  {prefix}nowcast/.nc [-flag] [loc|-n nick]   Precip nowcast (1-2h)",
-            f"  Flags appear anywhere; -l lists active providers ranked by accuracy.",
-            f"  Active provider flags ({len(flag_chunks)}):",
-            f"    {flag_l1}",
-        ]
-        if flag_l2:
-            lines.append(f"    {flag_l2}")
-        lines += [
-            f"  Examples:  {prefix}w 67127 -aw   |   {prefix}w -vc Tokyo   |   {prefix}f -nws -n bob",
-            f"  {prefix}providers                                Provider health [admin]",
+            row("Weather",  f"{p}weather/.w  {p}forecast/.f  {p}hourly/.h  {p}nowcast/.nc"),
+            row("Air/Sky",  f"{p}aqi/.air  {p}uv/.uvi  {p}pollen/.allergy  {p}astro/.sun"),
+            row("Hazards",  f"{p}alerts/.al  {p}wildfire/.fire  {p}space/.aurora"),
+            row("Sea/Past", f"{p}marine/.sea  {p}tides/.tide  {p}history/.hist"),
+            row("Where",    f"city / ZIP / 'lat,lon';  {p}regloc saves yours;  add -n <nick> for someone else's"),
+            row("Flags",    f"{n} providers active — force one with -<flag> (e.g. -nws -vc -aw);  {p}<cmd> -l lists them"),
+            row("Try",      f"{p}w 90210   {p}aqi -an 67127   {p}f -vc Tokyo   {p}uv London   {p}tides -coops"),
+            row("Admin",    f"{p}providers  provider health + capability chains  [admin]"),
         ]
         return lines
 

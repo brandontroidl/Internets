@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.notes")
 
@@ -31,14 +31,9 @@ _MAX_NOTES = 20
 _MAX_LEN = 200
 _CLEAR_WINDOW = 60.0  # seconds
 
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
-
 
 def _strip_ctrl(s: str, max_len: int = _MAX_LEN) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _timeago(ts: int) -> str:
@@ -279,7 +274,7 @@ class NotesModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}notes <sub> [args]     Personal sticky notes",
+            help_row(prefix, "notes <sub> [args]", "Personal sticky notes"),
             f"      subcommands: list | add <text> | del <N> | show <N> | clear",
         ]
 

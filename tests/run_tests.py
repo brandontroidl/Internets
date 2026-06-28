@@ -430,6 +430,82 @@ def _():
     assert inspect.iscoroutinefunction(p.get_weather)
     assert inspect.iscoroutinefunction(p.get_forecast)
 
+@test("AirNowProvider: air-quality-only provider, key required")
+def _():
+    from weather_providers.airnow import AirNowProvider
+    p = AirNowProvider("test-key")
+    assert p.name == "AirNow"
+    assert p.requires_key is True
+    assert inspect.iscoroutinefunction(p.get_air_quality)
+    # Air-quality-only: it deliberately does not implement get_weather.
+    assert not hasattr(p, "get_weather")
+
+@test("PurpleAirProvider: air-quality-only provider, key required")
+def _():
+    from weather_providers.purpleair import PurpleAirProvider
+    p = PurpleAirProvider("test-key")
+    assert p.name == "PurpleAir"
+    assert p.requires_key is True
+    assert inspect.iscoroutinefunction(p.get_air_quality)
+    assert not hasattr(p, "get_weather")
+
+@test("PurpleAir pm25_to_aqi: EPA 2024 breakpoints")
+def _():
+    from weather_providers.purpleair._codes import pm25_to_aqi
+    assert pm25_to_aqi(0.0) == 0
+    assert pm25_to_aqi(9.0) == 50          # 2024 Good/Moderate boundary
+    assert pm25_to_aqi(35.4) == 100
+    assert pm25_to_aqi(325.4) == 500
+    assert pm25_to_aqi(400.0) == 500       # capped above top breakpoint
+    assert pm25_to_aqi(None) is None
+    assert pm25_to_aqi(12.0) > 50          # 2024: 12 µg/m³ is Moderate
+
+@test("base: uv_category / kp_category thresholds")
+def _():
+    from weather_providers.base import uv_category, kp_category
+    assert uv_category(2) == "Low"
+    assert uv_category(6) == "High"
+    assert uv_category(11) == "Extreme"
+    assert uv_category(None) == ""
+    assert kp_category(3) == "Quiet"
+    assert kp_category(5).startswith("Minor")
+    assert kp_category(9).startswith("Extreme")
+
+@test("base: new capability dataclasses are frozen")
+def _():
+    from weather_providers.base import (UVResult, PollenResult, WildfireResult,
+                                        SpaceWeatherResult, TideResult)
+    for obj in (UVResult("s", "l"), PollenResult("s", "l"), WildfireResult("s", "l"),
+                SpaceWeatherResult("s", "l"), TideResult("s", "l")):
+        try:
+            obj.source = "x"
+            assert False, "should be frozen"
+        except AttributeError:
+            pass
+
+@test("SunriseSunsetProvider: astronomy-only, no key")
+def _():
+    from weather_providers.sunrisesunset import SunriseSunsetProvider
+    p = SunriseSunsetProvider()
+    assert p.name == "SunriseSunset" and p.requires_key is False
+    assert inspect.iscoroutinefunction(p.get_astronomy)
+
+@test("MetNoProvider: multi-capability, no key")
+def _():
+    from weather_providers.metno import MetNoProvider
+    p = MetNoProvider()
+    assert p.requires_key is False
+    for m in ("get_weather", "get_forecast", "get_hourly", "get_alerts", "get_nowcast"):
+        assert inspect.iscoroutinefunction(getattr(p, m))
+
+@test("dispatch: 5 new capabilities registered with method names")
+def _():
+    from weather_providers._dispatch import CAPABILITY_METHODS
+    for cap, meth in (("uv", "get_uv"), ("pollen", "get_pollen"),
+                      ("wildfire", "get_wildfire"),
+                      ("space_weather", "get_space_weather"), ("tides", "get_tides")):
+        assert CAPABILITY_METHODS.get(cap) == meth
+
 @test("OpenMeteo WMO_CODES: covers common weather codes")
 def _():
     from weather_providers.openmeteo._codes import WMO_CODES
@@ -1071,25 +1147,29 @@ def _():
 
 @test("BUG-027: privmsg rejects targets containing spaces")
 def _():
-    # Static check — the implementation must guard against spaces.
+    # Behavioural: a target with a space (or empty) must be dropped, not sent —
+    # it would let an attacker inject extra IRC command args.
     from internets import IRCBot
-    source = inspect.getsource(IRCBot.privmsg)
-    # Drop the trivial `'"' in source` shortcut that made this always pass.
-    assert (
-        '" " in target' in source
-        or "' ' in target" in source
-        or 'space' in source.lower()
-    )
+    b = IRCBot.__new__(IRCBot)          # no __init__: only send + _split_msg needed
+    sent = []
+    b.send = lambda msg, priority=1: sent.append(msg)
+    b.privmsg("bad target", "hello")
+    b.privmsg("", "hello")
+    assert sent == []                   # both rejected
+    b.privmsg("#good", "hello")
+    assert sent == ["PRIVMSG #good :hello"]
 
 @test("BUG-027: notice rejects targets containing spaces")
 def _():
     from internets import IRCBot
-    source = inspect.getsource(IRCBot.notice)
-    assert (
-        '" " in target' in source
-        or "' ' in target" in source
-        or 'space' in source.lower()
-    )
+    b = IRCBot.__new__(IRCBot)
+    sent = []
+    b.send = lambda msg, priority=1: sent.append(msg)
+    b.notice("bad target", "hello")
+    b.notice("", "hello")
+    assert sent == []
+    b.notice("#good", "hello")
+    assert sent == ["NOTICE #good :hello"]
 
 @test("BUG-028: module loader blocks symlinks outside modules dir (code inspection)")
 def _():

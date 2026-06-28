@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import quote_plus, unquote
 
 import requests
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row
 
 log = logging.getLogger("internets.search")
 
@@ -215,8 +215,8 @@ class SearchModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}sw/.g <query>          Web search (DuckDuckGo)",
-            f"  {prefix}si/.gi <query>         Image search (Brave API key required)",
+            help_row(prefix, "sw/.g <query>", "Web search (DuckDuckGo)"),
+            help_row(prefix, "si/.gi <query>", "Image search (Brave API key required)"),
         ]
 
 

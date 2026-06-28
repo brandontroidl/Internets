@@ -6,7 +6,69 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-(No unreleased changes.)
+### Added — two air-quality providers (AirNow, PurpleAir)
+
+- **`weather_providers/airnow/`** — US EPA official Air Quality Index via
+  the AirNow `latLong/current` observation API.  Air-quality only, US
+  locations only (raises on no coverage so the dispatcher falls through
+  to a global provider).  Reports the dominant pollutant's AQI + category
+  (e.g. `AirNow (PM2.5)`).  Requires `airnow_key` (free, 500 req/hour).
+  Ranked **#1** for `air_quality` as the authoritative US source.
+- **`weather_providers/purpleair/`** — crowdsourced real-time PM2.5 from
+  the nearest outdoor PurpleAir sensor (bounding-box query around the
+  geocoded point).  Applies the EPA/Barkjohn (2021) humidity correction
+  and converts to AQI with the **2024** EPA PM2.5 breakpoints
+  (`_codes.pm25_to_aqi`).  Requires `purpleair_key` (free read key).
+  Ranked **last** for `air_quality` (crowdsourced, noisier); surfaces
+  sensor distance in the source label for provenance.
+- New per-command flags: `-airnow`/`-an` and `-purpleair`/`-pa` (work
+  with `.aqi`/`.air`, hidden until their key is configured).
+
+### Added — weather subsystem expansion (5 new capabilities, 14 new providers)
+
+- **New capabilities + commands:** `.uv`/`.uvi` (UV index), `.pollen`/`.allergy`
+  (Europe/CAMS), `.wildfire`/`.fire` (active fire detections), `.space`/`.aurora`
+  (geomagnetic Kp + aurora chance), `.tides`/`.tide` (next high/low). Each adds a
+  normalized dataclass (`UVResult`, `PollenResult`, `WildfireResult`,
+  `SpaceWeatherResult`, `TideResult`), a `CAPABILITY_METHODS` entry, and a
+  `DEFAULT_RELIABILITY` ranking.
+- **New air-quality sources:** WAQI/aqicn (`-waqi`), OpenAQ v3 (`-openaq`/`-oaq`),
+  IQAir AirVisual (`-iqair`/`-iq`). Open-Meteo AQI now also reports `aerosol_optical_depth`
+  (smoke proxy).
+- **Astronomy:** SunriseSunset.io (`-ss`, no key) — full moon-phase + twilight set;
+  now ranked first for `.astro`.
+- **UV:** Open-Meteo `uv_index` + currentuvindex.com (`-cuv`, no key).
+- **Alerts:** GDACS global multi-hazard (`-gdacs`) and ECCC Canada (`-eccc`), both no key.
+- **Historical:** NASA POWER (`-nasapower`/`-power`, no key, global reanalysis).
+- **Wildfire:** NIFC WFIGS (US, no key) + NASA FIRMS (`-firms`, global active-fire).
+- **Space weather:** NOAA SWPC (no key) — planetary Kp + OVATION aurora grid.
+- **Tides:** TideCheck (`-tc`, global) + NOAA CO-OPS (`-coops`, US, no key).
+- **General fallback:** MET Norway / Yr (`-metno`/`-yr`, no key) for
+  current/forecast/hourly/alerts/nowcast; Open-Meteo now also serves `nowcast`
+  (`minutely_15`), `uv`, and `pollen`.
+- Provider count is now **30 packages** across 14 capabilities. New secret keys:
+  `waqi_token`, `openaq_key`, `iqair_key`, `tidecheck_key`, `firms_key`.
+
+### Changed — `.help` system: consistency, accuracy, flood-safety
+
+- New shared `modules.base.help_row(prefix, usage, desc)` formatter; **all
+  command modules migrated to it** so `.help <module>` output aligns
+  uniformly (previously each module hand-padded to a different column, 18–50)
+  and renders correctly in both monospace and proportional IRC clients.
+- Normalized alias notation to `.cmd/.alias` everywhere (was a mix of
+  `.cmd/.alias` and `.cmd / .alias`); surfaced previously-hidden short
+  aliases (`.numberfact/.nf`, `.recipe/.meal`, `.reddit/.r`).
+- **Weather `.help` rewritten compact**: 14 commands grouped into themed
+  bold-labelled rows + a summarized provider line (count + `-l` pointer
+  instead of dumping every provider flag), so it no longer scales with the
+  provider count. Restored the `.providers` admin line.
+- `.help <module>` now shows the command count in its header.
+- All help replies remain token-bucketed by `sender.py` (5 burst, ~40/min) —
+  well inside a 10-msg/3-sec flood limit; `help_row` keeps every line far
+  under the 512-byte IRC limit.
+- New `tests/test_help.py` regression suite (160 checks): every module's
+  primary commands must be documented, every line IRC-safe (length + indent),
+  alias separators normalized — prevents help/command drift.
 
 ## [2.7.0] — 2026-05-20
 

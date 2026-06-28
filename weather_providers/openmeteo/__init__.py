@@ -9,7 +9,8 @@ from ..base import (
     HistoricalResult,
     MarineResult,
 )
-from . import current, forecast, hourly, air_quality, astronomy, historical, marine
+from . import (current, forecast, hourly, air_quality, astronomy, historical,
+               marine, nowcast, uv, pollen)
 
 class OpenMeteoProvider:
     name: str = "Open-Meteo"
@@ -29,3 +30,9 @@ class OpenMeteoProvider:
         return await historical.fetch(lat, lon, location, target_date)
     async def get_marine(self, lat, lon, location, **kw):
         return await marine.fetch(lat, lon, location)
+    async def get_nowcast(self, lat, lon, location, **kw):
+        return await nowcast.fetch(lat, lon, location)
+    async def get_uv(self, lat, lon, location, **kw):
+        return await uv.fetch(lat, lon, location)
+    async def get_pollen(self, lat, lon, location, **kw):
+        return await pollen.fetch(lat, lon, location)

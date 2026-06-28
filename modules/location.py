@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from .base    import BotModule
+from .base    import BotModule, help_row, strip_ctrl
 from .geocode import geocode
 
 log = logging.getLogger("internets.location")
@@ -38,11 +38,11 @@ class LocationModule(BotModule):
             return
         geo = await geocode(arg, self._ua)
         if geo is None:
-            self.bot.privmsg(reply_to, f"{nick}: location not found: '{arg}'")
+            self.bot.privmsg(reply_to, f"{nick}: location not found: '{strip_ctrl(arg)}'")
             return
         _, _, display, _ = geo
         self.bot.loc_set(nick, arg)
-        self.bot.privmsg(reply_to, f"{nick}: location set to {display}")
+        self.bot.privmsg(reply_to, f"{nick}: location set to {strip_ctrl(display)}")
         log.info(f"regloc {nick} -> {arg!r} ({display})")
 
     async def cmd_myloc(self, nick: str, reply_to: str, arg: str | None) -> None:
@@ -51,7 +51,7 @@ class LocationModule(BotModule):
         if raw:
             geo     = await geocode(raw, self._ua)
             display = geo[2] if geo else raw
-            self.bot.privmsg(reply_to, f"{nick}: saved location is {display} ({raw!r})")
+            self.bot.privmsg(reply_to, f"{nick}: saved location is {strip_ctrl(display)} ({strip_ctrl(raw)!r})")
         else:
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: no location saved — use {p}regloc <zip or city>")
@@ -66,9 +66,9 @@ class LocationModule(BotModule):
     def help_lines(self, prefix: str) -> list[str]:
         """Return location help text."""
         return [
-            f"  {prefix}regloc/.register_location <zip|city>   Save your default location",
-            f"  {prefix}myloc                                   Show your saved location",
-            f"  {prefix}delloc                                  Remove your saved location",
+            help_row(prefix, "regloc/.register_location <zip|city>", "Save your default location"),
+            help_row(prefix, "myloc", "Show your saved location"),
+            help_row(prefix, "delloc", "Remove your saved location"),
         ]
 
 

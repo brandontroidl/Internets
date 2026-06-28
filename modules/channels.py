@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 import logging
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.channels")
 
@@ -301,9 +301,9 @@ class ChannelsModule(BotModule):
     def help_lines(self, prefix: str) -> list[str]:
         """Return channel management help text."""
         return [
-            f"  {prefix}join  <#channel>   Invite the bot     [channel founder / admin]",
-            f"  {prefix}part  <#channel>   Remove the bot     [channel founder / admin]",
-            f"  {prefix}users [#channel]   Show known users in a channel",
+            help_row(prefix, "join <#channel>", "Invite the bot     [channel founder / admin]"),
+            help_row(prefix, "part <#channel>", "Remove the bot     [channel founder / admin]"),
+            help_row(prefix, "users [#channel]", "Show known users in a channel"),
         ]
 
 

@@ -6,7 +6,7 @@ import math
 import operator
 import logging
 from typing import Any
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.calc")
 
@@ -139,7 +139,7 @@ class CalcModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         """Return calculator help text."""
-        return [f"  {prefix}cc <expression>   Calculator  e.g. {prefix}cc 2pi  {prefix}cc sqrt(144)"]
+        return [help_row(prefix, "cc <expression>", f"Calculator  e.g. {prefix}cc 2pi  {prefix}cc sqrt(144)")]
 
 
 def setup(bot: object) -> CalcModule:

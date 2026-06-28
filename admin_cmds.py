@@ -142,7 +142,10 @@ class AdminCommandsMixin:
             # echo partial input or hash fragments in exception text).
             log.error(f"Auth backend error for {nick}: {type(e).__name__}")
             with self._auth_lock:
-                self._auth_fails[k] = (fails + 1, now)
+                # Re-read inside the lock — `fails` was snapshotted before the
+                # verify await, so a concurrent attempt could have bumped it.
+                cur, _ = self._auth_fails.get(k, (0, 0))
+                self._auth_fails[k] = (cur + 1, now)
             self.preply(nick, reply_to, f"{nick}: wrong password.")
             return
         if ok:
@@ -156,10 +159,15 @@ class AdminCommandsMixin:
             self._audit(nick, "auth", None)
         else:
             with self._auth_lock:
-                self._auth_fails[k] = (fails + 1, now)
+                # Re-read inside the lock — `fails` was snapshotted before the
+                # verify await; a concurrent attempt could have bumped it,
+                # which would otherwise be lost (under-counting failures).
+                cur, _ = self._auth_fails.get(k, (0, 0))
+                new = cur + 1
+                self._auth_fails[k] = (new, now)
             hm = self._nick_hosts.get(k, "unknown")
             self.preply(nick, reply_to, f"{nick}: wrong password.")
-            log.warning(f"Failed auth: {nick} ({hm}) {fails + 1}/{self._AUTH_MAX_FAILS}")
+            log.warning(f"Failed auth: {nick} ({hm}) {new}/{self._AUTH_MAX_FAILS}")
 
     async def cmd_deauth(self, nick: str, reply_to: str, arg: str | None) -> None:
         """End the current admin session."""
@@ -252,7 +260,9 @@ class AdminCommandsMixin:
                     if not inst.is_configured() and not admin:
                         break
                     hl = inst.help_lines(p)
-                    self.preply(nick, reply_to, f"\x02[{name}]\x02")
+                    ncmds = len(set(getattr(inst, "COMMANDS", {}).values()))
+                    self.preply(nick, reply_to,
+                        f"\x02[{name}]\x02  {ncmds} command{'' if ncmds == 1 else 's'}")
                     for ln in hl:
                         self.preply(nick, reply_to, ln)
                     return

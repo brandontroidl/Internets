@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 import requests
-from .base import BotModule, fetch_json
+from .base import BotModule, fetch_json, help_row
 
 log = logging.getLogger("internets.twitch")
 
@@ -26,7 +26,7 @@ class _TwitchAPI:
         # stream + size-cap pattern so a malicious response can't OOM us.
         # OAuth token responses are tiny (~200 bytes); 16 KB is generous.
         import json  # noqa: PLC0415
-        r = requests.post(
+        with requests.post(
             "https://id.twitch.tv/oauth2/token",
             params={
                 "client_id": self._cid,
@@ -36,14 +36,14 @@ class _TwitchAPI:
             headers={"User-Agent": self._ua},
             timeout=10,
             stream=True,
-        )
-        r.raise_for_status()
-        body = r.raw.read(16 * 1024 + 1, decode_content=True)
-        if len(body) > 16 * 1024:
-            raise RuntimeError("twitch oauth token response too large")
-        d = json.loads(body.decode("utf-8", errors="replace"))
-        self._token = d["access_token"]
-        self._expires = time.time() + d.get("expires_in", 3600) - 60
+        ) as r:
+            r.raise_for_status()
+            body = r.raw.read(16 * 1024 + 1, decode_content=True)
+            if len(body) > 16 * 1024:
+                raise RuntimeError("twitch oauth token response too large")
+            d = json.loads(body.decode("utf-8", errors="replace"))
+            self._token = d["access_token"]
+            self._expires = time.time() + d.get("expires_in", 3600) - 60
 
     def _headers(self) -> dict[str, str]:
         if not self._token or time.time() >= self._expires:
@@ -223,9 +223,9 @@ class TwitchModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}tw/.twitch [-s query]    Search streams (default: top live)",
-            f"  {prefix}tw -c <channel>          Channel info",
-            f"  {prefix}tw -g <game>             Search games",
+            help_row(prefix, "tw/.twitch [-s query]", "Search streams (default: top live)"),
+            help_row(prefix, "tw -c <channel>", "Channel info"),
+            help_row(prefix, "tw -g <game>", "Search games"),
         ]
 
 

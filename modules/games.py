@@ -14,18 +14,13 @@ from __future__ import annotations
 
 import logging
 import random
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.games")
 
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
-
-def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+def _strip_ctrl(s, max_len=400):
+    return strip_ctrl(s, max_len)
 
 
 _RNG = random.SystemRandom()
@@ -137,10 +132,10 @@ class GamesModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         return [
-            f"  {prefix}coin                  Flip a coin",
-            f"  {prefix}8ball <question>      Magic 8-ball",
-            f"  {prefix}rps <choice>          Rock/paper/scissors",
-            f"  {prefix}choose A, B, C, ...   Pick one at random",
+            help_row(prefix, "coin", "Flip a coin"),
+            help_row(prefix, "8ball <question>", "Magic 8-ball"),
+            help_row(prefix, "rps <choice>", "Rock/paper/scissors"),
+            help_row(prefix, "choose A, B, C, ...", "Pick one at random"),
         ]
 
 

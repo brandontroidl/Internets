@@ -13,7 +13,7 @@ import logging
 import random
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.xkcd")
 
@@ -24,27 +24,23 @@ _rng = random.SystemRandom()
 _LATEST = "https://xkcd.com/info.0.json"
 _BYNUM  = "https://xkcd.com/{n}/info.0.json"
 _MAX_BODY_BYTES = 64 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _get_json(url: str, ua: str) -> dict | None:
     try:
-        r = requests.get(url, headers={"User-Agent": ua},
-                         timeout=8, stream=True)
-        if r.status_code == 404:
-            return None
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return None
-        return json.loads(body.decode("utf-8", errors="replace"))
+        with requests.get(url, headers={"User-Agent": ua},
+                         timeout=8, stream=True) as r:
+            if r.status_code == 404:
+                return None
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return None
+            return json.loads(body.decode("utf-8", errors="replace"))
     except (requests.RequestException, ValueError):
         return None
 
@@ -108,7 +104,7 @@ class XkcdModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}xkcd [num]              xkcd comic — random or specific"]
+        return [help_row(prefix, "xkcd [num]", "xkcd comic — random or specific")]
 
 
 def setup(bot: object) -> XkcdModule:

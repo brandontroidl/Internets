@@ -19,6 +19,23 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _before(iso: str, cutoff: datetime) -> bool:
+    """True if ISO timestamp ``iso`` is older than ``cutoff``.
+
+    Parses the timestamp rather than comparing strings lexicographically,
+    so a stray ``Z`` suffix, a naive value, or a different UTC offset can't
+    silently mis-order the comparison.  Missing/malformed values are treated
+    as stale (the previous ``"" < cutoff`` behaviour).
+    """
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return True
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt < cutoff
+
+
 _FLUSH_INTERVAL = 30  # seconds between periodic disk writes
 _USER_MAX_AGE_DAYS = 90  # prune user entries older than this
 
@@ -234,13 +251,13 @@ class Store:
 
         Returns the number of entries removed.
         """
-        cutoff = (datetime.now(timezone.utc) - self._user_max_age).isoformat()
+        cutoff = datetime.now(timezone.utc) - self._user_max_age
         pruned = 0
         for ch in list(self._users):
             entries = self._users[ch]
             stale = [
                 nick for nick, data in entries.items()
-                if data.get("last_seen", "") < cutoff
+                if _before(data.get("last_seen", ""), cutoff)
             ]
             for nick in stale:
                 del entries[nick]

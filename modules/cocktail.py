@@ -11,52 +11,48 @@ import json
 import logging
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.cocktail")
 
 _URL = "https://www.thecocktaildb.com/api/json/v1/1/search.php"
 _MAX_BODY_BYTES = 256 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _fetch_sync(name: str, ua: str) -> str:
     try:
-        r = requests.get(_URL, params={"s": name},
+        with requests.get(_URL, params={"s": name},
                          headers={"User-Agent": ua},
-                         timeout=10, stream=True)
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return "TheCocktailDB response too large"
-        d = json.loads(body.decode("utf-8", errors="replace"))
-        drinks = d.get("drinks") or []
-        if not drinks:
-            return f"no cocktail matched '{_strip_ctrl(name, 60)}'"
-        c = drinks[0]
-        nm = c.get("strDrink", "?")
-        glass = c.get("strGlass", "?")
-        cat = c.get("strCategory", "?")
-        instr = (c.get("strInstructions", "") or "").replace("\n", " ")
-        if len(instr) > 200:
-            instr = instr[:197] + "..."
-        ingredients = []
-        for i in range(1, 16):
-            ing = (c.get(f"strIngredient{i}") or "").strip()
-            qty = (c.get(f"strMeasure{i}") or "").strip()
-            if ing:
-                ingredients.append(f"{qty} {ing}".strip())
-        ing_s = ", ".join(ingredients) if ingredients else "(no ingredient list)"
-        return _strip_ctrl(
-            f"\x02{nm}\x02 ({cat}, {glass}) | {ing_s} | {instr}"
-        )
+                         timeout=10, stream=True) as r:
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return "TheCocktailDB response too large"
+            d = json.loads(body.decode("utf-8", errors="replace"))
+            drinks = d.get("drinks") or []
+            if not drinks:
+                return f"no cocktail matched '{_strip_ctrl(name, 60)}'"
+            c = drinks[0]
+            nm = c.get("strDrink", "?")
+            glass = c.get("strGlass", "?")
+            cat = c.get("strCategory", "?")
+            instr = (c.get("strInstructions", "") or "").replace("\n", " ")
+            if len(instr) > 200:
+                instr = instr[:197] + "..."
+            ingredients = []
+            for i in range(1, 16):
+                ing = (c.get(f"strIngredient{i}") or "").strip()
+                qty = (c.get(f"strMeasure{i}") or "").strip()
+                if ing:
+                    ingredients.append(f"{qty} {ing}".strip())
+            ing_s = ", ".join(ingredients) if ingredients else "(no ingredient list)"
+            return _strip_ctrl(
+                f"\x02{nm}\x02 ({cat}, {glass}) | {ing_s} | {instr}"
+            )
     except requests.RequestException as e:
         log.warning(f"cocktail request: {e}")
         return "TheCocktailDB unavailable"
@@ -90,7 +86,7 @@ class CocktailModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}cocktail <name>         Cocktail recipe via TheCocktailDB"]
+        return [help_row(prefix, "cocktail <name>", "Cocktail recipe via TheCocktailDB")]
 
 
 def setup(bot: object) -> CocktailModule:

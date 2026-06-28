@@ -13,55 +13,51 @@ import logging
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.reddit")
 
 _URL = "https://old.reddit.com/r/{sub}/top.json"
 _VALID_SUB = re.compile(r"^[A-Za-z0-9_]{1,21}$")
 _MAX_BODY_BYTES = 512 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 def _fetch_sync(sub: str, period: str, ua: str) -> str:
     try:
-        r = requests.get(_URL.format(sub=sub),
+        with requests.get(_URL.format(sub=sub),
                          params={"t": period, "limit": "1"},
                          headers={"User-Agent": ua, "Accept": "application/json"},
                          timeout=10, stream=True,
-                         allow_redirects=False)
-        if r.status_code == 404:
-            return f"no subreddit r/{sub}"
-        if r.status_code == 403:
-            return f"r/{sub} is private or quarantined"
-        if r.status_code in (301, 302, 303):
-            return f"r/{sub} redirected — likely private or banned"
-        r.raise_for_status()
-        body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
-        if len(body) > _MAX_BODY_BYTES:
-            return "reddit response too large"
-        d = json.loads(body.decode("utf-8", errors="replace"))
-        children = (d.get("data") or {}).get("children") or []
-        if not children:
-            return f"r/{sub} returned no posts"
-        p = children[0].get("data", {})
-        title = p.get("title", "?")
-        score = p.get("score", 0)
-        comments = p.get("num_comments", 0)
-        author = p.get("author", "?")
-        permalink = p.get("permalink", "")
-        url = f"https://old.reddit.com{permalink}" if permalink else (p.get("url") or "")
-        return _strip_ctrl(
-            f"\x02r/{sub}\x02 top ({period}): {title} | "
-            f"{score} pts, {comments} cmts by {author} | {url}"
-        )
+                         allow_redirects=False) as r:
+            if r.status_code == 404:
+                return f"no subreddit r/{sub}"
+            if r.status_code == 403:
+                return f"r/{sub} is private or quarantined"
+            if r.status_code in (301, 302, 303):
+                return f"r/{sub} redirected — likely private or banned"
+            r.raise_for_status()
+            body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
+            if len(body) > _MAX_BODY_BYTES:
+                return "reddit response too large"
+            d = json.loads(body.decode("utf-8", errors="replace"))
+            children = (d.get("data") or {}).get("children") or []
+            if not children:
+                return f"r/{sub} returned no posts"
+            p = children[0].get("data", {})
+            title = p.get("title", "?")
+            score = p.get("score", 0)
+            comments = p.get("num_comments", 0)
+            author = p.get("author", "?")
+            permalink = p.get("permalink", "")
+            url = f"https://old.reddit.com{permalink}" if permalink else (p.get("url") or "")
+            return _strip_ctrl(
+                f"\x02r/{sub}\x02 top ({period}): {title} | "
+                f"{score} pts, {comments} cmts by {author} | {url}"
+            )
     except requests.RequestException as e:
         log.warning(f"reddit request: {e}")
         return "reddit unavailable"
@@ -104,7 +100,7 @@ class RedditModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}reddit <sub> [period]   Top post from subreddit (period: hour/day/week/...)"]
+        return [help_row(prefix, "reddit/.r <sub> [period]", "Top post from subreddit (period: hour/day/week/...)")]
 
 
 def setup(bot: object) -> RedditModule:

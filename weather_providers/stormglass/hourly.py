@@ -1,6 +1,6 @@
 """Stormglass.io — hourly weather forecast."""
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
 from ._codes import deg_to_card, ms_to_kph, _sg_val
@@ -13,12 +13,14 @@ async def fetch(headers, lat, lon, location, hours=12):
         "lat": lat, "lng": lon, "params": _PARAMS,
     }, headers=headers)
     entries = []
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     for h in data.get("hours", []):
         ts = h.get("time", "")
         try:
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            if dt.replace(tzinfo=None) < now:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            if dt < now:
                 continue
             tm = dt.strftime("%I %p").lstrip("0")
         except Exception:

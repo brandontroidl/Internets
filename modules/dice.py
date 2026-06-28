@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import random
 import logging
-from .base import BotModule
+from .base import BotModule, help_row
 
 log = logging.getLogger("internets.dice")
 
@@ -51,7 +51,7 @@ class DiceModule(BotModule):
 
     def help_lines(self, prefix: str) -> list[str]:
         """Return dice help text."""
-        return [f"  {prefix}d [X]dN[+/-M]   Dice roller  e.g. {prefix}d 6  {prefix}d 3d6  {prefix}d 3d6+2"]
+        return [help_row(prefix, "d [X]dN[+/-M]", f"Dice roller  e.g. {prefix}d 6  {prefix}d 3d6  {prefix}d 3d6+2")]
 
 
 def setup(bot: object) -> DiceModule:

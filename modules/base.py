@@ -108,6 +108,53 @@ def cred(
     return raw
 
 
+# ── .help formatting ──────────────────────────────────────────────────
+# Visible width of the usage column in `.help <module>` output.  Commands
+# sit left of this column, descriptions right of it, so a module's lines
+# align in monospace clients.  Usages wider than this fall back to a
+# single separating space rather than wrapping awkwardly.
+_HELP_USAGE_W = 24
+
+
+def help_row(prefix: str, usage: str, desc: str, *, width: int = _HELP_USAGE_W) -> str:
+    """Format one ``.help`` line consistently across all modules.
+
+    ``usage`` is the command and any args WITHOUT the prefix — e.g.
+    ``"cc <expr>"`` or ``"bofh/.excuse"`` (write aliases as ``/.alias``,
+    no surrounding spaces).  The prefix is prepended once and the usage
+    column padded to ``width`` so descriptions line up.  The two leading
+    spaces match the indent the ``.help`` renderer expects, and the line
+    is kept well under the 512-byte IRC limit (the sender truncates as a
+    backstop).  Keeping every module on this one helper means `.help`
+    stays uniform and `.help <cmd>` can still match on the leading token.
+    """
+    u = f"{prefix}{usage}"
+    gap = " " if len(u) >= width else " " * (width - len(u))
+    return f"  {u}{gap}{desc}"
+
+
+_IRC_CTRL_RE = __import__("re").compile(r"[\x00-\x1f\x7f]")
+
+
+def strip_ctrl(s: object, max_len: int = 400) -> str:
+    """Drop IRC control bytes from untrusted text and cap its length.
+
+    The single sanitizer for anything spliced into an IRC line that came
+    from a third party (API titles, redirect Location headers, sensor
+    names, user echoes, …).  Strips the FULL C0 range ``\\x00-\\x1f`` plus
+    ``\\x7f`` (DEL) — not just CR/LF/NUL — so ``\\x02`` (bold), ``\\x03``
+    (color), ``\\x16`` (reverse), ``\\x1b`` (ESC/ANSI) and ``\\x07`` (BEL)
+    can't be used for bot-attributed formatting / escape / bell spoofing.
+    Coerces non-``str`` input (e.g. an int or None) to ``str`` first.
+
+    The IRC sender only strips ``\\r\\n\\x00`` as a transport backstop, so
+    this is the real defense against formatting/escape injection — every
+    module emitting upstream-derived text should route it through here.
+    """
+    text = "" if s is None else str(s)
+    return _IRC_CTRL_RE.sub("", text)[:max_len]
+
+
 class BotModule:
     """
     Base class for all bot modules.

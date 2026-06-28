@@ -93,7 +93,15 @@ config.local.ini.bak
 *.orig
 *.rej
 
+# ── Private keys (Apple WeatherKit .p8 signing key, PEM keys) ─────────
+# These are credentials — never commit them.
+*.p8
+*.pem
+
 # ── Local diagnostic / scratch ───────────────────────────────────────
 # Screenshots / paste-bins / one-off captures used during debugging.
 # Useful locally; never meant for the repo.
 screenshots/
+
+# ── Agent scratch (Claude Code worktrees) — never commit ─────────────
+.claude/worktrees/

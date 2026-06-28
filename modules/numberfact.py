@@ -24,7 +24,7 @@ import random
 import re
 
 import requests
-from .base import BotModule
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.numberfact")
 
@@ -47,10 +47,6 @@ _MAX_ABS_N = 10 ** 12
 # ~1.5 MB.  Cap generously; trivia/year summaries are tiny so a single
 # global ceiling is fine.
 _MAX_BODY_BYTES = 4 * 1024 * 1024
-_IRC_CTRL_BYTES = frozenset(
-    ["\r", "\n", "\x00", "\x01", "\x02", "\x03",
-     "\x04", "\x0f", "\x16", "\x1d", "\x1f"]
-)
 _MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -65,7 +61,7 @@ _DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
-    return "".join(ch for ch in s if ch not in _IRC_CTRL_BYTES)[:max_len]
+    return strip_ctrl(s, max_len)
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +492,9 @@ class NumberfactModule(BotModule):
                 except ValueError:
                     self.bot.privmsg(reply_to, f"{nick}: year must be an integer")
                     return
+            if abs(year) > _MAX_ABS_N:
+                self.bot.privmsg(reply_to, f"{nick}: year too large (max {_MAX_ABS_N:,})")
+                return
             text = await asyncio.to_thread(_fetch_year_sync, year, self._ua)
             self.bot.privmsg(reply_to, _strip_ctrl(text))
             return
@@ -534,7 +533,7 @@ class NumberfactModule(BotModule):
         self.bot.privmsg(reply_to, _strip_ctrl(text))
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [f"  {prefix}numberfact [n] [type]   Number trivia (type: trivia/math/date/year)"]
+        return [help_row(prefix, "numberfact/.nf [n] [type]", "Number trivia (type: trivia/math/date/year)")]
 
 
 def setup(bot: object) -> NumberfactModule:

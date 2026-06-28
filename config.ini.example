@@ -100,11 +100,18 @@ units = us
 ; Providers register only when their credentials are present in
 ; [secrets] (nws + openmeteo are key-free and always available).
 ;
-; All 14 supported providers (most → least accurate):
+; All 30 supported provider packages (most → least accurate for the
+; general weather capabilities):
 ;   nws meteomatics weatherkit openmeteo visualcrossing accuweather
 ;   openweathermap weatherbit weatherapi pirateweather stormglass
-;   tomorrowio worldweatheronline weatherstack
-provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, accuweather, openweathermap, weatherbit, weatherapi, pirateweather, stormglass, tomorrowio, worldweatheronline, weatherstack
+;   tomorrowio worldweatheronline weatherstack metno
+; Specialist / single-capability providers:
+;   air quality : airnow purpleair waqi openaq iqair
+;   astronomy   : sunrisesunset      uv         : currentuvindex
+;   alerts      : gdacs eccc         historical : nasapower
+;   wildfire    : nifc firms         space wx    : swpc
+;   tides       : tidecheck noaa_coops
+provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, accuweather, openweathermap, weatherbit, weatherapi, pirateweather, stormglass, tomorrowio, worldweatheronline, weatherstack, metno, airnow, purpleair, waqi, openaq, iqair, sunrisesunset, currentuvindex, gdacs, eccc, nasapower, nifc, firms, swpc, tidecheck, noaa_coops
 
 [steam]
 ; Path for the nick → SteamID JSON cache (not a secret, just a path).
@@ -230,6 +237,36 @@ weatherbit_key =
 ; Stormglass (marine specialist) — free tier: 10 calls/day
 ; https://stormglass.io/sign-up
 stormglass_key =
+
+; AirNow (US EPA official air quality index) — free tier: 500 req/hour
+; US locations only; powers .aqi with authoritative EPA AQI.
+; https://docs.airnowapi.org/account/request/
+airnow_key =
+
+; PurpleAir (crowdsourced PM2.5 sensors) — free read key
+; Global, hyper-local; ranked below model-based AQI sources.
+; https://develop.purpleair.com/
+purpleair_key =
+
+; WAQI / aqicn.org (global air quality) — free token (non-commercial)
+; https://aqicn.org/data-platform/token/
+waqi_token =
+
+; OpenAQ (open regulatory + sensor air quality) — free API key
+; https://docs.openaq.org/  (key via explore.openaq.org)
+openaq_key =
+
+; IQAir AirVisual (global air quality) — free Community tier 10k/mo
+; https://www.iqair.com/air-pollution-data-api
+iqair_key =
+
+; TideCheck (global tides) — free tier 50 req/day
+; https://tidecheck.com/developers
+tidecheck_key =
+
+; NASA FIRMS (global active-fire detections) — free MAP_KEY
+; https://firms.modaps.eosdis.nasa.gov/api/area/
+firms_key =
 
 ; Apple WeatherKit — Apple Developer Program (500K calls/month)
 ; Requires PyJWT + cryptography: pip install internets-irc[weatherkit]
