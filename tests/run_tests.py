@@ -1855,6 +1855,26 @@ def _():
     assert res is None            # free-text _get raised → no hit
     assert calls == []            # postal resolvers never called
 
+@test("geocode: free-text word-drop loop is capped (bounds Nominatim requests per query)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    n = {"calls": 0}
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    def fake_get(url, params=None, headers=None, timeout=10):
+        n["calls"] += 1
+        return _FakeResp()
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, (lambda r: [])   # always miss → keeps dropping
+        g._geocode_cache.clear()
+        asyncio.run(g.geocode("aa bb cc dd ee ff gg hh ii jj", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    assert n["calls"] <= 5, n["calls"]   # initial + at most _MAX_DROPS(4) retries
+
 @test("weather: no saved location prompts for regloc instead of a default location")
 def _():
     from modules.weather import WeatherModule
