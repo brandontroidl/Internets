@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule, help_row
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.seen")
 
@@ -155,7 +155,10 @@ class SeenModule(BotModule):
             "ts": int(time.time()),
             "event": event,
             "channel": channel,
-            "detail": detail,
+            # Sanitize at record time so the stored-and-replayed last message /
+            # part-quit reason can't carry IRC format/colour/BEL/ANSI injection
+            # into bot-attributed .seen output (clean on disk and on replay).
+            "detail": strip_ctrl(detail, _DETAIL_MAX),
         }
         with self._lock:
             self._seen[nick.lower()] = entry
@@ -266,18 +269,12 @@ class SeenModule(BotModule):
             except OSError:
                 pass
             log.warning(f"seen: flush failed: {e!r}")
-            # Re-mark dirty so we retry next interval
+            # Re-mark dirty so we retry next interval.  (The temp file is
+            # already removed by the os.unlink(tmp) above; tmp is a str, so the
+            # old `tmp.exists()` second cleanup was dead code that only ever
+            # raised AttributeError.)
             with self._lock:
                 self._dirty = True
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception as e:
-                # Cleanup-of-cleanup — the outer flush already failed and
-                # we just want to leave no orphan .tmp around.  If even
-                # the unlink fails, log and move on; the next flush will
-                # overwrite it.
-                log.debug("seen: temp cleanup failed: %s", type(e).__name__)
 
     async def _periodic_flush(self) -> None:
         try:

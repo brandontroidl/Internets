@@ -838,7 +838,12 @@ async def geocode(query: str, user_agent: str, *,
     # and retry.  This recovers from typos in trailing state/country tokens
     # (e.g. "la quinta caifornia" → "la quinta") and from overly-specific
     # queries that don't match any single OSM object.
+    # Cap the sequential Nominatim hits per command: an adversarial many-token
+    # query would otherwise drop one token at a time for up to ~100 requests,
+    # breaching the 1 req/s usage policy and risking a channel-wide IP ban.
+    _MAX_DROPS = 4
     candidate = query
+    drops = 0
     while candidate:
         params: dict = {"q": candidate, "format": "json", "limit": 1, "addressdetails": 1}
 
@@ -882,8 +887,9 @@ async def geocode(query: str, user_agent: str, *,
             return _store((lat, lon, name, cc))
 
         words = candidate.rsplit(None, 1)
-        if len(words) < 2:
+        if len(words) < 2 or drops >= _MAX_DROPS:
             break
         candidate = words[0]
+        drops += 1
 
     return _store(None)

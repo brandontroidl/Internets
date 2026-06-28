@@ -91,18 +91,25 @@ addopts = "--strict-markers"
 [tool.coverage.run]
 branch = true
 source = ["."]
+# CORE-ONLY coverage.  modules/* and weather_providers/* (the SSRF /
+# dispatch / parsing bulk of the codebase) are omitted below, so the
+# reported percentage and the fail_under gate measure the CORE only
+# (top-level orchestration modules), NOT the whole repo.  Do not read
+# the headline number as repo-wide coverage.
 omit = [
     "tests/*",
     "build/*",
     "dist/*",
     ".venv/*",
-    "weather_providers/*",
-    "modules/*",
+    "weather_providers/*",  # excluded - keeps coverage core-only
+    "modules/*",            # excluded - keeps coverage core-only
 ]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+# CORE-ONLY gate: modules/* and weather_providers/* are omitted in
+# [tool.coverage.run] above, so 75% is core-only, not whole-repo.
 fail_under = 75
 exclude_lines = [
     "pragma: no cover",

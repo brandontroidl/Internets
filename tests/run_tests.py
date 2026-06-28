@@ -209,6 +209,81 @@ def _():
     assert rl.flood_check("n") is False   # first call recorded/allowed
     assert rl.flood_check("n") is True    # immediate repeat flagged (cd floored to >=1s)
 
+@test("Store: opt-out preference survives the stale-user prune (privacy floor)")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _make_store(tmp, user_max_age_days=1)
+        s.user_join("#x", "Bob", "bob@h")
+        s.set_opt_out("Bob", True)
+        for ch in s._users.values():      # age every Bob entry far past the cutoff
+            if "bob" in ch:
+                ch["bob"]["last_seen"] = "2000-01-01T00:00:00+00:00"
+        s.prune_users()
+        assert s.is_opted_out("Bob")      # the opt-out preference is NOT pruned away
+        s.stop()
+
+@test("Store: user_max_age_days <= 0 is floored, not a total wipe")
+def _():
+    with tempfile.TemporaryDirectory() as tmp:
+        s = _make_store(tmp, user_max_age_days=0)   # misconfig
+        s.user_join("#x", "Alice", "alice@h")        # fresh entry
+        s.prune_users()
+        assert s.channel_users("#x")                 # floored to >=1d, not wiped
+        s.stop()
+
+@test("security: modules that emit upstream/user text route it through a sanitizer")
+def _():
+    # Completeness gate (enumerate the security-relevant modules, assert each
+    # sanitizes) — NOT a change-detector: these splice third-party/user text
+    # into bot-attributed IRC lines, so each MUST reference the canonical
+    # base.strip_ctrl. Catches a future module (or a removed call) that drifts.
+    for name in ("search", "seen", "tell", "stocks", "remind", "location"):
+        src = Path(f"modules/{name}.py").read_text(encoding="utf-8")
+        assert "strip_ctrl" in src, f"modules/{name}.py: missing canonical strip_ctrl sanitizer"
+    # weather keeps its own _sanitize (same C0/DEL regex); allow either.
+    wsrc = Path("modules/weather.py").read_text(encoding="utf-8")
+    assert "strip_ctrl" in wsrc or "_sanitize" in wsrc
+
+@test("audit_log: an unreadable existing key is not silently regenerated (tamper-evidence)")
+def _():
+    from audit_log import AuditLog
+    with tempfile.TemporaryDirectory() as tmp:
+        a = AuditLog(Path(tmp) / "audit.log")
+        a._load_key()                       # generate the .key sidecar
+        kp = a._key_path
+        original = kp.read_bytes()
+        a._key = None                        # force a reload
+        class _BadPath:                      # simulate a transient read error
+            def exists(self): return True
+            def read_text(self, **k): raise OSError("transient")
+        a._key_path = _BadPath()
+        raised = False
+        try:
+            a._load_key()
+        except RuntimeError:
+            raised = True
+        assert raised                        # fail-closed; did NOT regenerate
+        assert kp.read_bytes() == original   # the real key was not truncated
+
+@test("secret_store: env-var tier filters blank/placeholder values like the file tier")
+def _():
+    import os
+    from secret_store import get, ENV_PREFIX
+    key = ENV_PREFIX + "DUMMY_SECRET_XYZ"
+    old = os.environ.get(key)
+    try:
+        os.environ[key] = "   "                          # whitespace only
+        assert get("dummy_secret_xyz", "DEF") == "DEF"   # filtered, not returned
+        os.environ[key] = "changeme"                     # placeholder
+        assert get("dummy_secret_xyz", "DEF") == "DEF"   # filtered
+        os.environ[key] = "realvalue123"
+        assert get("dummy_secret_xyz", "DEF") == "realvalue123"   # real value passes
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:
@@ -1360,10 +1435,14 @@ def _():
     # Must NOT use os.sep string comparison
     assert "os.sep" not in load_fn
 
-@test("BUG-042: asyncio.open_connection has explicit limit")
+@test("BUG-042: asyncio.open_connection uses the _READ_LIMIT buffer cap")
 def _():
-    source = Path("internets.py").read_text(encoding="utf-8")
-    assert "limit=8192" in source or "limit = 8192" in source
+    from internets import IRCBot
+    # Assert the runtime constant and its wiring, not a bare source literal:
+    # the read buffer cap is the named _READ_LIMIT (8192) and _connect passes
+    # that constant to open_connection, so the value has one source of truth.
+    assert IRCBot._READ_LIMIT == 8192
+    assert "limit=self._READ_LIMIT" in inspect.getsource(IRCBot._connect)
 
 @test("BUG-033: LimitOverrunError handled in main loop")
 def _():
@@ -1819,6 +1898,26 @@ def _():
         g._nominatim_postal, g._zippo, g._get = orig_nom, orig_zippo, orig_get
     assert res is None            # free-text _get raised → no hit
     assert calls == []            # postal resolvers never called
+
+@test("geocode: free-text word-drop loop is capped (bounds Nominatim requests per query)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    n = {"calls": 0}
+    class _FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    def fake_get(url, params=None, headers=None, timeout=10):
+        n["calls"] += 1
+        return _FakeResp()
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, (lambda r: [])   # always miss → keeps dropping
+        g._geocode_cache.clear()
+        asyncio.run(g.geocode("aa bb cc dd ee ff gg hh ii jj", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    assert n["calls"] <= 5, n["calls"]   # initial + at most _MAX_DROPS(4) retries
 
 @test("weather: no saved location prompts for regloc instead of a default location")
 def _():

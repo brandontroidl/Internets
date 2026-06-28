@@ -32,6 +32,7 @@ log = logging.getLogger("internets.crypto")
 _SEARCH_URL = "https://api.coingecko.com/api/v3/search"
 _PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
 _MAX_BODY_BYTES = 256 * 1024  # search responses can be sizeable
+_CACHE_MAX = 512  # bound the per-instance query -> coin_id cache (FIFO evict)
 
 
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
@@ -112,6 +113,8 @@ def _fetch_sync(query: str, cache: dict[str, str], ua: str) -> str:
         coin_id = _resolve_coin_id(q, ua)
         if not coin_id:
             return _strip_ctrl(f"no coin matched '{q}'")
+        if len(cache) >= _CACHE_MAX:
+            cache.pop(next(iter(cache)))
         cache[key] = coin_id
 
     price_data = _get_json(

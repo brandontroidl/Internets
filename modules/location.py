@@ -26,9 +26,11 @@ class LocationModule(BotModule):
 
     def on_load(self) -> None:
         """Load geocoding user agent — secret_store overrides config."""
-        import secret_store
-        self._ua: str = (secret_store.get("weather_user_agent")
-                         or self.bot.cfg["weather"]["user_agent"])
+        from .base import cred
+        # cred(): secret_store first, then [weather].user_agent, else "" - never
+        # a bare KeyError (the template defines no [weather].user_agent), the
+        # same fix weather.py uses.  A blank UA disables geocoding gracefully.
+        self._ua: str = cred(self.bot.cfg, "weather_user_agent", "weather", "user_agent")
         # Home country for bare cross-country postal codes (see geocode()).
         self._default_country: str = self.bot.cfg["weather"].get("default_country", "us")
 

@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import time
 import logging
@@ -128,6 +129,19 @@ _RL_TOKEN_HINTS = ("429", "rate limit", "ratelimit", "too many requests",
 # defect surfaces instead of hiding behind the normal "provider unavailable".
 _BUG_EXC_TYPES = (TypeError, AttributeError, KeyError, IndexError, NameError,
                   dataclasses.FrozenInstanceError)
+
+
+# ── End-to-end fallback-chain time budget ────────────────────────────
+# The outer command handler caps a command at _CMD_TIMEOUT (60s, see
+# internets.py).  A single slow provider - NWS, for instance, makes two
+# to three sequential 10s HTTP hops - must not consume that whole budget
+# and starve the healthy fallbacks queued behind it.  We bound the whole
+# chain to _CHAIN_BUDGET (leaving headroom under the 60s command cap for
+# formatting + IRC send) and cap each individual provider call at the
+# smaller of _PER_CALL_BUDGET and the time still left in the chain, so
+# one slow upstream can never eat the budget the fallbacks need.
+_CHAIN_BUDGET = 45.0     # seconds - whole fallback chain
+_PER_CALL_BUDGET = 30.0  # seconds - any single provider call (covers NWS multi-hop)
 
 
 def _is_rate_limit_error(e: BaseException) -> bool:
@@ -349,7 +363,20 @@ class Dispatcher:
         else:
             chain = self._sorted_for_capability(capability, eligible)
 
+        # Whole-chain deadline.  Capture once at the start so the time
+        # already spent on earlier (slow) providers shrinks what later
+        # ones are allowed - this is what keeps a brownout from starving
+        # the healthy fallbacks behind it within the outer command timeout.
+        deadline = time.monotonic() + _CHAIN_BUDGET
+
         for pid in chain:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log.warning(
+                    "dispatch_budget_exhausted capability=%s budget=%.0fs — "
+                    "stopping chain before %s", capability, _CHAIN_BUDGET, pid)
+                break
+
             rp = self._providers[pid]
             method = getattr(rp.provider, method_name, None)
             if method is None:
@@ -372,17 +399,28 @@ class Dispatcher:
             except Exception:
                 pass  # nosec B110: best-effort cleanup
 
+            # Cap this single call at whatever budget is left (never more
+            # than _PER_CALL_BUDGET).  A hang now raises asyncio.TimeoutError,
+            # caught below as a failure - so a brownout provider also trips
+            # its breaker, instead of silently eating the chain budget.
+            call_timeout = min(remaining, _PER_CALL_BUDGET)
+
             start = time.monotonic()
             try:
-                result = await method(*args, **kwargs)
+                result = await asyncio.wait_for(
+                    method(*args, **kwargs), timeout=call_timeout)
                 latency = time.monotonic() - start
-                rp.health.record_success(latency)
                 if result is None:
-                    # Provider succeeded but has no data for this location (a
+                    # Provider responded but has no data for this location (a
                     # region it doesn't cover) — fall through to the next
-                    # provider rather than returning an empty answer.
+                    # provider rather than returning an empty answer.  We do
+                    # NOT record a success here: a no-data (or slow no-data)
+                    # result must not reset the breaker or mask a brownout,
+                    # so it can't keep a degraded provider looking healthy.
                     log.debug("%s: %s no data — trying next", pid, capability)
                     continue
+                # Only real data counts as a success for the breaker / score.
+                rp.health.record_success(latency)
                 log.debug("%s: %s succeeded (%.2fs)", pid, capability, latency)
                 return result
             except Exception as e:

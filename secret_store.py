@@ -186,7 +186,11 @@ def get(name: str, default: str = "") -> str:
     env_key = ENV_PREFIX + name.upper()
     val = os.environ.get(env_key)
     if val:
-        return val
+        val = val.strip()
+        # Apply the same blank/placeholder filtering as the file tier, so a
+        # whitespace or template-placeholder env export can't pass as a secret.
+        if val and val.lower() not in _PLACEHOLDERS:
+            return val
     # 2) config.ini [secrets]
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)

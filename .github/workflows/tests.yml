@@ -65,7 +65,10 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
-    name: Coverage
+    # CORE-ONLY: pyproject.toml [tool.coverage.run] omits modules/* and
+    # weather_providers/*, so this gate measures core (top-level) modules
+    # only, NOT the whole repo.  The percentage is not repo-wide coverage.
+    name: Core Coverage
     needs: test
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
@@ -85,7 +88,10 @@ jobs:
         shell: bash
         run: cp config.ini.example config.ini
 
-      - name: Run coverage
+      - name: Run core coverage
+        # --fail-under=75 is CORE-ONLY: modules/* and weather_providers/*
+        # are omitted (see pyproject.toml [tool.coverage.run] omit list),
+        # so 75% covers the top-level core modules, not the whole repo.
         run: |
           coverage run -m pytest tests/ --strict-markers
           coverage xml

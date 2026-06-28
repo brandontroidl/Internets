@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from urllib.parse import quote
 
 import requests
 
@@ -31,6 +33,18 @@ _NPM_MAX_BYTES = 1024 * 1024
 
 _MAX_INPUT = 120
 
+# Conservative package-name charset.  Registry names use letters, digits,
+# and a small set of separators (npm scopes use ``@scope/pkg``).  The regex
+# alone admits ``..`` (every char is allowed), so the ".." check below blocks
+# path traversal within the trusted registry host explicitly.  Mirrors the
+# validate + quote pattern already used in ipinfo.py / ipintel.py.
+_PKG_RE = re.compile(r"^[A-Za-z0-9._@/-]{1,100}$")
+
+
+def _valid_pkg(name: str) -> bool:
+    """True only for a conservative package name with no traversal segment."""
+    return bool(_PKG_RE.match(name)) and ".." not in name
+
 
 def _clip(s: object, n: int) -> str:
     """Sanitise upstream text and clip to n chars (ellipsis if truncated)."""
@@ -44,7 +58,7 @@ def _pypi_sync(pkg: str, ua: str) -> str:
     """Blocking PyPI lookup — run via asyncio.to_thread."""
     try:
         data = fetch_json(
-            f"https://pypi.org/pypi/{pkg}/json",
+            f"https://pypi.org/pypi/{quote(pkg, safe='')}/json",
             ua=ua,
             timeout=10,
             allow_404=True,
@@ -89,7 +103,7 @@ def _npm_sync(pkg: str, ua: str) -> str:
     """Blocking npm registry lookup — run via asyncio.to_thread."""
     try:
         data = fetch_json(
-            f"https://registry.npmjs.org/{pkg}",
+            f"https://registry.npmjs.org/{quote(pkg, safe='')}",
             ua=ua,
             timeout=10,
             max_bytes=_NPM_MAX_BYTES,
@@ -135,7 +149,7 @@ def _crates_sync(name: str, ua: str) -> str:
     """
     try:
         data = fetch_json(
-            f"https://crates.io/api/v1/crates/{name}",
+            f"https://crates.io/api/v1/crates/{quote(name, safe='')}",
             ua=ua,
             timeout=10,
             allow_404=True,
@@ -210,7 +224,11 @@ class PkginfoModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}pypi <package>")
             return
-        result = await asyncio.to_thread(_pypi_sync, arg.strip()[:_MAX_INPUT], self._ua)
+        name = arg.strip()[:_MAX_INPUT]
+        if not _valid_pkg(name):
+            self.bot.privmsg(reply_to, f"{nick}: invalid package name")
+            return
+        result = await asyncio.to_thread(_pypi_sync, name, self._ua)
         self.bot.privmsg(reply_to, result)
 
     async def cmd_npm(self, nick: str, reply_to: str, arg: str | None) -> None:
@@ -220,7 +238,11 @@ class PkginfoModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}npm <package>")
             return
-        result = await asyncio.to_thread(_npm_sync, arg.strip()[:_MAX_INPUT], self._ua)
+        name = arg.strip()[:_MAX_INPUT]
+        if not _valid_pkg(name):
+            self.bot.privmsg(reply_to, f"{nick}: invalid package name")
+            return
+        result = await asyncio.to_thread(_npm_sync, name, self._ua)
         self.bot.privmsg(reply_to, result)
 
     async def cmd_crates(self, nick: str, reply_to: str, arg: str | None) -> None:
@@ -230,7 +252,11 @@ class PkginfoModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}crates <name>")
             return
-        result = await asyncio.to_thread(_crates_sync, arg.strip()[:_MAX_INPUT], self._ua)
+        name = arg.strip()[:_MAX_INPUT]
+        if not _valid_pkg(name):
+            self.bot.privmsg(reply_to, f"{nick}: invalid package name")
+            return
+        result = await asyncio.to_thread(_crates_sync, name, self._ua)
         self.bot.privmsg(reply_to, result)
 
     def help_lines(self, prefix: str) -> list[str]:

@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .base import BotModule, help_row
+from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.tell")
 
@@ -243,7 +243,7 @@ class TellModule(BotModule):
         if len(parts) < 2 or not parts[1].strip():
             self.bot.privmsg(reply_to, f"{nick}: {p}tell <nick> <message>")
             return
-        target_nick = parts[0].strip()
+        target_nick = strip_ctrl(parts[0].strip(), 64)
         message     = parts[1].strip()
 
         if len(message) > _MAX_MSG_LEN:
@@ -251,6 +251,12 @@ class TellModule(BotModule):
                 reply_to,
                 f"{nick}: message too long (max {_MAX_MSG_LEN} chars)",
             )
+            return
+        # Strip IRC control bytes at capture so the stored-then-replayed,
+        # bot-attributed message can't carry format/colour/BEL/ANSI injection.
+        message = strip_ctrl(message, _MAX_MSG_LEN)
+        if not message:
+            self.bot.privmsg(reply_to, f"{nick}: empty message")
             return
 
         if target_nick.lower() == nick.lower():
