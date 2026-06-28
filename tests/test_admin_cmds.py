@@ -258,7 +258,7 @@ class TestStateFile:
     def test_section_present(self):
         cfg = {"seen": {"file": "/tmp/seen.json"}}
         p = admin_cmds._state_file(cfg, "seen", "default.json")
-        assert str(p) == "/tmp/seen.json"
+        assert p.as_posix() == "/tmp/seen.json"
 
     def test_section_absent_uses_default(self):
         p = admin_cmds._state_file({}, "seen", "default.json")
