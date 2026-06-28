@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any
 
@@ -20,6 +21,10 @@ class _TwitchAPI:
         self._ua = ua
         self._token: str = ""
         self._expires: float = 0
+        # .tw calls run via asyncio.to_thread, so two concurrent lookups can
+        # both hit the check-then-act refresh below - serialise it so only one
+        # thread refreshes the OAuth token at a time.
+        self._token_lock = threading.Lock()
 
     def _refresh_token(self) -> None:
         # POST doesn't go through ``fetch_json`` (GET-only); inline the same
@@ -46,8 +51,9 @@ class _TwitchAPI:
             self._expires = time.time() + d.get("expires_in", 3600) - 60
 
     def _headers(self) -> dict[str, str]:
-        if not self._token or time.time() >= self._expires:
-            self._refresh_token()
+        with self._token_lock:
+            if not self._token or time.time() >= self._expires:
+                self._refresh_token()
         return {
             "Client-ID": self._cid,
             "Authorization": f"Bearer {self._token}",
