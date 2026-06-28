@@ -1454,15 +1454,29 @@ def _():
     assert m and m.group(1).strip() == "hello world" and m.group(2) == "10"
     assert not _IDX_RE.match("noindex")
 
-@test("geocode: _COORD_RE accepts valid coordinates")
+@test("geocode: _parse_coords handles decimal, hemisphere, and DMS coordinates")
 def _():
-    from modules.geocode import _COORD_RE
-    m = _COORD_RE.match("40.7128, -74.0060")
-    assert m and float(m.group(1)) == 40.7128
-    m = _COORD_RE.match("-33.8688,151.2093")
-    assert m
-    assert not _COORD_RE.match("not coords")
-    assert not _COORD_RE.match("40.7128")
+    from modules.geocode import _parse_coords
+    def close(got, want):
+        return got is not None and abs(got[0]-want[0]) < 1e-3 and abs(got[1]-want[1]) < 1e-3
+    # decimal (comma and space separated)
+    assert close(_parse_coords("40.7128, -74.0060"), (40.7128, -74.0060))
+    assert close(_parse_coords("-33.8688,151.2093"), (-33.8688, 151.2093))
+    assert close(_parse_coords("39.8333 -98.5855"), (39.8333, -98.5855))
+    # hemisphere decimal (the case free-text mis-resolved to Creve Coeur MO),
+    # order-independent
+    assert close(_parse_coords("39°N 98°W"), (39.0, -98.0))
+    assert close(_parse_coords("N39 W98"), (39.0, -98.0))
+    assert close(_parse_coords("98W 39N"), (39.0, -98.0))
+    # DMS with minutes / seconds
+    assert close(_parse_coords("39°50'N 98°35'W"), (39.8333, -98.5833))
+    assert close(_parse_coords("34°30'15\"N 117°12'30\"W"), (34.5042, -117.2083))
+    # Not coordinates → None (place names, postal codes, bare ints, out-of-range)
+    assert _parse_coords("not coords") is None
+    assert _parse_coords("40.7128") is None
+    assert _parse_coords("91773") is None
+    assert _parse_coords("39 98") is None
+    assert _parse_coords("200,300") is None
 
 @test("geocode: _format_name handles US locations with state abbreviation")
 def _():
@@ -1489,6 +1503,269 @@ def _():
     from modules.geocode import _format_name
     name, cc = _format_name({}, "my fallback")
     assert name == "my fallback"
+
+# ── Postal-code classification + routing (Spain-vs-Ohio / Canada fix) ──
+
+@test("geocode: _postal_kind classifies postal-code formats")
+def _():
+    from modules.geocode import _postal_kind
+    # Canadian alphanumeric (globally unique format)
+    assert _postal_kind("A1A 1A1") == "ca"
+    assert _postal_kind("a1a1a1")  == "ca"      # no space, lowercase
+    assert _postal_kind("M5V 3L9") == "ca"
+    # UK postcode
+    assert _postal_kind("SW1A 1AA") == "uk"
+    assert _postal_kind("EC1A 1BB") == "uk"
+    # ZIP+4 is unambiguously US
+    assert _postal_kind("12345-6789") == "us"
+    # Bare numeric (5-digit ZIP AND foreign codes) → home-first numeric
+    assert _postal_kind("43812") == "num"       # real Ohio ZIP
+    assert _postal_kind("08000") == "num"       # Barcelona / not a US ZIP
+    assert _postal_kind("1212")  == "num"       # 4-digit (CH, etc.)
+    # Not postal codes → free-text path
+    assert _postal_kind("london") is None
+    assert _postal_kind("la quinta") is None
+    assert _postal_kind("90210 main st") is None
+    assert _postal_kind("") is None
+
+@test("geocode: _split_postal_country extracts an explicit country override")
+def _():
+    from modules.geocode import _split_postal_country
+    assert _split_postal_country("08000 spain") == ("08000", "es")
+    assert _split_postal_country("08000 es")    == ("08000", "es")
+    assert _split_postal_country("A1A 1A1 canada") == ("A1A 1A1", "ca")
+    # No postal core → no split (city+province must reach the free-text loop)
+    assert _split_postal_country("london ontario") == ("london ontario", None)
+    assert _split_postal_country("paris france")   == ("paris france", None)
+    assert _split_postal_country("08000")          == ("08000", None)
+
+@test("geocode: ZIP + US-state abbreviation is NOT mis-read as a country override")
+def _():
+    from modules.geocode import _split_postal_country
+    # The common US "ZIP state" shape must stay on the free-text path, not
+    # pin to a colliding ISO2 (ca=California not Canada, il=Illinois not Israel).
+    assert _split_postal_country("90210 ca") == ("90210 ca", None)
+    assert _split_postal_country("60601 il") == ("60601 il", None)
+    assert _split_postal_country("43230 oh") == ("43230 oh", None)
+    assert _split_postal_country("12345 zz") == ("12345 zz", None)   # not a real ISO2
+    # A genuine country code / name override is still honoured.
+    assert _split_postal_country("08000 es")    == ("08000", "es")
+    assert _split_postal_country("08000 spain") == ("08000", "es")
+
+@test("geocode: _fsa extracts the 3-char Canadian forward-sortation area")
+def _():
+    from modules.geocode import _fsa
+    assert _fsa("A1A 1A1") == "A1A"
+    assert _fsa("m5v 3l9")  == "M5V"
+    assert _fsa("A1A1A1")   == "A1A"
+
+@test("geocode: _zippo_parse builds (lat, lon, name, cc) from Zippopotam JSON")
+def _():
+    from modules.geocode import _zippo_parse
+    ca = {"country": "Canada", "country abbreviation": "CA",
+          "places": [{"place name": "St. John's North",
+                      "state": "Newfoundland and Labrador",
+                      "state abbreviation": "NL",
+                      "latitude": "47.571", "longitude": "-52.6961"}]}
+    lat, lon, name, cc = _zippo_parse(ca)
+    assert (round(lat, 3), round(lon, 3)) == (47.571, -52.696)
+    assert name == "St. John's North, Canada"
+    assert cc == "ca"
+    us = {"country": "United States", "country abbreviation": "US",
+          "places": [{"place name": "Coshocton", "state abbreviation": "OH",
+                      "latitude": "40.27", "longitude": "-81.86"}]}
+    _, _, name_us, cc_us = _zippo_parse(us)
+    assert name_us == "Coshocton, OH"
+    assert cc_us == "us"
+    # Malformed / empty → None (fail closed)
+    assert _zippo_parse({}) is None
+    assert _zippo_parse({"places": []}) is None
+
+@test("geocode: bare numeric tries home country first, then global (08000 → ES)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return (41.4, 2.2, "Badalona, España", "es") if cc is None else None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return None
+    orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+    try:
+        g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("08000", "bot (https://example.org)",
+                                    default_country="us"))
+    finally:
+        g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+    assert res == (41.4, 2.2, "Badalona, España", "es")
+    assert ("nom", "08000", "us") in calls      # home country tried first
+    assert ("nom", "08000", None) in calls       # global fallback reached
+
+@test("geocode: a real home-country ZIP resolves locally, never falls through (43812 → OH)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return (40.27, -81.86, "Coshocton, OH", "us") if cc == "us" else None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return None
+    orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+    try:
+        g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("43812", "bot (https://example.org)",
+                                    default_country="us"))
+    finally:
+        g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+    assert res == (40.27, -81.86, "Coshocton, OH", "us")
+    assert ("nom", "43812", None) not in calls   # global never reached
+
+@test("geocode: Canadian postal code routes to Zippopotam by FSA (A1A 1A1 → CA)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return (47.5, -52.6, "St. John's North, Canada", "ca") if cc == "ca" else None
+    orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+    try:
+        g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("A1A 1A1", "bot (https://example.org)"))
+    finally:
+        g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+    assert res[3] == "ca"
+    assert ("zippo", "ca", "A1A") in calls
+
+@test("geocode: explicit country override pins the postal search (08000 spain → ES)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return (41.38, 2.17, "Barcelona, España", "es") if cc == "es" else None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return None
+    orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+    try:
+        g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("08000 spain", "bot (https://example.org)",
+                                    default_country="us"))
+    finally:
+        g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+    assert res[3] == "es"
+    assert ("nom", "08000", "es") in calls
+    assert ("nom", "08000", "us") not in calls   # override beats home country
+
+@test("geocode: _postal_kind pins distinctive intl formats (JP/BR/IE) but not bare numerics")
+def _():
+    from modules.geocode import _postal_kind
+    assert _postal_kind("100-0001") == "jp"     # Japan, dashed
+    assert _postal_kind("01310-100") == "br"     # Brazil CEP, dashed
+    assert _postal_kind("D02 AF30") == "ie"      # Ireland Eircode
+    assert _postal_kind("D02AF30")  == "ie"      # Eircode without the space
+    assert _postal_kind("1000001")  == "num"     # bare 7-digit is NOT uniquely JP
+    assert _postal_kind("01310100") == "num"     # bare 8-digit is NOT uniquely BR
+    # Format-unique kinds remain disjoint — no cannibalisation
+    assert _postal_kind("A1A 1A1") == "ca"
+    assert _postal_kind("SW1A 1AA") == "uk"
+
+@test("geocode: distinctive intl postal codes pin their country (100-0001/01310-100/D02 AF30)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    for query, want_cc in [("100-0001", "jp"), ("01310-100", "br"), ("D02 AF30", "ie")]:
+        calls: list = []
+        async def fake_nom(code, cc, hdrs, _calls=calls, _cc=want_cc):
+            _calls.append(("nom", code, cc))
+            return (1.0, 2.0, f"City, {_cc}", _cc) if cc == _cc else None
+        async def fake_zippo(cc, code, ua, _calls=calls):
+            _calls.append(("zippo", cc, code))
+            return None
+        orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+        try:
+            g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+            g._geocode_cache.clear()
+            res = asyncio.run(g.geocode(query, "bot (https://example.org)"))
+        finally:
+            g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+        assert res is not None and res[3] == want_cc, (query, res)
+        assert ("nom", query, want_cc) in calls, (query, calls)
+
+@test("geocode: ZIP+4 resolves the 5-digit base, US-pinned (90210-1234)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return (34.1, -118.4, "Beverly Hills, CA", "us") if (code == "90210" and cc == "us") else None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return None
+    orig_nom, orig_zippo = g._nominatim_postal, g._zippo
+    try:
+        g._nominatim_postal, g._zippo = fake_nom, fake_zippo
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("90210-1234", "bot (https://example.org)"))
+    finally:
+        g._nominatim_postal, g._zippo = orig_nom, orig_zippo
+    assert res == (34.1, -118.4, "Beverly Hills, CA", "us")
+    assert ("nom", "90210", "us") in calls   # +4 stripped to the 5-digit base
+
+@test("geocode: non-postal input never touches the postal resolvers (london)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    calls: list = []
+    async def fake_nom(code, cc, hdrs):
+        calls.append(("nom", code, cc))
+        return None
+    async def fake_zippo(cc, code, ua):
+        calls.append(("zippo", cc, code))
+        return None
+    def boom(*a, **k):
+        raise RuntimeError("free-text path should be exercised, not postal")
+    orig_nom, orig_zippo, orig_get = g._nominatim_postal, g._zippo, g._get
+    try:
+        g._nominatim_postal, g._zippo, g._get = fake_nom, fake_zippo, boom
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("london", "bot (https://example.org)"))
+    finally:
+        g._nominatim_postal, g._zippo, g._get = orig_nom, orig_zippo, orig_get
+    assert res is None            # free-text _get raised → no hit
+    assert calls == []            # postal resolvers never called
+
+@test("weather: no saved location prompts for regloc instead of a default location")
+def _():
+    from modules.weather import WeatherModule
+    class FakeBot:
+        cfg = {"bot": {"command_prefix": ".", "default_location": "38.0,-97.0"}}
+        def loc_get(self, nick):
+            return None
+    res, err = WeatherModule(FakeBot())._resolve("bob", None)
+    assert res is None              # no silent fallback to a default point
+    assert err and "regloc" in err  # tells the user to register
+    assert "38" not in err          # the old Kansas default is not echoed
+    # A saved location is still honoured.
+    class SavedBot(FakeBot):
+        def loc_get(self, nick):
+            return "San Dimas CA"
+    res2, err2 = WeatherModule(SavedBot())._resolve("bob", None)
+    assert res2 == "San Dimas CA" and err2 is None
 
 @test("channels: _CHAN_RE validates IRC channel names")
 def _():

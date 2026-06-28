@@ -45,7 +45,7 @@ def reload_config() -> list[str]:
 
     configparser's ``read()`` only overrides keys that exist in the
     file being re-read.  Re-reading config.ini alone (which carries
-    empty placeholders for password_hash, default_location, etc.)
+    empty placeholders for password_hash, etc.)
     silently clobbers values that were only set in config.local.ini.
     Every reload path — startup, SIGHUP, cmd_rehash, get_hash —
     must go through here so the overlay stays intact.
