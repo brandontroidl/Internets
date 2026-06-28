@@ -24,8 +24,14 @@ modules/weather.py        IRC command layer: flag parsing, geocode, fetch, forma
 A request is `capability -> ordered provider chain -> first provider that
 returns real data`. Providers do not know about each other; the dispatcher owns
 ordering and fallback. Providers return one of the frozen dataclasses in
-`base.py` or raise; the dispatcher converts a raise (or a `None` return) into a
-fall-through to the next provider.
+`base.py` or raise; the dispatcher converts a raise, a `None` return, or a
+result with no usable core (`is_empty()`: a current result with no temperature,
+an hourly result with no entries) into a fall-through to the next provider. For
+current conditions it also gap-fills: a sparse result (e.g. NWS nulling
+dewpoint/pressure/visibility) keeps its temperature and conditions and has only
+its missing secondary fields filled from the next usable provider, crediting
+both sources (`[NWS + Open-Meteo]`), bounded to 3 contributors and the chain
+deadline (`_dispatch.py`, `base.py: WeatherResult.has_gaps/fill_gaps`).
 
 The package docstring (`__init__.py:4`) still says "30 provider packages" and
 `_http.py:106` still says "14 providers" (a session-cache comment); `_dispatch.py`

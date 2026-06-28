@@ -222,9 +222,9 @@ class BotModule:
 
         ``COMMANDS`` maps command words to *method-name strings*; nothing
         in the type system ties those strings to real coroutine methods.
-        Checking here turns a typo (or a sync handler) into an ImportError
-        at startup instead of an ``AttributeError`` / ``TypeError`` the
-        first time a user runs the command in production.
+        Checking here turns a typo (or a sync handler) into a ``TypeError``
+        when the module is loaded instead of an ``AttributeError`` /
+        ``TypeError`` the first time a user runs the command in production.
         """
         super().__init_subclass__(**kwargs)
         # inspect.iscoroutinefunction (not asyncio.*) - the asyncio alias

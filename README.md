@@ -437,7 +437,7 @@ When stdin is a TTY (and `--no-console` is absent) the bot runs a console task. 
 
 ## Writing a module
 
-Create a `.py` in `modules/`, implement `setup(bot)` returning a `BotModule` subclass, declare commands in `COMMANDS`. Full guide in `docs/modules.md`.
+Copy `modules/example.py` - a loadable, fully-commented skeleton - to `modules/<name>.py`, rename the class, set `COMMANDS`, and write the `cmd_*` coroutine(s). Add the name to `[bot] autoload` (or `.load` it at runtime, admin). Full guide in `docs/modules.md`.
 
 ```python
 from __future__ import annotations

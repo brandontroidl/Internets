@@ -31,6 +31,13 @@ def setup(bot):
     return PingModule(bot)
 ```
 
+That is the bare minimum. `modules/example.py` is a complete, loadable
+copy-and-fill skeleton that also shows the conventions a real command needs:
+rate limiting, empty-arg usage, `strip_ctrl` on output, the off-loop network
+`_fetch_sync` shape (with error handling and the SSRF caveat), `on_load` /
+`is_configured`, `help_lines`, and the `forget` hook. Start from it, not this
+snippet.
+
 ### `BotModule` base class (`modules/base.py:196`)
 
 Every module subclasses `BotModule`. Surface:
@@ -191,8 +198,9 @@ I/O (the `requests` calls inside `_fetch_sync` helpers, hashing) must run under
 
 ## Part 2 - Command module reference
 
-Every non-dunder `.py` in `modules/`. Command words are the live `COMMANDS`
-keys (aliases shown with `/`). "Needs" column: **local** = no network, no key;
+Every non-dunder `.py` in `modules/`, except `example.py` (the shipped
+copy-and-fill skeleton, not autoloaded - see Part 1). Command words are the
+live `COMMANDS` keys (aliases shown with `/`). "Needs" column: **local** = no network, no key;
 **UA** = network, reads the contact User-Agent but needs no API key;
 **key** = `is_configured()` returns `False` without the named credential, so
 `.help` hides it; **opt-key** = works without, a key adds capability.
@@ -252,7 +260,7 @@ temp/wind/pressure/distance formatting) is imported by `weather.py` only.
 | `.sw`/`.g` `.si`/`.gi` | Web search (DuckDuckGo, keyless; Brave upgrade if `brave_key` set) and image search (`.si`/`.gi`, **requires** `brave_key`, else returns an error string). | opt-key `brave_key` | search.py |
 | `.sci` | STEM + infosec news/journal/paper aggregator over curated keyless RSS/Atom feeds, with `.sci read <N>` / `.sci sources`. Article reader fetches through the SSRF guard. | UA + SSRF guard | scinews.py |
 | `.gh` | GitHub repo info via the public unauthenticated REST API: stars / forks / open issues / language / license / last push. Keyless (60 req/hr); reads its UA via `cred`. `COMMANDS={'gh':'cmd_gh'}` (`ghinfo.py:70`). | UA | ghinfo.py |
-| `.pypi` `.npm` `.crates` | Keyless package-registry lookups: PyPI (version/summary/license/date), npm (version/description/license/last publish), crates.io (max version/downloads/license/docs). Reads UA via `cred`; `is_configured` always True (`pkginfo.py:201`). | UA | pkginfo.py |
+| `.pypi` `.npm` `.crates` | Keyless package-registry lookups: PyPI (version/summary/license/date), npm (version/description/license/last publish), crates.io (max version/downloads/license/docs). Reads UA via `cred`; `is_configured` always True (`pkginfo.py:211`). | UA | pkginfo.py |
 
 ### Science and space
 

@@ -6,6 +6,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Skeleton module (`modules/example.py`).** A loadable, fully-commented
+  copy-and-fill template for a new command module: documents the `BotModule`
+  contract (`COMMANDS`, the `cmd_*(nick, reply_to, arg)` signature, `on_load`,
+  `is_configured`, `help_lines`, `forget`, `setup`) and the real conventions -
+  rate limiting, `strip_ctrl` on output, the off-loop `_fetch_sync` shape with
+  error handling over the size-capped `fetch_json`, the `_netsafe` SSRF caveat
+  for user-supplied URLs, and the shared User-Agent via `cred`. Not autoloaded;
+  `docs/modules.md` Part 1 points to it.
+
+### Fixed
+
+- **Weather: gap-fill N/A current-conditions fields from the fallback chain.**
+  Providers build results with `.get()`, so a sparse upstream response yielded a
+  non-None result with missing fields; the dispatcher returned it and the
+  formatter printed N/A even when a fallback had the data. A result with no
+  usable core now falls through (`WeatherResult`/`HourlyResult.is_empty`), and a
+  sparse current result keeps its more-accurate temperature and conditions and
+  has only its missing secondary fields filled from the next usable provider,
+  crediting both sources (`[NWS + Open-Meteo]`).
+
 ## [4.0.0] - 2026-06-28
 
 Major release. Backward-incompatible changes: `[bot] default_location` was
