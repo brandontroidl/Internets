@@ -70,6 +70,44 @@ def fetch_json(
         return _json.loads(body.decode("utf-8", errors="replace"))
 
 
+def resolve_public(host: str, port: int = 0) -> list:
+    """Resolve ``host`` and refuse any non-public address (anti-SSRF).
+
+    Returns the ``socket.getaddrinfo`` result list.  Raises ``ValueError``
+    if the host is empty/oversized/unresolvable, or if ANY resolved address
+    is private / loopback / link-local / multicast / reserved / unspecified.
+    The network probers (.headers / .ssl / .tcp / .down) call this before
+    connecting so they can't be aimed at internal services (cloud metadata
+    endpoints, RFC1918 hosts, localhost, …).
+
+    Note: this is resolve-time validation; a hostile DNS could still rebind
+    between this check and a later connect (TOCTOU).  Callers that connect
+    by IP should connect to an address from the returned list rather than
+    re-resolving the name.
+    """
+    import socket  # noqa: PLC0415
+    import ipaddress  # noqa: PLC0415
+    host = (host or "").strip().rstrip(".")
+    if not host or len(host) > 253:
+        raise ValueError("invalid host")
+    try:
+        infos = socket.getaddrinfo(host, port or None, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        raise ValueError("cannot resolve host")
+    if not infos:
+        raise ValueError("cannot resolve host")
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            raise ValueError("unresolvable address")
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_multicast or addr.is_reserved or addr.is_unspecified):
+            raise ValueError("refusing non-public address")
+    return infos
+
+
 _PLACEHOLDER_MARKERS = (
     "changeme", "your-key", "placeholder", "set-in-secret-store",
     "<your-", "you@example", "example.com",
