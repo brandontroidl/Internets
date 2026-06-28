@@ -1,10 +1,10 @@
-"""World Weather Online — current conditions.
+"""World Weather Online - current conditions.
 https://www.worldweatheronline.com/weather-api/
 """
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult
-# fix: _float was duplicated in every endpoint file — moved to _codes.
+# fix: _float was duplicated in every endpoint file - moved to _codes.
 from ._codes import deg_to_card, _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"

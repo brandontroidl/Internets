@@ -1,7 +1,7 @@
-"""Advice-slip command — wraps api.adviceslip.com.
+"""Advice-slip command - wraps api.adviceslip.com.
 
 No API key required.  Response shape (the upstream serves
-``Content-Type: text/html`` but the body is JSON — we parse it as JSON
+``Content-Type: text/html`` but the body is JSON - we parse it as JSON
 explicitly rather than trusting the header):
     {"slip": {"id": 56, "advice": "the advice text"}}
 """
@@ -46,7 +46,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class AdviceModule(BotModule):
-    """`.advice` — random piece of advice (fortune-cookie style)."""
+    """`.advice` - random piece of advice (fortune-cookie style)."""
 
     COMMANDS: dict[str, str] = {"advice": "cmd_advice"}
 
@@ -60,7 +60,7 @@ class AdviceModule(BotModule):
 
     async def cmd_advice(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

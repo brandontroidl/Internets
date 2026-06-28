@@ -1,4 +1,4 @@
-"""Tests for modules/weather.py — _parse_weather_flags and friends.
+"""Tests for modules/weather.py - _parse_weather_flags and friends.
 
 Covers the per-provider alias map (-aw, -vc, -nws, etc.), the -p/-l/-n
 escape hatches, and the unknown-flag passthrough behaviour.
@@ -68,7 +68,7 @@ class TestPFlag:
         assert rest is None
 
     def test_p_passes_through_unknown_as_literal(self):
-        # If the value isn't in the alias map it's kept literally — the
+        # If the value isn't in the alias map it's kept literally - the
         # dispatcher will reject it downstream.
         provider, _, _, bad = _parse_weather_flags("-p totallyfake here")
         assert provider == "totallyfake"
@@ -198,7 +198,7 @@ class TestUnknownFlag:
         assert bad == "-zzz"  # only first
 
     def test_negative_number_not_treated_as_flag(self):
-        # -33.86 should NOT be a flag — used for southern-hemisphere coords.
+        # -33.86 should NOT be a flag - used for southern-hemisphere coords.
         _, _, rest, bad = _parse_weather_flags("-33.8688,151.2093")
         assert bad is None
         assert rest == "-33.8688,151.2093"
@@ -244,7 +244,7 @@ class TestAliasMapInvariants:
     def test_all_aliases_lowercase(self):
         for alias in _PROVIDER_FLAGS:
             assert alias == alias.lower(), (
-                f"alias {alias!r} is not lowercase — case-insensitive lookup "
+                f"alias {alias!r} is not lowercase - case-insensitive lookup "
                 "would silently miss the upper-case form"
             )
 
@@ -256,7 +256,7 @@ class TestAliasMapInvariants:
 # ── _send_provider_list and _validate_provider (behavioural) ────────────
 
 class _FakeBot:
-    """Minimal stand-in for IRCBot — captures preply/privmsg calls."""
+    """Minimal stand-in for IRCBot - captures preply/privmsg calls."""
 
     def __init__(self):
         self.lines: list[tuple[str, str, str]] = []  # (kind, target, msg)
@@ -304,7 +304,7 @@ class TestSendProviderList:
         m = _make_module(bot)
         m._send_provider_list("alice", "#chan", "current")
         text = bot.text
-        # Should list nws and openmeteo in accuracy order — nws first.
+        # Should list nws and openmeteo in accuracy order - nws first.
         assert "nws" in text
         assert "openmeteo" in text
         assert text.index("nws") < text.index("openmeteo")

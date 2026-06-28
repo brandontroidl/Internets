@@ -1,8 +1,8 @@
-"""Pirate Weather — minutely precipitation nowcast (next 60 min)."""
+"""Pirate Weather - minutely precipitation nowcast (next 60 min)."""
 from __future__ import annotations
 from datetime import datetime
 from ..base import NowcastResult, NowcastEntry
-# fix: key embedded in URL path leaks into HTTPError messages — use
+# fix: key embedded in URL path leaks into HTTPError messages - use
 # safe_get_json wrapper which redacts the key before re-raising.
 from ._codes import safe_get_json
 

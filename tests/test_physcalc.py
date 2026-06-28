@@ -1,4 +1,4 @@
-"""Tests for modules/physcalc.py — pure physics/engineering calculators."""
+"""Tests for modules/physcalc.py - pure physics/engineering calculators."""
 
 import sys
 sys.path.insert(0, ".")

@@ -1,4 +1,4 @@
-"""MET Norway — daily forecast (grouped from compact timeseries)."""
+"""MET Norway - daily forecast (grouped from compact timeseries)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

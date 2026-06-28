@@ -16,9 +16,9 @@ log = logging.getLogger("internets.stocks")
 # asyncio.to_thread.  Returns a formatted string or raises on failure.
 #
 # Supported free-tier providers:
-#   Finnhub      — 60 calls/min   https://finnhub.io/register
-#   Alpha Vantage — 25 calls/day  https://www.alphavantage.co/support/#api-key
-#   Twelve Data  — 800 calls/day  https://twelvedata.com/account
+#   Finnhub      - 60 calls/min   https://finnhub.io/register
+#   Alpha Vantage - 25 calls/day  https://www.alphavantage.co/support/#api-key
+#   Twelve Data  - 800 calls/day  https://twelvedata.com/account
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -212,7 +212,7 @@ def _try_providers(
             log.debug(f"{name} failed for {symbol}: {e}")
             errors.append(f"{name}: {e}")
     if not any(keys.get(kf) for _, kf, _ in providers):
-        return "no finance API keys configured — see [stocks] in config.ini"
+        return "no finance API keys configured - see [stocks] in config.ini"
     return f"all providers failed for '{symbol}' ({'; '.join(errors)})"
 
 
@@ -256,7 +256,7 @@ class StocksModule(BotModule):
             return
         symbol = strip_ctrl(arg.strip().split()[0], 16)
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(
             _try_providers, _STOCK_PROVIDERS, symbol, self._keys, self._ua,
@@ -271,7 +271,7 @@ class StocksModule(BotModule):
             return
         symbol = strip_ctrl(arg.strip().split()[0], 16)
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(
             _try_providers, _CRYPTO_PROVIDERS, symbol, self._keys, self._ua,
@@ -287,5 +287,5 @@ class StocksModule(BotModule):
 
 
 def setup(bot: object) -> StocksModule:
-    """Module entry point — returns a StocksModule instance."""
+    """Module entry point - returns a StocksModule instance."""
     return StocksModule(bot)  # type: ignore[arg-type]

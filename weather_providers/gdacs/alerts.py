@@ -1,4 +1,4 @@
-"""GDACS — global disaster alerts (earthquakes, cyclones, floods, etc.)."""
+"""GDACS - global disaster alerts (earthquakes, cyclones, floods, etc.)."""
 from __future__ import annotations
 
 from .._http import get_json, HTTPError

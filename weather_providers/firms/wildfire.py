@@ -1,4 +1,4 @@
-"""NASA FIRMS — active wildfire detections within a bounding box.
+"""NASA FIRMS - active wildfire detections within a bounding box.
 
 The FIRMS area endpoint returns CSV, not JSON, so we can't use the shared
 ``get_json`` helper.  Instead we do a small capped urllib fetch on a worker
@@ -28,7 +28,7 @@ _MAX_BYTES = 1_000_000  # response cap (matches _http default ~1 MB)
 
 
 def _fetch_csv(url: str) -> str:
-    """Blocking capped GET returning decoded text — run via to_thread."""
+    """Blocking capped GET returning decoded text - run via to_thread."""
     try:
         with urllib.request.urlopen(url, timeout=10) as resp:  # nosec B310: https literal
             # Read one byte past the cap so we can detect oversize bodies.
@@ -55,7 +55,7 @@ async def fetch(key, lat, lon, location):
     text = await asyncio.to_thread(_fetch_csv, url)
 
     # An invalid key / bad request returns a plain-text error rather than
-    # a CSV header row — guard against that so we don't silently report 0.
+    # a CSV header row - guard against that so we don't silently report 0.
     first = text.splitlines()[0] if text else ""
     if "latitude" not in first:
         raise HTTPError("FIRMS: invalid request or MAP_KEY",
@@ -75,7 +75,7 @@ async def fetch(key, lat, lon, location):
         if nearest is None or d < nearest:
             nearest = d
 
-    # Zero detections is valid data (no fires nearby) — return an empty
+    # Zero detections is valid data (no fires nearby) - return an empty
     # result, don't raise.  Detection-only source: no names or acreage.
     return WildfireResult(
         source="NASA FIRMS",

@@ -62,7 +62,7 @@ def _fetch_sync(name: str, ua: str) -> str:
 
 
 class RecipeModule(BotModule):
-    """`.recipe <name>` — recipe lookup via TheMealDB."""
+    """`.recipe <name>` - recipe lookup via TheMealDB."""
 
     COMMANDS: dict[str, str] = {"recipe": "cmd_recipe", "meal": "cmd_recipe"}
 
@@ -80,7 +80,7 @@ class RecipeModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}recipe <name>")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, arg.strip(), self._ua)
         self.bot.privmsg(reply_to, text)

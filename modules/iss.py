@@ -1,4 +1,4 @@
-"""International Space Station tracker — wraps open-notify.org.
+"""International Space Station tracker - wraps open-notify.org.
 
 Two free no-key endpoints:
   - http://api.open-notify.org/iss-now.json  → current lat/lon
@@ -61,7 +61,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class IssModule(BotModule):
-    """`.iss` — current ISS location + crew."""
+    """`.iss` - current ISS location + crew."""
 
     COMMANDS: dict[str, str] = {"iss": "cmd_iss"}
 
@@ -75,7 +75,7 @@ class IssModule(BotModule):
 
     async def cmd_iss(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

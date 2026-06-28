@@ -1,4 +1,4 @@
-"""Useless-facts command — wraps uselessfacts.jsph.pl.
+"""Useless-facts command - wraps uselessfacts.jsph.pl.
 
 No API key required.  JSON response shape:
     {"id":"...","text":"the fact","source":"...","source_url":"..."}
@@ -44,7 +44,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class FactModule(BotModule):
-    """`.fact` — random useless fact."""
+    """`.fact` - random useless fact."""
 
     COMMANDS: dict[str, str] = {"fact": "cmd_fact"}
 
@@ -58,7 +58,7 @@ class FactModule(BotModule):
 
     async def cmd_fact(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

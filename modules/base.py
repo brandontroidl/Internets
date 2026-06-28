@@ -37,26 +37,26 @@ def fetch_json(
     """Fetch a JSON response with a hard size cap.
 
     Streams the body, caps at ``max_bytes + 1`` raw bytes, and raises
-    :class:`ResponseTooLarge` if the cap is exceeded — before the body
+    :class:`ResponseTooLarge` if the cap is exceeded - before the body
     is decoded or parsed.  Use this in module ``_fetch_sync`` helpers
     instead of ``requests.get(...).json()`` so JSON-bomb / OOM attacks
     against a compromised upstream stay bounded.
 
     If ``allow_404=True``, returns ``None`` on a 404 response instead of
-    raising — useful for "lookup-or-miss" semantics (e.g. dictionary
+    raising - useful for "lookup-or-miss" semantics (e.g. dictionary
     word, pokémon name) where 404 is an expected miss, not an error.
 
     Raises:
-        requests.RequestException — on transport / non-404 HTTP error
-        ResponseTooLarge          — body exceeded ``max_bytes``
-        json.JSONDecodeError      — body wasn't valid JSON
+        requests.RequestException - on transport / non-404 HTTP error
+        ResponseTooLarge          - body exceeded ``max_bytes``
+        json.JSONDecodeError      - body wasn't valid JSON
     """
-    import requests  # noqa: PLC0415 — lazy import keeps base.py importable in test envs
+    import requests  # noqa: PLC0415 - lazy import keeps base.py importable in test envs
     hdrs = {"User-Agent": ua}
     if headers:
         hdrs.update(headers)
     # `with` guarantees the socket is released on every exit path (404
-    # short-circuit, raise_for_status, ResponseTooLarge, success) — a
+    # short-circuit, raise_for_status, ResponseTooLarge, success) - a
     # stream=True response left unclosed leaks the connection / FD.
     with requests.get(url, params=params, headers=hdrs,
                       timeout=timeout, stream=True) as r:
@@ -121,7 +121,7 @@ def cred(
     key: str,
     default: str = "",
 ) -> str:
-    """Pull a credential or PII field — secret_store first, config fallback.
+    """Pull a credential or PII field - secret_store first, config fallback.
 
     For new installs the keys live exclusively in the secret store
     (see ``python -m secret_store``).  The config.ini fallback path
@@ -157,7 +157,7 @@ _HELP_USAGE_W = 24
 def help_row(prefix: str, usage: str, desc: str, *, width: int = _HELP_USAGE_W) -> str:
     """Format one ``.help`` line consistently across all modules.
 
-    ``usage`` is the command and any args WITHOUT the prefix — e.g.
+    ``usage`` is the command and any args WITHOUT the prefix - e.g.
     ``"cc <expr>"`` or ``"bofh/.excuse"`` (write aliases as ``/.alias``,
     no surrounding spaces).  The prefix is prepended once and the usage
     column padded to ``width`` so descriptions line up.  The two leading
@@ -180,13 +180,13 @@ def strip_ctrl(s: object, max_len: int = 400) -> str:
     The single sanitizer for anything spliced into an IRC line that came
     from a third party (API titles, redirect Location headers, sensor
     names, user echoes, …).  Strips the FULL C0 range ``\\x00-\\x1f`` plus
-    ``\\x7f`` (DEL) — not just CR/LF/NUL — so ``\\x02`` (bold), ``\\x03``
+    ``\\x7f`` (DEL) - not just CR/LF/NUL - so ``\\x02`` (bold), ``\\x03``
     (color), ``\\x16`` (reverse), ``\\x1b`` (ESC/ANSI) and ``\\x07`` (BEL)
     can't be used for bot-attributed formatting / escape / bell spoofing.
     Coerces non-``str`` input (e.g. an int or None) to ``str`` first.
 
     The IRC sender only strips ``\\r\\n\\x00`` as a transport backstop, so
-    this is the real defense against formatting/escape injection — every
+    this is the real defense against formatting/escape injection - every
     module emitting upstream-derived text should route it through here.
     """
     text = "" if s is None else str(s)
@@ -208,9 +208,9 @@ class BotModule:
         result = await asyncio.to_thread(requests.get, url, ...)
 
     Sync hooks:
-        on_load()    — called after module is registered (event loop thread)
-        on_unload()  — called before module is removed
-        on_raw(line) — called for every incoming IRC line (must be fast, sync)
+        on_load()    - called after module is registered (event loop thread)
+        on_unload()  - called before module is removed
+        on_raw(line) - called for every incoming IRC line (must be fast, sync)
 
     Override help_lines() to describe commands for .help output.
     """
@@ -227,9 +227,9 @@ class BotModule:
         first time a user runs the command in production.
         """
         super().__init_subclass__(**kwargs)
-        # inspect.iscoroutinefunction (not asyncio.*) — the asyncio alias
+        # inspect.iscoroutinefunction (not asyncio.*) - the asyncio alias
         # is deprecated for removal in Python 3.16.
-        import inspect  # noqa: PLC0415 — local keeps base.py import-light
+        import inspect  # noqa: PLC0415 - local keeps base.py import-light
         for word, method_name in cls.COMMANDS.items():
             handler = getattr(cls, method_name, None)
             if handler is None:
@@ -239,7 +239,7 @@ class BotModule:
             if not inspect.iscoroutinefunction(handler):
                 raise TypeError(
                     f"{cls.__name__}.{method_name} (command {word!r}) must be "
-                    f"`async def` — every command handler is a coroutine")
+                    f"`async def` - every command handler is a coroutine")
 
     def __init__(self, bot: IRCBot) -> None:
         self.bot = bot
@@ -255,8 +255,8 @@ class BotModule:
         should override this to check whether the key is present.  The
         bot's ``.help`` skips modules where this returns False so the
         help output isn't cluttered with commands the user can't use.
-        Module dispatch still works — admins can ``.load`` a module
-        and add a key later — but it stays invisible to normal users
+        Module dispatch still works - admins can ``.load`` a module
+        and add a key later - but it stays invisible to normal users
         until the key is in place.
         """
         return True
@@ -279,7 +279,7 @@ class BotModule:
         Called by the ``.forgetme`` privacy command for each loaded
         module, so right-to-erasure covers the whole bot.  Modules that
         persist user PII (seen, tell, notes, remind, …) MUST override
-        this — mutate their store, persist it, and return the number of
+        this - mutate their store, persist it, and return the number of
         records removed.  The default no-op returns 0 for modules that
         hold nothing personal.
         """

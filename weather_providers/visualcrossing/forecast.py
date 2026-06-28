@@ -1,4 +1,4 @@
-"""Visual Crossing — daily forecast."""
+"""Visual Crossing - daily forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

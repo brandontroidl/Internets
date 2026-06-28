@@ -44,18 +44,18 @@ Thumbs.db
 # listed explicitly for clarity even though *.log already covers it).
 audit.log
 audit.log.*
-# State persisted by store.Store — contains user PII, never commit.
+# State persisted by store.Store - contains user PII, never commit.
 locations.json
 channels.json
 users.json
-# Per-module state files — all hold user PII (nicks, hostmasks,
+# Per-module state files - all hold user PII (nicks, hostmasks,
 # message snippets, notes, reminders).  Never commit.
 steamids.json
 seen.json
 tells.json
 notes.json
 reminders.json
-# Process lockfile from process_lock.py — never commit.
+# Process lockfile from process_lock.py - never commit.
 internets.pid
 
 # ── Secrets and personal config ──────────────────────────────────────
@@ -71,7 +71,7 @@ config.ini
 config.ini.tmp
 config.ini.bak
 
-# Legacy secret file from earlier versions — keep ignored so an
+# Legacy secret file from earlier versions - keep ignored so an
 # unmigrated copy never ends up in git.
 secrets.ini
 secrets.ini.tmp
@@ -82,7 +82,7 @@ secrets.ini.bak
 config.local.ini
 config.local.ini.bak
 
-# dotenv / direnv — common holders of INTERNETS_<NAME>=... secrets.
+# dotenv / direnv - common holders of INTERNETS_<NAME>=... secrets.
 .env
 .env.*
 !.env.example
@@ -94,7 +94,7 @@ config.local.ini.bak
 *.rej
 
 # ── Private keys (Apple WeatherKit .p8 signing key, PEM keys) ─────────
-# These are credentials — never commit them.
+# These are credentials - never commit them.
 *.p8
 *.pem
 
@@ -103,5 +103,5 @@ config.local.ini.bak
 # Useful locally; never meant for the repo.
 screenshots/
 
-# ── Agent scratch (Claude Code worktrees) — never commit ─────────────
+# ── Agent scratch worktrees - never commit ──────────────────────────
 .claude/worktrees/

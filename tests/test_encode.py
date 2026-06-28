@@ -1,4 +1,4 @@
-"""Tests for modules/encode.py — pure offline codecs & generators.
+"""Tests for modules/encode.py - pure offline codecs & generators.
 
 Exercises the module-level pure functions directly (no bot needed):
 happy path, bad input, and edge cases for each command.
@@ -70,7 +70,7 @@ class TestHash:
         assert _hash("sha256").startswith("usage:")
 
     def test_non_algo_first_token_hashed_whole(self):
-        # "hello world" — first token not an algo, hash whole string sha256
+        # "hello world" - first token not an algo, hash whole string sha256
         out = _hash("hello world")
         assert out.startswith("sha256:")
 

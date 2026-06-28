@@ -65,12 +65,12 @@ CAPABILITY_METHODS: dict[str, str] = {
 #   • air_quality: CAMS (Copernicus Atmosphere Monitoring) from ECMWF
 #     leads; Open-Meteo and OWM both consume CAMS directly.
 #   • historical: ERA5 reanalysis (ECMWF) is the scientific gold
-#     standard — Open-Meteo and Visual Crossing both expose ERA5.
+#     standard - Open-Meteo and Visual Crossing both expose ERA5.
 #   • marine: Stormglass blends 7+ wave models; NWS WaveWatch III for
 #     US waters; Open-Meteo serves WaveWatch III + GFS-Wave globally.
-#   • nowcast: radar-blended products beat pure-model output —
+#   • nowcast: radar-blended products beat pure-model output -
 #     Pirate Weather (MRMS+HRRR) and Meteomatics (RTMA+radar).
-#   • astronomy: deterministic ephemeris — all equally accurate, so
+#   • astronomy: deterministic ephemeris - all equally accurate, so
 #     ranked by data completeness (moon-phase + illumination first).
 DEFAULT_RELIABILITY: dict[str, dict[str, int]] = {
     "current":     {"nws": 1, "meteomatics": 2, "weatherkit": 3,
@@ -151,7 +151,7 @@ def _is_rate_limit_error(e: BaseException) -> bool:
     over string sniffing, but keeps a narrow substring fallback for
     provider-raised custom exceptions that never touched _http.
     """
-    # Structured path — HTTPError carries explicit metadata.
+    # Structured path - HTTPError carries explicit metadata.
     if isinstance(e, HTTPError):
         if e.is_rate_limit or e.status == 429:
             return True
@@ -172,7 +172,7 @@ def _redact(e: BaseException, limit: int = 160) -> str:
     """Return a one-line, truncated, key-redacted error string.
 
     Provider URLs frequently include ``?apikey=...`` or ``?appid=...``.
-    We don't want those in warning logs.  This is a defensive scrub —
+    We don't want those in warning logs.  This is a defensive scrub -
     HTTPError instances already avoid logging full URLs, but defence in
     depth is cheap.
     """
@@ -224,7 +224,7 @@ class Dispatcher:
         rp = _RegisteredProvider(provider, provider_id, self._next_order)
         self._next_order += 1
         self._providers[provider_id] = rp
-        log.info("Dispatcher: registered %s (%s) — capabilities: %s",
+        log.info("Dispatcher: registered %s (%s) - capabilities: %s",
                  getattr(provider, "name", provider_id),
                  provider_id,
                  ", ".join(sorted(rp.capabilities)) or "none")
@@ -274,7 +274,7 @@ class Dispatcher:
     def sort_chain(
         self, capability: str, provider_ids: list[str] | None = None
     ) -> list[str]:
-        """Return the dispatch order for a capability — public API.
+        """Return the dispatch order for a capability - public API.
 
         Sort providers by scientific accuracy first, then health, then
         user-configured priority.  When ``provider_ids`` is None we
@@ -282,14 +282,14 @@ class Dispatcher:
         otherwise we sort only the supplied subset.
 
         Order of tie-breaks:
-          1. Static reliability rank — providers using the most
+          1. Static reliability rank - providers using the most
              scientifically accurate models (NWS, ECMWF-driven, ERA5,
              radar-blended nowcasts) lead.  This is the dominant key
              because accuracy of the underlying physics is what the
              user actually wants from "weather".
-          2. Health score — among providers of comparable accuracy,
+          2. Health score - among providers of comparable accuracy,
              prefer the one that's currently up and fast.
-          3. Registration order — final tie-break from
+          3. Registration order - final tie-break from
              ``provider_priority`` in config.ini.
         """
         if provider_ids is None:
@@ -309,7 +309,7 @@ class Dispatcher:
 
         return sorted(provider_ids, key=sort_key)
 
-    # Back-compat shim — modules/weather.py used the private name
+    # Back-compat shim - modules/weather.py used the private name
     # before this refactor.  Forward to the public method.  New code
     # should call ``sort_chain`` directly.
     def _sorted_for_capability(
@@ -326,7 +326,7 @@ class Dispatcher:
         Returns the first successful result, or None if all fail.
 
         Reserved kwargs (consumed here, not forwarded):
-            force_provider: provider id (e.g. "nws") — restrict the
+            force_provider: provider id (e.g. "nws") - restrict the
                 dispatch chain to just that provider.  If it doesn't
                 support the capability the call fails with None and
                 no fallback to other providers happens (caller's
@@ -356,7 +356,7 @@ class Dispatcher:
                             force_provider, capability)
                 return None
             if not self._providers[force_provider].health.is_callable():
-                log.warning("force_provider %r circuit is open (cooling down) — "
+                log.warning("force_provider %r circuit is open (cooling down) - "
                             "skipping; try again shortly", force_provider)
                 return None
             chain = [force_provider]
@@ -373,7 +373,7 @@ class Dispatcher:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 log.warning(
-                    "dispatch_budget_exhausted capability=%s budget=%.0fs — "
+                    "dispatch_budget_exhausted capability=%s budget=%.0fs - "
                     "stopping chain before %s", capability, _CHAIN_BUDGET, pid)
                 break
 
@@ -386,10 +386,10 @@ class Dispatcher:
             # provider has tripped open, skip it entirely so we don't burn
             # latency on a known-bad upstream during its cooldown.
             if not rp.health.is_callable():
-                log.debug("%s: %s skipped — circuit open", pid, capability)
+                log.debug("%s: %s skipped - circuit open", pid, capability)
                 continue
 
-            # Quota counter — count every attempted upstream call so
+            # Quota counter - count every attempted upstream call so
             # quota_status() reflects reality even when the call fails.
             # Imported here (not at module top) to avoid the import-cycle
             # weather_providers/__init__.py ↔ _dispatch.py.
@@ -412,12 +412,12 @@ class Dispatcher:
                 latency = time.monotonic() - start
                 if result is None:
                     # Provider responded but has no data for this location (a
-                    # region it doesn't cover) — fall through to the next
+                    # region it doesn't cover) - fall through to the next
                     # provider rather than returning an empty answer.  We do
                     # NOT record a success here: a no-data (or slow no-data)
                     # result must not reset the breaker or mask a brownout,
                     # so it can't keep a degraded provider looking healthy.
-                    log.debug("%s: %s no data — trying next", pid, capability)
+                    log.debug("%s: %s no data - trying next", pid, capability)
                     continue
                 # Only real data counts as a success for the breaker / score.
                 rp.health.record_success(latency)
@@ -429,16 +429,16 @@ class Dispatcher:
                 is_rate_limit = _is_rate_limit_error(e)
                 rp.health.record_failure(rate_limited=is_rate_limit)
                 if isinstance(e, HTTPError) and e.status in (401, 403):
-                    # Deterministic auth/entitlement failure — trip the breaker
+                    # Deterministic auth/entitlement failure - trip the breaker
                     # now so we stop burning a request per dispatch on a known-
                     # bad key (it still re-probes after the cooldown).
                     rp.health.mark_auth_failure()
                 if isinstance(e, _BUG_EXC_TYPES):
-                    # Provider code defect, not an upstream outage — log loudly
+                    # Provider code defect, not an upstream outage - log loudly
                     # so it doesn't hide behind the normal fallthrough.
                     log.error(
                         "dispatch_bug provider=%s capability=%s err=%s:%s "
-                        "(provider code defect — fix the provider)",
+                        "(provider code defect - fix the provider)",
                         pid, capability, etype, _redact(e),
                     )
                 # Structured, single-line, grep-friendly failure log.

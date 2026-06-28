@@ -1,9 +1,9 @@
-"""World Weather Online — historical weather (past weather API)."""
+"""World Weather Online - historical weather (past weather API)."""
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json
 from ..base import HistoricalResult
-# fix: _float was duplicated in every endpoint file — moved to _codes.
+# fix: _float was duplicated in every endpoint file - moved to _codes.
 from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"
@@ -19,7 +19,7 @@ async def fetch(key: str, lat: float, lon: float, location: str, target_date: st
     if not weather:
         raise ValueError("WWO: no historical data")
     w = weather[0]
-    # fix: was reading totalSnow_cm into precip_mm — that's snowfall not
+    # fix: was reading totalSnow_cm into precip_mm - that's snowfall not
     # precip, and the unit is centimetres. WWO past-weather returns
     # precipMM on each hourly entry; sum those for daily precip.
     hourly_entries = w.get("hourly") or []

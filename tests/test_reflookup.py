@@ -1,7 +1,7 @@
 """Tests for modules/reflookup.py.
 
 Every network-touching helper has its fetch_json (or the arXiv raw fetcher)
-monkeypatched with canned responses — no real network is hit.  Pure helpers
+monkeypatched with canned responses - no real network is hit.  Pure helpers
 (element_lookup) are tested directly.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ class TestElement:
 
     def test_lanthanide_no_group(self):
         out = reflookup.element_lookup("Ce")
-        assert "Cerium" in out and "group —" in out
+        assert "Cerium" in out and "group -" in out
 
     def test_not_found(self):
         assert "no element" in reflookup.element_lookup("Xx")

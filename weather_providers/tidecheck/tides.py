@@ -1,4 +1,4 @@
-"""TideCheck — next high/low tide from the nearest station."""
+"""TideCheck - next high/low tide from the nearest station."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import TideResult
@@ -45,7 +45,7 @@ async def fetch(key, lat, lon, location):
         if isinstance(tst, dict):
             name = (tst.get("name") or "").strip()
 
-    # TideResult is frozen — accumulate into locals, then build it once.
+    # TideResult is frozen - accumulate into locals, then build it once.
     high_t = low_t = ""
     high_m = low_m = None
     # Extremes are time-ordered; take the first high and first low we see.

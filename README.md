@@ -1,326 +1,182 @@
-# Internets v3.0.0
+# Internets v4.0.0
 
-A modular IRC bot and weather aggregator built on Python's asyncio and RFC 2812. Handles worldwide weather, stock and crypto prices, movie lookups, Last.fm, YouTube search, dictionary definitions, IP geolocation, URL shortening, web/image search, Steam, Twitch, IdleRPG, QDB, FML, calculator, dice, translation, and Urban Dictionary lookups — plus stateful IRC-native tools (seen, tell, remind, notes), API-driven entertainment modules (PokéAPI, MTG, D&D, ISS tracker, xkcd, APOD, recipes, cocktails, HN, Reddit, …), pure-local dev utilities, and a full admin toolkit. Plugin architecture with hot-reload — modules can be loaded, unloaded, and reloaded without restarting the bot.
+A modular IRC bot and multi-provider weather aggregator on Python's asyncio and RFC 2812. Worldwide weather (current, forecast, hourly, nowcast, air quality, UV, pollen, astronomy, alerts, wildfire, space weather, marine, tides, historical), stock/crypto/FX prices, movie and music lookups, dictionary and reference tools (Wikipedia, DOI, ISBN, RFC, arXiv, periodic table, tldr-pages), a large developer/encoding/network/security toolkit, IP geolocation and reputation, science/infosec/AI/BSD news feeds, and stateful IRC-native tools (seen, tell, remind, notes). Plugin architecture with hot-reload: modules load, unload, and reload without restarting the bot.
 
-Weather queries are served by a capability-based dispatcher across **32 provider packages** spanning fourteen capabilities, ranked by the scientific accuracy of the underlying numerical models. The general chain leads with NWS (US gov NDFD + HRRR + WaveWatch III, no key), Meteomatics (ECMWF/ICON/GFS blend), Apple WeatherKit (NWS + IBM TWC), Open-Meteo (ECMWF/ICON/GFS multi-model + CAMS + ERA5, no key), and Visual Crossing (ERA5), then AccuWeather, OpenWeatherMap, WeatherBit, WeatherAPI, Pirate Weather, Stormglass (marine), Tomorrow.io, World Weather Online, Weatherstack, and MET Norway/Yr (no key). Specialist sources extend the command set: **air quality** (`.aqi`) — AirNow (US EPA), PurpleAir (crowdsourced PM2.5), WAQI, OpenAQ, IQAir; **astronomy** (`.astro`) — SunriseSunset.io; **UV** (`.uv`) — Open-Meteo + currentuvindex; **pollen** (`.pollen`) — Pollen.com (US, no key), Open-Meteo/CAMS (Europe), Google Pollen (global, key); **alerts** (`.alerts`) — GDACS (global disasters) + ECCC (Canada); **historical** (`.history`) — NASA POWER; **wildfire** (`.wildfire`) — NIFC (US) + NASA FIRMS (global); **space weather/aurora** (`.space`) — NOAA SWPC; **tides** (`.tides`) — TideCheck + NOAA CO-OPS. Each provider is a sub-module package with one file per API endpoint. The dispatcher auto-discovers capabilities, applies the static accuracy rank first, then live health (success rate, latency, rate limits), and routes each request accordingly. Force any active provider with a per-command flag — e.g. `.w -aw 67127`, `.w -vc Tokyo`, `.f -nws`, `.aqi -an 67127`, `.uv -om`, `.tides -coops`.
+This README is the entry point. Deep dives live in `docs/`:
 
-Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) are read from `INTERNETS_<NAME>` environment variables or the `[secrets]` section of a gitignored 0600 `config.ini`. `config.ini.example` is the committed credential-free template; personal non-secret overrides may also go in a gitignored `config.local.ini` overlay. See `config.ini.example` for the full key list and [Security](#security) below for the lookup order.
+- `docs/architecture.md` - core event loop, dispatch, state, the full module catalog
+- `docs/configuration.md` - every `config.ini` section and key
+- `docs/modules.md` - writing a module
+- `docs/providers.md` - adding a weather provider
+- `docs/security-model.md` - threat model, secret store, audit log, SSRF guard
+- `docs/deployment.md` - running headless, process lock, metrics, ops
 
-**Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.  
-**Python:** 3.10+  
-**Dependencies:** `pip install -r requirements.txt` installs the full runtime stack. Individual packages listed in [Requirements](#requirements).
+**Platform support:** Linux, macOS, FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, MSYS2.
+**Python:** 3.10+ (CI runs 3.10 through 3.14).
+**License:** ISC.
 
-## Architecture
+## What it is
+
+The core (`internets.py`) owns a single asyncio event loop, the IRC state machine, and command dispatch. Everything else is a module under `modules/`. A module declares a `COMMANDS` dict mapping command name to async method name; each handler receives `(nick, reply_to, arg)` and replies through `bot.privmsg()` / `bot.notice()` / `bot.reply()` / `bot.preply()`. Every command invocation runs as its own `asyncio.Task`, capped at 50 concurrent.
+
+Weather is served by a capability-based dispatcher over **32 provider packages** (`weather_providers/`). The dispatcher auto-discovers each provider's capabilities by `hasattr()` on method names (`get_weather`, `get_hourly`, `get_alerts`, ...), then ranks the providers that support a requested capability by: (1) the static per-capability accuracy rank in `_dispatch.DEFAULT_RELIABILITY`, (2) live health (success rate, latency, rate-limit errors), (3) registration order from `provider_priority`. All responses normalize to shared dataclasses in `weather_providers/base.py`, so the command module never touches raw API JSON. Providers needing no key (NWS, Open-Meteo, MET Norway/Yr, SunriseSunset, GDACS, ECCC, NASA POWER, NIFC, NOAA SWPC, NOAA CO-OPS, currentuvindex) always register; keyed providers register only when their key is present in the secret store.
+
+## Architecture overview
 
 ```
-internets.py          Core: asyncio event loop, IRC state machine, command dispatch
-protocol.py           Pure protocol helpers (ISUPPORT parsing, MODE parsing, SASL, NAMES)
-sender.py             Async outbound queue with token-bucket rate limiting
-store.py              In-memory state with periodic disk flush (locations, channels, user tracking)
-hashpw.py             Password hashing and verification (scrypt/bcrypt/argon2)
+internets.py     asyncio event loop, IRC state machine, command dispatch, reconnect
+admin_cmds.py    AdminCommandsMixin: auth/load/reload/raw/say/stats/audit/shadow-ban/...
+console.py       interactive stdin console (TTY only)
+protocol.py      pure protocol helpers (ISUPPORT, MODE, SASL, NAMES parsing)
+sender.py        async outbound queue, token-bucket flood control, credential scrubbing
+store.py         in-memory state + periodic disk flush (locations, channels, users, opt-out)
+config.py        config.ini parsing, __version__, CLI argparse (cli_args)
+botlog.py        logging setup, _SafeFormatter (log-injection guard), rotation
+hashpw.py        admin password hashing/verify (scrypt/bcrypt/argon2)
+secret_store.py  two-tier secret store: INTERNETS_<NAME> env -> config.ini[secrets] (0600)
+audit_log.py     append-only HMAC-chained tamper-evident log of privileged actions
+metrics.py       opt-in Prometheus exporter (127.0.0.1 only; off by default)
+process_lock.py  PID lock with stale-detection; blocks a second instance corrupting state
 
-secret_store.py       Two-tier secret store: env var → config.ini[secrets] (0600)
-
-weather_providers/
-  base.py             Dataclasses: WeatherResult, HourlyResult, AlertsResult, AirQualityResult, etc.
-  _http.py            Async HTTP helper (aiohttp with requests fallback)
-  _dispatch.py        Capability-based dispatcher — accuracy rank → health → reg order
-  _health.py          Provider health tracking (success rate, latency, rate limits)
-  __init__.py         Provider registry, configure(), public get_*() functions
-
-  Providers, ranked by scientific accuracy (see _dispatch.DEFAULT_RELIABILITY):
-  nws/                NWS (Weather.gov) — US only, no key (NDFD + HRRR + WaveWatch III)
-  meteomatics/        Meteomatics — username/password (ECMWF IFS / ICON / GFS blend)
-  weatherkit/         Apple WeatherKit — Apple Developer Program (NWS + IBM TWC blend)
-  openmeteo/          Open-Meteo — free, no key (ECMWF/ICON/GFS + CAMS AQ + ERA5)
-  visualcrossing/     Visual Crossing — key (ECMWF + ERA5 reanalysis)
-  accuweather/        AccuWeather — key (proprietary long-range)
-  openweathermap/     OpenWeatherMap — key (GFS + ECMWF + CAMS AQ)
-  weatherbit/         WeatherBit — key (GFS + station obs)
-  weatherapi/         WeatherAPI.com — key (GFS-derived)
-  pirateweather/      Pirate Weather — key (Dark Sky compat; HRRR + MRMS for US nowcast)
-  stormglass/         Stormglass — key (marine specialist, 7-model wave blend)
-  tomorrowio/         Tomorrow.io — key (proprietary nowcasting)
-  worldweatheronline/ World Weather Online — key (basic single-model)
-  weatherstack/       Weatherstack — key (basic, plaintext HTTP — least preferred)
-
-modules/
-  base.py             BotModule base class — the interface every plugin implements
-  geocode.py          Location resolution via Nominatim (supports city names, zip codes, lat/lon)
-  units.py            Temperature, wind, pressure, and distance formatting with dual-unit display
-  weather.py          Weather command handler — calls weather_providers for data
-  location.py         User location registration and lookup
-  calc.py             Expression evaluator
-  dice.py             Dice roller with XdN+M notation
-  translate.py        Translation via Google Translate
-  urbandictionary.py  Urban Dictionary lookups with result pagination
-  stocks.py           Stock and crypto price lookup (Finnhub, Alpha Vantage, Twelve Data)
-  imdb.py             Movie/TV lookup via OMDb API
-  lastfm.py           Last.fm user profile and now-playing track
-  youtube.py          YouTube video search with stats
-  dictionary.py       English dictionary definitions (Free Dictionary API)
-  ipinfo.py           IP/hostname geolocation lookup (ip-api.com)
-  ipintel.py          IP reputation: DNSBL/DShield/GreyNoise/Tor/AbuseIPDB
-  urls.py             URL shortener (is.gd) and expander
-  steam.py            Steam user status, games, and nick-to-ID registration
-  twitch.py           Twitch stream, channel, and game lookup (Helix API)
-  idlerpg.py          IdleRPG player lookup (configurable endpoint)
-  qdb.py              Quote database lookup (configurable QDB-compatible endpoint)
-  fml.py              FMyLife random quote
-  search.py           Web and image search (DuckDuckGo + optional Brave)
-  bofh.py             Bastard Operator From Hell excuse generator
-  channels.py         Join/part management and per-channel user roster queries
-
-tests/
-  run_tests.py        Standalone test suite (no external dependencies)
+weather_providers/   32 provider packages + base dataclasses, _http, _dispatch, _health
+modules/             ~70 command modules (see docs/architecture.md for the catalog)
+modules/base.py      BotModule base class, help_row(), strip_ctrl(), the plugin interface
+modules/_netsafe.py  SSRF-safe fetch with DNS-TOCTOU pinning (probe, scinews article reader)
+tests/               run_tests.py (standalone) + 31 pytest modules
 ```
 
-The core (`internets.py`) owns the asyncio event loop, IRC state machine, and command dispatch. Everything else is a module. Modules register commands via a `COMMANDS` dict mapping command names to async method names, receive `(nick, reply_to, arg)` on invocation, and talk back through `bot.privmsg()` / `bot.notice()` / `bot.reply()`. Every command invocation runs as an `asyncio.Task`.
+The outbound path goes through `Sender`, an async drain over `asyncio.PriorityQueue` implementing a token bucket (5 burst, ~40 msg/min sustained) to stay under flood limits. Protocol messages (PONG, CAP, NICK) bypass the bucket at priority 0. `Sender.enqueue()` is thread-safe via `loop.call_soon_threadsafe()`. The queue is bounded at 200 messages.
 
-The outbound path goes through `Sender`, an async drain loop over `asyncio.PriorityQueue` that implements a token-bucket (5 burst, ~40 msg/min sustained) to stay under IRC flood limits. Protocol messages (PONG, CAP, NICK) bypass the bucket at priority 0. `Sender.enqueue()` is thread-safe via `loop.call_soon_threadsafe()`.
+Key design points (full detail in `docs/architecture.md`):
 
-## Design Decisions
-
-**Async architecture.** The bot runs on a single asyncio event loop. The connection, line reading, command dispatch, send queue, keepalive, and console all run as async tasks or coroutines. Module command handlers are coroutines too — blocking I/O (HTTP via `requests`, password hashing) runs via `asyncio.to_thread()` inside the handler. This keeps the event loop free for protocol processing while still supporting the `requests` library without requiring `aiohttp` as an additional dependency.
-
-**Founder-gated channel control.** `.join` and `.part` require the requesting user to be either a bot admin or the registered channel founder. Founder verification is done asynchronously: the bot WHOIS-es the user for their NickServ account and queries IRC services (`INFO #channel`) for the channel founder, then compares. This works across Anope, Atheme, Epona, X2, X3, and forks — anything that responds with a `Founder:` or `Owner:` line. The services bot nick is configurable via `services_nick` in `config.ini` (default: `ChanServ`). Users who aren't the founder can still bring the bot in via IRC's native `/INVITE`, which is always accepted. Joined channels are persisted to `channels.json` and restored on reconnect.
-
-**Two-tier rate limiting.** A global per-nick flood gate drops commands that arrive faster than `flood_cooldown` seconds. A separate API cooldown rate-limits expensive operations (geocoding + weather API calls). Authed admins bypass the flood gate but not the API cooldown. This is a deliberate split: we don't want a fast-typing admin to trigger provider rate limits, but we also don't want them locked out of `.reload` during an incident.
-
-**Multi-provider weather with capability-based dispatch.** Weather queries go through a Dispatcher that auto-discovers each provider's capabilities via `hasattr()` on method names (`get_weather`, `get_hourly`, `get_alerts`, etc.). For each request, the dispatcher builds a chain of providers that support the requested capability, sorts them by: (1) the static per-capability accuracy rank in `_dispatch.DEFAULT_RELIABILITY`, (2) live health (success rate, latency, rate-limit errors), (3) registration order from `provider_priority` in `[weather_providers]`. Each provider is a sub-module package with one file per API endpoint (e.g. `weather_providers/openmeteo/current.py`, `weather_providers/weatherapi/hourly.py`). All responses are normalized to shared dataclasses (`WeatherResult`, `HourlyResult`, `AlertsResult`, `AirQualityResult`, `UVResult`, `PollenResult`, `WildfireResult`, `SpaceWeatherResult`, `TideResult`, etc.) so the command module never touches raw API responses. Many providers need no credentials (NWS, Open-Meteo, MET Norway, SunriseSunset, GDACS, ECCC, NASA POWER, NIFC, NOAA SWPC, NOAA CO-OPS, currentuvindex); the remaining ~19 keyed providers register only when their keys are present in the secret store.
-
-**Response routing.** Regular output goes to the channel. Help text and admin command responses go as `NOTICE` to the requesting user (keeps help spam out of channels). Everything in PM stays as `PRIVMSG`. This is the `reply()` / `preply()` split.
-
-**IRCv3 capability negotiation.** The bot requests `multi-prefix`, `away-notify`, `account-notify`, `chghost`, `extended-join`, `server-time`, `message-tags`, and `sasl`. If the server supports SASL and a NickServ password is configured, the bot authenticates via SASL PLAIN during capability negotiation — before registration completes. This eliminates the timing race between NickServ IDENTIFY and channel joins. If SASL fails, the bot falls back to traditional NickServ IDENTIFY. All capabilities degrade gracefully if the server supports none of them.
+- **Blocking I/O off the loop.** HTTP via `requests`, password hashing, and disk writes run under `asyncio.to_thread()`. Weather provider calls prefer `aiohttp` and fall back to `requests` + `to_thread` if aiohttp is absent.
+- **Two-tier rate limiting.** A per-nick flood gate (`flood_cooldown`) drops fast-repeated commands; a separate API cooldown (`api_cooldown`) throttles geocode + weather calls. Admins bypass the flood gate but not the API cooldown.
+- **Founder-gated channel control.** `.join` / `.part` require bot-admin or verified channel founder (WHOIS account + services `INFO #channel`). IRC-native `/INVITE` is always accepted. Joined channels persist to `channels.json` and restore on reconnect.
+- **IRCv3 + SASL.** Requests `multi-prefix`, `away-notify`, `account-notify`, `chghost`, `extended-join`, `server-time`, `message-tags`, `sasl`. SASL PLAIN runs during cap negotiation when a NickServ password is set, eliminating the IDENTIFY/JOIN race; falls back to NickServ IDENTIFY. All caps degrade gracefully.
 
 ## Requirements
 
-Python 3.10 or later. Install the full runtime stack with a single command:
+Python 3.10+. `scrypt` is built into `hashlib` (no install).
 
 ```
-pip install -r requirements.txt
+pip install -r requirements.txt        # full runtime stack
 ```
-
-This pulls in every package listed below. `scrypt` is built into Python's `hashlib`, so it needs no install.
 
 | Package | Required for |
 |---|---|
-| [`requests`](https://pypi.org/project/requests/) | Core HTTP client used by every module that talks to a third-party API. Pinned `>=2.32.3` for CVE-2024-35195. |
-| [`aiohttp`](https://pypi.org/project/aiohttp/) | True async HTTP transport for weather provider calls (falls back to `requests` + `asyncio.to_thread` if missing). |
-| [`argon2-cffi`](https://pypi.org/project/argon2-cffi/) | Argon2id admin password hashing — recommended (memory-hard, GPU-resistant). |
-| [`bcrypt`](https://pypi.org/project/bcrypt/) | bcrypt admin password hashing — alternative to Argon2id. |
-| [`PyJWT`](https://pypi.org/project/PyJWT/) + [`cryptography`](https://pypi.org/project/cryptography/) | Apple WeatherKit JWT signing (ES256). Needed only if WeatherKit credentials are configured. |
-| [`defusedxml`](https://pypi.org/project/defusedxml/) | Hardened XML parser used by `modules/qdb.py`. Blocks billion-laughs DoS on top of stdlib's XXE protection. |
+| `requests` (>=2.32.3) | Core HTTP client for every module hitting a third-party API. Pin closes CVE-2024-35195. |
+| `aiohttp` (>=3.14.1) | Async HTTP transport for weather calls; falls back to `requests` + `to_thread` if absent. |
+| `argon2-cffi` (>=23.1.0) | Argon2id admin password hashing (recommended). |
+| `bcrypt` (>=4.2.0) | bcrypt admin password hashing (alternative). |
+| `PyJWT` + `cryptography` | Apple WeatherKit ES256 JWT signing. Only if WeatherKit is configured. |
+| `defusedxml` (>=0.7.1) | Hardened XML for `modules/qdb.py` (billion-laughs guard on top of stdlib XXE protection). |
 
-For development (tests, linting, security scans), install the editable dev extras:
-
-```
-pip install -e ".[dev]"
-```
-
-This adds `pytest`, `pytest-asyncio`, `pytest-cov`, `coverage`, `bandit`, `pip-audit`, and `build`.
-
-## Setup
-
-**Generate an admin password hash:**
+Dev extras (tests, lint, security scans):
 
 ```
-python hashpw.py                    # defaults to scrypt
+pip install -e ".[dev]"     # pytest, pytest-asyncio, pytest-cov, coverage, bandit, pip-audit, build
+```
+
+## Install and setup
+
+**1. Admin password hash:**
+
+```
+python hashpw.py                # scrypt (default)
 python hashpw.py --algo bcrypt
 python hashpw.py --algo argon2
 ```
 
-Paste the output into `config.local.ini` under `[admin] password_hash`. Plaintext passwords are rejected at startup.
+Paste the output into `config.ini` under `[admin] password_hash`. Plaintext passwords are rejected at startup.
 
-**Set up your config:**
+**2. Config:**
 
-`config.ini.example` is the committed template — never edit it with real values. Your gitignored local files:
+`config.ini.example` is the committed credential-free template - never edit it with real values. Your gitignored local files:
 
-| File | Purpose | What goes in it |
-|------|---------|-----------------|
-| `config.ini` (0600) | Settings + credentials | Everything: server / nickname / modules autoload, **plus** the `[secrets]` section (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) |
-| `config.local.ini` (optional) | Non-secret personal overrides | Loaded on top of `config.ini` — useful if you want a personal overlay file separate from the main config |
-
-**Quickest path** (works without any extra Python packages, foreground-friendly, works inside tmux / systemd / screen):
+| File | Perms | Holds |
+|------|-------|-------|
+| `config.ini` | 0600 | All settings (server / nick / autoload) plus the `[secrets]` section (NickServ/SASL/server/oper passwords, every API key, the User-Agent contact identifier) |
+| `config.local.ini` | optional | Non-secret personal overrides, loaded on top of `config.ini` |
 
 ```
-python -m secret_store init        # copies config.ini.example → config.ini (0600)
-$EDITOR config.ini                 # paste your real values (including [secrets])
+python -m secret_store init     # copies config.ini.example -> config.ini (0600)
+$EDITOR config.ini              # paste real values, including [secrets]
 ```
 
-`config.ini.example` lists every supported key with signup URLs and tier limits inline. Edit `config.ini` like any other config file — the bot only reads values from `[secrets]` if perms are `0600`.
+The `[secrets]` section of `config.ini` is read **only** when its perms are exactly 0600; looser perms fail closed (the store returns empty). `INTERNETS_<NAME>` env vars override the file, for containers/CI:
 
-**Upgrading from a pre-`[secrets]` deployment (had a separate `secrets.ini`):**
-
-```bash
-# Inside your bot directory, after git pull:
-{ echo; cat secrets.ini; } >> config.ini       # append [secrets] from old file
-shred -u secrets.ini                            # securely remove the old file
-chmod 600 config.ini                            # required — bot refuses 0644
+```
+export INTERNETS_NICKSERV_PASSWORD=...
 ```
 
-Then restart the bot.  `INTERNETS_<NAME>` environment variables still win over the file, so anything stored there keeps working untouched.
-
-**Environment variables** override the file: `export INTERNETS_NICKSERV_PASSWORD=...` for container/CI setups.
-
-Useful commands:
+Secret-store CLI:
 
 ```
 python -m secret_store status                # backends available
-python -m secret_store list                  # all known secrets + which backend holds each
-python -m secret_store get <name>            # non-revealing: prints "(set, N chars, backend=X)"
-python -c "import secret_store; print(secret_store.get('<name>'))"   # extract the value (for rotation)
-python -m secret_store set <name>            # prompt for value, store in config.ini[secrets]
+python -m secret_store list                  # known secrets + which backend holds each (no values)
+python -m secret_store get <name>            # non-revealing: "(set, N chars, backend=X)"
+python -m secret_store set <name>            # prompt, store in config.ini[secrets]
 python -m secret_store delete <name>         # remove from config.ini[secrets]
 python -m secret_store migrate               # sweep plaintext from other sections into [secrets]
+python -c "import secret_store; print(secret_store.get('<name>'))"   # extract a value (rotation)
 ```
 
-See [Security](#security) below for the threat model and visibility guarantees.
+There is intentionally no CLI flag that prints a secret value (closes a scrollback/shell-history surface). OS-keyring support was removed in 3.0.0; the bot targets headless hosts where `keyring` has no usable backend.
 
-**Run:**
+**Upgrading from a pre-`[secrets]` deployment (separate `secrets.ini`):**
+
+```bash
+{ echo; cat secrets.ini; } >> config.ini       # append old secrets
+shred -u secrets.ini                            # securely remove old file
+chmod 600 config.ini                            # required - bot refuses 0644
+```
+
+**3. Run:**
 
 ```
 python internets.py
 ```
 
-**Add to a channel:**
+CLI flags (defined in `config.py`):
 
-Anyone can invite the bot via IRC's native INVITE (the server enforces permissions):
+| Flag | Effect |
+|------|--------|
+| `--version` | Print `Internets <version>` and exit |
+| `--debug [SUBSYSTEM ...]` | Global debug (no args) or per-subsystem (`--debug weather store`) |
+| `--loglevel LEVEL` | Base log level: DEBUG/INFO/WARNING/ERROR |
+| `--debug-file PATH` | Write all DEBUG to a separate file |
+| `--no-console` | Disable the stdin console (for daemonized use) |
 
-```
-/INVITE Internets #yourchannel
-```
+A `ProcessLock` (`internets.pid`) is taken around the event loop; a second instance against the same state directory refuses to start (prevents JSON state corruption). The interactive console starts only when `--no-console` is absent **and** stdin is a TTY; under systemd/pipes it auto-skips.
 
-Or the registered channel founder can use `.join` from any channel or PM:
-
-```
-.join #yourchannel
-```
-
-The bot verifies ownership by checking the user's NickServ account against the channel founder registered with IRC services (ChanServ, X3, etc.). Bot admins bypass this check. The bot remembers channels across restarts.
-
-## Example Session
+**4. Add to a channel:**
 
 ```
-<alice> .w 10001
-<Internets> :: New York, NY :: Conditions Partly Cloudy :: Temperature 18.3C / 64.9F ::
-             Dew point 12.1C / 53.8F :: Pressure 1018mb / 30.06in :: Humidity 67% ::
-             Visibility 16.1km / 10.0mi :: Wind from SW at 11.2km/h / 6.9mph ::
-             Updated March 03, 02:51 PM UTC ::
-
-<alice> .f 10001
-<Internets> :: New York, NY :: Monday Partly Cloudy 19.2C / 66.6F / 11.8C / 53.2F ::
-             Tuesday Rain 14.5C / 58.1F / 9.3C / 48.7F :: Wednesday Mainly Clear
-             16.7C / 62.1F / 8.1C / 46.6F :: Thursday Overcast 13.4C / 56.1F /
-             7.2C / 45.0F ::
-
-<bob> .cc sqrt(144) + 2pi
-<Internets> [calc] sqrt(144) + 2pi = 18.283185
-
-<carol> .d 3d6+2
-<Internets> :: Total 14/20 [71%] :: Rolls [4, 5, 3] ::
-
-<dave> .t es Hello, how are you?
-<Internets> [t] [en→es] Hola, ¿cómo estás?
-
-<alice> .regloc 90210
-<Internets> alice: location set to Beverly Hills, CA
-
-<alice> .w
-<Internets> :: Beverly Hills, CA :: Conditions Clear :: Temperature 22.1C / 71.8F :: ... :: [NWS] ::
-
-<alice> .w -n bob
-<Internets> :: Chicago, IL :: Conditions Overcast :: Temperature 8.4C / 47.1F :: ... :: [NWS] ::
-
-<alice> .u yolo /2
-<Internets> [2/7] An acronym for "you only live once", used to justify doing ...
+/INVITE Internets #yourchannel      # anyone; server enforces permissions
+.join #yourchannel                  # registered founder or bot admin
 ```
 
-Admin session (via PM):
+Founder is verified by matching the user's NickServ account (WHOIS 330) against the services `INFO #channel` founder line (`services_nick`, default `ChanServ`). Works across Anope/Atheme/Epona/X2/X3 and forks.
 
-```
--> *Internets* AUTH mypassword
-<Internets> Authentication successful.
+## Configuration overview
 
-<alice> .modules
-<Internets> Loaded (21): bofh (2), calc (1), channels (3), dice (1), dictionary (2), fml (1), idlerpg (2), imdb (1), ipinfo (1), lastfm (1), location (3), qdb (1), search (4), steam (2), stocks (3), translate (1), twitch (2), urbandictionary (2), urls (3), weather (19), youtube (2)
-<Internets> Use .help to see commands grouped by module.
+`config.ini` is read at startup; `.rehash` reloads it and invalidates all admin sessions. Sections (full key list in `docs/configuration.md` and `config.ini.example`):
 
-<alice> .reload weather
-<Internets> 'weather' unloaded. 'weather' loaded (19 commands).
-
-<alice> .version
-<Internets> Internets 3.0.0 — async modular IRC bot  https://github.com/brandontroidl/Internets
-```
-
-CLI startup:
-
-```
-$ python internets.py --version
-Internets 3.0.0
-
-$ python internets.py
-2026-05-20 14:00:01 [INFO] internets.modules: Loaded calc (['cc'])
-2026-05-20 14:00:01 [INFO] internets.modules: Loaded weather (['weather', 'w', 'forecast', 'f', ...])
-...
-2026-05-20 14:00:02 [INFO] internets.conn: Connecting irc.example.org:6697 (SSL)
-2026-05-20 14:00:03 [INFO] internets.sasl: Starting SASL PLAIN authentication
-2026-05-20 14:00:03 [INFO] internets.conn: Joined #mychannel
-> status
-  version  = 3.0.0
-  nick     = Internets
-  channels = #mychannel
-  modules  = advice, apod, bofh, bored, calc, catfact, channels, chuck, cocktail, cowsay, crypto, dadjoke, devutils, dice, dictionary, dnd, fact, fml, fx, games, hn, httpcode, idlerpg, imdb, ipinfo, iss, lastfm, location, mtg, notes, numberfact, poke, qdb, qr, recipe, reddit, remind, search, seen, spacex, steam, stocks, tell, translate, twitch, urbandictionary, urls, weather, xkcd, youtube
-  admins   = (none)
->
-```
-
-## Configuration
-
-The bot reads `config.ini` at startup. Relevant sections:
-
-**`[irc]`** — Server connection. Supports SSL (default on), optional certificate verification bypass for self-signed certs, NickServ identification, server password (for bouncers), and IRC operator credentials. Also configurable: `user_modes` (applied after connect, e.g. `+ix`), `oper_modes` (applied after OPER succeeds, e.g. `+s`), and `oper_snomask` (server notice mask, e.g. `+cCkKoO`).
-
-**`[bot]`** — Command prefix (default `.`), rate limiting (`api_cooldown`, `flood_cooldown`), file paths for persistent storage (`locations_file`, `channels_file`, `users_file`), `default_location` (fallback coordinates), `modules_dir`, `autoload` list, `services_nick` (IRC services bot for channel ownership verification, default `ChanServ`), and `user_max_age_days` (prune user tracking entries older than this, default 90).
-
-**`[admin]`** — Hashed password for admin authentication. Supports `scrypt$`, `bcrypt$`, and `argon2$` prefixes.
-
-**`[weather]`** — User-Agent template and default unit system. The actual contact identifier (URL or email) lives in `config.ini[secrets]` as `weather_user_agent`.
-
-**`[weather_providers]`** — `provider_priority` is a comma-separated list controlling registration order and the final tie-breaker after the accuracy rank + live health scores. NWS and Open-Meteo need no credentials. Every other provider's key lives in `config.ini[secrets]` (`weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key`, `airnow_key`, `purpleair_key`, `waqi_token`, `openaq_key`, `iqair_key`, `tidecheck_key`, `firms_key`, plus `meteomatics_username` / `meteomatics_password`, and four WeatherKit fields). Providers without credentials are silently skipped at startup; their per-command flag is hidden from `.help` and rejected by `-l`.
-
-**`[stocks]`** — Multi-provider failover for `.stock` / `.crypto`. Keys (`finnhub_key`, `alphavantage_key`, `twelvedata_key`) live in `config.ini[secrets]`. Configure at least one to enable the module.
-
-**`[imdb]`** / **`[lastfm]`** / **`[youtube]`** / **`[steam]`** / **`[twitch]`** — Each module reads its credential(s) from `config.ini[secrets]` via the secret store (`omdb_key`, `lastfm_key`, `youtube_key`, `steam_key`, `twitch_client_id` + `twitch_client_secret`). See `config.ini.example` for signup URLs and free-tier limits. `[steam]` keeps the non-secret `steamids_file` path (default `steamids.json`).
-
-**`[idlerpg]`** — `api_url` for the IdleRPG XML endpoint (default: Rizon's `http://idlerpg.rizon.net/xml.php`). No key required.
-
-**`[qdb]`** — `api_url` for a QDB-compatible XML endpoint. qdb.us is defunct; leave blank to keep `.qdb` hidden, or set it to any working QDB-compatible endpoint. No key required.
-
-**`[search]`** — Web search defaults to DuckDuckGo (free, no key). Image search and an upgraded web tier need `brave_key` in `config.ini[secrets]` (Brave Search API, 2,000 queries/month free).
-
-**`[logging]`** — Log level, output file, rotation, and optional debug file.  The
-main log is rotated at `max_bytes` (default 5 MB) keeping `backup_count` old
-copies (default 3).  Set `debug_file` to a path to capture ALL output at DEBUG
-level regardless of the main `level` setting — useful for protocol diagnostics.
-Runtime control via `.loglevel` and `.debug` admin commands (see below).
-
-Config can be reloaded at runtime with `.rehash`, which also invalidates all active admin sessions.
+- **`[irc]`** - server, SSL (default on), `ssl_verify`, NickServ, server password, oper credentials, `user_modes`, `oper_modes`, `oper_snomask`.
+- **`[bot]`** - command prefix (default `.`), `api_cooldown`, `flood_cooldown`, state file paths, `default_location`, `modules_dir`, `autoload`, `services_nick`, `user_max_age_days` (default 90).
+- **`[admin]`** - `password_hash` with `scrypt$` / `bcrypt$` / `argon2$` prefix.
+- **`[weather]`** - User-Agent template, default unit system. Contact identifier lives in `[secrets] weather_user_agent`.
+- **`[weather_providers]`** - `provider_priority` (registration order + final tie-breaker). All keyed providers read their key from `[secrets]`.
+- **`[stocks]`**, **`[imdb]`**, **`[lastfm]`**, **`[youtube]`**, **`[steam]`**, **`[twitch]`**, **`[search]`** - each reads its credential(s) from `[secrets]`; non-secret paths (e.g. `steamids_file`) stay in the section.
+- **`[idlerpg]`** / **`[qdb]`** - `api_url` for the XML endpoint. No key.
+- **`[logging]`** - level, file, `max_bytes` (5 MB), `backup_count` (3), optional `debug_file`. Runtime control via `.loglevel` / `.debug`.
+- **`[metrics]`** - `enable` (default false), `host` (default 127.0.0.1; 0.0.0.0 is rejected), `port` (default 9779). See Operational notes.
 
 ## Commands
 
-### User Commands
+`.help` lists commands grouped by category and shows only modules whose `is_configured()` passes (e.g. `imdb` is hidden without `omdb_key`); admin commands appear only when authed. `.modules` lists every loaded module plus unloaded ones on disk. In PM the `.` prefix is optional. Command arguments are capped at 400 characters.
 
-`.help` lists these grouped by the categories below (it shows only modules whose `is_configured()` passes, so users see commands they can actually run). `.modules` lists every loaded module plus unloaded ones available on disk. Grouping here mirrors the in-bot `.help` categories.
-
-**Meta**
-
-| Command | Description |
-|---------|-------------|
-| `.help` | List commands by category (admin commands shown only when authed) |
-| `.modules` | Loaded modules (with command counts) and unloaded ones on disk |
-
-**Weather and space**
+### Weather and space
 
 | Command | Description |
 |---------|-------------|
@@ -349,13 +205,15 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.sky <M#\|name>` | Messier catalog lookup |
 | `.passes <sat> <lat,lon>` | Next visible satellite pass (needs n2yo key) |
 
-**Science and math**
+All weather commands accept city names, zip codes, raw `lat,lon`, or `-n nick` to use another user's saved location. Per-provider flags below force a source; the default chain is accuracy-ranked.
+
+### Science and math
 
 | Command | Description |
 |---------|-------------|
-| `.sci [topic]` | Science + infosec headlines (41 feeds: all/ai/cs/sec/pentest/tech/physics/math/bio/astro/space) |
+| `.sci [topic]` | Science/infosec/AI/BSD headlines (**52 feeds**; topics: all, ai, cs, sec, pentest, tech, physics, math, bio, astro, space, bsd) |
 | `.sci read <N>` | Read item N from the last list (lead and link) |
-| `.sci sources` | List feed topics |
+| `.sci sources` | List feed topics and feed count |
 | `.isprime <n>` | Primality test and next prime |
 | `.factor <n>` | Prime factorization |
 | `.gcd <a> <b> [..]` | GCD and LCM |
@@ -373,11 +231,11 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.baud <bytes> <bps>` | Serial transfer time (`-fmt 8N1`) |
 | `.numberfact` / `.nf [n] [type]` | Number trivia (trivia/math/date/year) |
 
-**Developer, encoding, network, security**
+### Developer, encoding, network, security
 
 | Command | Description |
 |---------|-------------|
-| `.cc <expression>` | Calculator (math functions, implicit multiplication) |
+| `.cc <expression>` | Calculator (AST-whitelisted; math functions, implicit multiplication) |
 | `.cidr <ip/prefix>` | Network/broadcast/mask/hosts/range |
 | `.subnet <ip/prefix> <newlen>` | Split a block into subnets |
 | `.port <number\|name>` | Port number to/from service name |
@@ -413,19 +271,21 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.caa <domain>` | CAA records (and SPF/DMARC) |
 | `.whois <domain>` | RDAP domain registration info |
 | `.asn <ip\|ASn>` | RDAP network / AS info |
-| `.headers <url>` | HTTP status/server/type/redirect/security headers |
+| `.headers <url>` | HTTP status/server/type/redirect/security headers (SSRF-guarded) |
 | `.ssl <host[:port]>` | TLS cert issuer/CN/days-to-expiry |
 | `.tcp <host> <port>` | TCP connect probe and latency |
-| `.down <host\|url>` | Reachability check (up/down) |
+| `.down <host\|url>` | Reachability check (up/down; SSRF-guarded) |
 | `.cve <CVE-ID>` | NVD CVSS score, summary, date |
 | `.pwn <password>` | HIBP breach count (PM-only) |
 | `.hashid <hash>` | Identify likely hash type |
 | `.cvss <vector>` | Compute CVSS v3.1 base score |
 | `.cipher <name>` | Cipher reference (size/status) |
-| `.ipinfo <ip/host>` | IP/hostname geolocation |
-| `.ip <ip/host>` / `.rep` | IP reputation: DNSBL/DShield/GreyNoise/Tor/AbuseIPDB |
+| `.ipinfo <ip/host>` | IP/hostname geolocation (ip-api.com) |
+| `.ip <ip/host>` / `.rep` | IP reputation: DNSBL / DShield / GreyNoise / Tor / AbuseIPDB |
 
-**Reference and language**
+`.ip` / `.rep` (`modules/ipintel.py`) **queries** reputation sources and aggregates a verdict; it does not feed or write to any blocklist.
+
+### Reference and language
 
 | Command | Description |
 |---------|-------------|
@@ -436,6 +296,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.isbn <isbn>` | Open Library book lookup |
 | `.so <query>` | Top Stack Overflow question |
 | `.rfc <number>` | RFC title/status/date |
+| `.rtfm <command>` | tldr-pages command reference (Unix/BSD/Linux) |
 | `.arxiv <id\|query>` | arXiv paper lookup |
 | `.element <name\|symbol\|Z>` | Periodic-table entry (offline) |
 | `.t [src] <tgt> <text>` / `.translate` | Translate text |
@@ -445,7 +306,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.myloc` | Show your saved location |
 | `.delloc` | Delete your saved location |
 
-**Media and finance**
+### Media and finance
 
 | Command | Description |
 |---------|-------------|
@@ -454,20 +315,23 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.yt` / `.youtube <search>` | YouTube video search |
 | `.xkcd [num]` | xkcd comic (random or specific) |
 | `.mtg <card>` | Magic: the Gathering card (Scryfall) |
-| `.poke <name\|id>` | Pokemon info (PokeAPI) |
+| `.poke` / `.pokemon <name\|id>` | Pokemon info (PokeAPI) |
 | `.dnd <name>` | D&D 5e SRD spell or monster |
 | `.recipe` / `.meal <name>` | Recipe lookup (TheMealDB) |
-| `.cocktail <name>` | Cocktail recipe (TheCocktailDB) |
+| `.cocktail` / `.drink <name>` | Cocktail recipe (TheCocktailDB) |
 | `.steam [user/-g/-n nick]` / `.regsteam <id>` | Steam status / register ID |
 | `.tw [-s\|-c\|-g]` / `.twitch` | Twitch streams / channel / game |
 | `.irpg <player>` / `.idlerpg` | IdleRPG player lookup |
 | `.hn [rank]` | Top Hacker News story (1-30) |
 | `.reddit` / `.r <sub> [period]` | Top post from a subreddit |
-| `.stock` / `.s <symbol>` | Stock quote |
-| `.crypto <symbol>` | Cryptocurrency price in USD |
+| `.stock` / `.s <symbol>` | Stock quote (Finnhub / Alpha Vantage / Twelve Data failover) |
+| `.crypto <symbol>` | Cryptocurrency price in USD (keyed stock providers) |
+| `.gecko` / `.cg` / `.coingecko <symbol\|name>` | Crypto spot price + 24h change + market cap (CoinGecko, no key) |
 | `.fx <from> <to> [amount]` | FX conversion (frankfurter.dev / ECB) |
 
-**Fun**
+`.crypto` (`modules/stocks.py`) needs a stock-provider key; `.gecko` / `.cg` (`modules/crypto.py`) is keyless via CoinGecko.
+
+### Fun
 
 | Command | Description |
 |---------|-------------|
@@ -484,7 +348,7 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.dadjoke` / `.joke` | Random dad joke |
 | `.cowsay <text>` | ASCII cow speaks your text |
 
-**Personal and social**
+### Personal and social
 
 | Command | Description |
 |---------|-------------|
@@ -497,23 +361,19 @@ Config can be reloaded at runtime with `.rehash`, which also invalidates all act
 | `.shorten <url>` | Shorten a URL via is.gd |
 | `.expand <url>` / `.unshorten <url>` | Expand a shortened URL |
 | `.privacy` / `.forgetme` / `.optout` / `.optin` | See, erase, or opt out of stored data (PM-only) |
-| `.join` / `.part <#channel>` | Invite or remove the bot (channel founder or admin) |
+| `.join` / `.part <#channel>` | Invite or remove the bot (founder or admin) |
 | `.users [#channel]` | Show known users in a channel |
 | `.uptime` | Show bot uptime |
 
-All weather commands accept city names, zip codes, raw `lat,lon` pairs, or `-n nick` to look up another user's saved location.
+`.forgetme` is right-to-erasure: it purges the invoking nick from every dataset (saved location + per-channel tracking). `.optout` sets a persistent opt-out flag (`store.set_opt_out`, the source of truth) so the bot stops tracking that nick; `.optin` reverses it.
 
-In PM, the `.` prefix is optional — `weather 10001` works the same as `.weather 10001`.
+### Weather provider flags
 
-`.help` skips modules whose `is_configured()` returns False (e.g. `imdb` without an `omdb_key`), so users only see commands they can actually run. `.modules` shows every loaded module and the unloaded ones available on disk.
-
-#### Weather provider flags
-
-Every weather command accepts per-provider flags (anywhere in the line, before or after the location) to force a specific source instead of letting the dispatcher choose. The default chain is ranked by scientific accuracy — see [the architecture section](#architecture) for the ordering.
+Force a specific source instead of the dispatcher's choice. Flags work anywhere on the line, before or after the location. Forcing an inactive provider (no key) or one that lacks the requested capability aborts with a message - no silent fallback once you have made an explicit choice.
 
 | Flag | Provider | Notes |
 |------|---------|-------|
-| `-nws` | NWS (Weather.gov) | US only — NDFD + HRRR + WaveWatch III |
+| `-nws` | NWS (Weather.gov) | US only - NDFD + HRRR + WaveWatch III |
 | `-mm` / `-meteomatics` | Meteomatics | ECMWF/ICON/GFS blend (paid) |
 | `-aw` / `-wk` / `-apple` / `-appleweather` / `-weatherkit` | Apple WeatherKit | NWS + IBM TWC blend |
 | `-om` / `-openmeteo` | Open-Meteo | Free; ECMWF/ICON/GFS + CAMS AQ + ERA5 |
@@ -522,38 +382,18 @@ Every weather command accepts per-provider flags (anywhere in the line, before o
 | `-owm` / `-openweathermap` | OpenWeatherMap | GFS + ECMWF + CAMS AQ |
 | `-wb` / `-weatherbit` | WeatherBit | GFS + station obs |
 | `-wapi` / `-weatherapi` | WeatherAPI.com | GFS-derived |
-| `-pw` / `-pirate` / `-pirateweather` | Pirate Weather | Dark Sky compatible; HRRR + MRMS for US nowcast |
+| `-pw` / `-pirate` / `-pirateweather` | Pirate Weather | Dark Sky compatible; HRRR + MRMS US nowcast |
 | `-sg` / `-stormglass` | Stormglass | Marine specialist (7-model wave blend) |
 | `-tio` / `-tomorrow` / `-tomorrowio` | Tomorrow.io | Proprietary nowcasting |
 | `-wwo` / `-worldweatheronline` | World Weather Online | Basic single-model |
 | `-ws` / `-weatherstack` | Weatherstack | Basic; least preferred |
 | `-l` | (list mode) | List active providers ranked by accuracy for that capability |
 
-Examples:
+Specialist capabilities (`.aqi`, `.uv`, `.pollen`, `.alerts`, `.history`, `.wildfire`, `.space`, `.tides`) accept their own source flags (e.g. `.aqi -an`, `.uv -om`, `.tides -coops`). See `docs/providers.md`.
 
-```
-<alice> .w 67127 -aw
-<Internets> :: Wichita, KS, USA :: Conditions Mostly Clear :: Temperature 18.3C / 64.9F :: ... :: [Apple Weather] ::
+### Admin commands
 
-<alice> .w -vc Tokyo
-<Internets> :: Tokyo, Japan :: Conditions Light rain :: ... :: [Visual Crossing] ::
-
-<alice> .f -nws -n bob
-<Internets> :: Boston, MA, USA :: Today Partly Sunny 22C / 12C :: Tomorrow Sunny 25C / 14C :: ... :: [NWS] ::
-
-<alice> .marine -sg
-<Internets> :: Newport, RI, USA :: Waves 1.2m / 3.9ft (8s, ENE) :: Swell 0.8m / 2.6ft (10s, E) :: [Stormglass] ::
-
-<alice> .w -l
-<Internets> alice: current providers (most → least accurate): 1.nws [OK] (-nws), 2.openmeteo [OK] (-om/-openmeteo), 3.weatherapi [?] (-wapi/-weatherapi), ...
-<Internets> alice: legend  [OK]=auth ok, calls succeeding  [?]=loaded, untested  [X]=loaded but failing
-```
-
-If you force a provider that isn't active (no API key in the secret store) or doesn't support the requested capability (e.g. `-ws` for marine), the bot says so and aborts — no silent fallback when you've made an explicit choice.
-
-### Admin Commands
-
-Authenticate first: `/MSG Internets AUTH <password>`
+Authenticate in PM first: `/MSG Internets AUTH <password>`. Auth is restricted to PM. Sessions are keyed by nick **and** hostmask; a hostmask change invalidates the session. Brute-force lockout after 5 failures (5-minute cooldown). Every privileged action is written to the HMAC-chained audit log.
 
 | Command | Description |
 |---------|-------------|
@@ -563,36 +403,41 @@ Authenticate first: `/MSG Internets AUTH <password>`
 | `.unload <module>` | Unload a module |
 | `.reload <module>` | Reload a module |
 | `.reloadall` | Reload all loaded modules |
-| `.restart` | Full process restart via `execv` |
-| `.rehash` | Reload `config.ini` and clear admin sessions |
+| `.restart` | Full process restart (`execv`; subprocess on Windows) |
+| `.rehash` | Reload `config.ini`, re-read password hash, clear admin sessions |
 | `.mode <+/-modes>` | Set bot user modes (e.g. `.mode +ix`) |
 | `.snomask <+/-flags>` | Set server notice mask (e.g. `.snomask +cCkK`) |
-| `.loglevel [LEVEL]` | Show or set log output level (DEBUG/INFO/WARNING/ERROR) |
-| `.loglevel <logger> <LEVEL>` | Set level for a specific subsystem (e.g. `.loglevel internets.weather DEBUG`) |
-| `.debug [on\|off]` | Toggle global debug output |
-| `.debug <subsystem> [off]` | Debug a single subsystem (e.g. `.debug weather`) |
+| `.raw <line>` | Send a raw IRC line (capped at 510 bytes) |
+| `.nick <newnick>` | Change the bot's nick |
+| `.say <target> <text>` | Send a PRIVMSG as the bot |
+| `.act <target> <text>` | Send a CTCP ACTION (/me) as the bot |
+| `.loglevel [LEVEL]` / `.loglevel <logger> <LEVEL>` | Show or set global / per-subsystem log level |
+| `.debug [on\|off]` / `.debug <subsystem> [off]` | Toggle global or per-subsystem debug |
+| `.uptime` | Process and current-connection uptime |
+| `.stats` | Runtime counters, send-queue depth, modules, RSS, audit-log size |
+| `.audit [N\|grep <pat>\|tail\|verify]` | View the audit log; `verify` checks the HMAC chain |
+| `.fingerprint <nick>` | Cross-reference hostmask, channels, last-seen, tells, notes, audit mentions, shadow-ban status |
+| `.shadow-ban <nick> [reason]` | Silently drop all traffic (commands + on_raw) from a nick; audit-logged |
+| `.shadow-unban <nick>` | Lift a shadow-ban |
+| `.shadow-list` | List shadow-banned nicks |
+| `.health` | Per-subsystem health snapshot |
 | `.shutdown [reason]` / `.die [reason]` | Save state, unload modules, quit cleanly |
 
-### Console Commands
+### Console commands
 
-When running interactively (stdin is a TTY), the bot starts a console task.
-Type commands at the `>` prompt — no auth required.  Disable with `--no-console`
-or when running under a process manager (auto-detected: console is skipped when
-stdin is not a TTY).
+When stdin is a TTY (and `--no-console` is absent) the bot runs a console task. No auth required - it is local-operator-only. Type at the `>` prompt:
 
-| Console Command | IRC Equivalent |
-|-----------------|----------------|
-| `debug [on\|off]` | `.debug [on\|off]` |
-| `debug <sub> [off]` | `.debug <sub> [off]` |
-| `loglevel [LEVEL]` | `.loglevel [LEVEL]` |
-| `loglevel <logger> LEVEL` | `.loglevel <logger> LEVEL` |
-| `status` | *(no equivalent — shows nick, channels, modules, admins, log state)* |
-| `shutdown [reason]` | `.shutdown [reason]` |
-| `help` | *(shows console commands)* |
+| Console | Equivalent |
+|---------|-----------|
+| `debug [on\|off]` / `debug <sub> [off]` | `.debug` |
+| `loglevel [LEVEL]` / `loglevel <logger> LEVEL` | `.loglevel` |
+| `status` | (none) - shows nick, channels, modules, admins, log state |
+| `shutdown [reason]` / `quit` | `.shutdown` |
+| `help` | shows console commands |
 
-## Writing a Module
+## Writing a module
 
-Create a Python file in `modules/`. Implement `setup(bot)` returning a `BotModule` subclass. Define commands in the `COMMANDS` dict.
+Create a `.py` in `modules/`, implement `setup(bot)` returning a `BotModule` subclass, declare commands in `COMMANDS`. Full guide in `docs/modules.md`.
 
 ```python
 from __future__ import annotations
@@ -611,200 +456,58 @@ def setup(bot: object) -> PingModule:
     return PingModule(bot)
 ```
 
-The bot passes `nick` (who sent the command), `reply_to` (the channel or nick to respond to), and `arg` (everything after the command, or `None`). All command handlers are coroutines (`async def`). Use `self.bot.privmsg()` for public responses, `self.bot.notice()` for private ones, or `self.bot.reply()` / `self.bot.preply()` for automatic routing.
+`nick` is the sender, `reply_to` is the channel or nick to respond to, `arg` is everything after the command (or `None`). Handlers are coroutines; run blocking I/O under `await asyncio.to_thread(...)`. Reply via `self.bot.privmsg()` (public), `self.bot.notice()` (private), or `self.bot.reply()` / `self.bot.preply()` (auto-routed). For user-influenceable URLs use `modules/_netsafe.py` (SSRF guard). Outbound HTTP should go through `modules/base.fetch_json` (size-capped); never `r.json()` or unbounded `r.text`.
 
-For blocking I/O (HTTP, disk, CPU-heavy work), use `await asyncio.to_thread(...)`:
+Available on `self.bot`: `cfg`, `loc_get/set/del(nick)`, `rate_limited(nick)`, `flood_limited(nick)`, `is_admin(nick)`, `channel_users(channel)`, `active_channels`, `send(raw, priority)`. Lifecycle hooks: `on_load()`, `on_unload()`, `on_raw(line)` (every incoming line after IRCv3 tag stripping). `is_configured()` gates whether the module appears in `.help` and whether its commands run; return False when a required key is absent so the module hides cleanly.
 
-```python
-import asyncio, requests
+If two modules register the same command name, the second load is rejected with a conflict error.
 
-async def cmd_fetch(self, nick, reply_to, arg):
-    resp = await asyncio.to_thread(requests.get, "https://api.example.com/data", timeout=10)
-    self.bot.privmsg(reply_to, f"Got: {resp.json()}")
-```
+## Adding a weather provider
 
-Available from `self.bot`: `cfg` (ConfigParser), `loc_get(nick)`, `loc_set(nick, raw)`, `loc_del(nick)`, `rate_limited(nick)`, `flood_limited(nick)`, `is_admin(nick)`, `channel_users(channel)`, `active_channels`, `send(raw_irc, priority)`.
+Create a package in `weather_providers/` with one sub-module per API endpoint; the dispatcher auto-discovers capabilities from `async def get_*` method names. Register a factory in `weather_providers/__init__.py` that returns `None` when its key is absent, add the key under `[weather_providers]`, and add the name to `provider_priority`. Full walkthrough (including WeatherKit ES256 setup) in `docs/providers.md`.
 
-Lifecycle hooks: `on_load()` runs after the module is registered. `on_unload()` runs before it's removed. `on_raw(line)` is called for every incoming IRC line (after IRCv3 tag stripping) and lets modules react to server numerics, NOTICEs, or any other traffic the core doesn't dispatch as a command. Use these for setup, cleanup, and advanced protocol integration.
+## Security model overview
 
-## Adding a Weather Provider
+Full threat model in `docs/security-model.md`. Highlights:
 
-Create a package directory in `weather_providers/` with one sub-module per API endpoint. The dispatcher auto-discovers capabilities from method names.
-
-**1. Create the package:**
-
-```
-weather_providers/myprovider/
-    __init__.py      ← provider class, delegates to sub-modules
-    current.py       ← get_weather endpoint
-    forecast.py      ← get_forecast endpoint
-    _codes.py        ← shared helpers (optional)
-```
-
-**2. Implement endpoint sub-modules** (e.g. `current.py`):
-
-```python
-from weather_providers._http import get_json
-from weather_providers.base import WeatherResult
-
-async def fetch(api_key, lat, lon, location):
-    data = await get_json("https://api.myweather.com/current",
-                          params={"key": api_key, "lat": lat, "lon": lon})
-    return WeatherResult(
-        source="MyWeather",
-        temperature=data.get("temp_c"),
-        description=data.get("condition", "Unknown"),
-        location=location,
-    )
-```
-
-**3. Create the provider class** (`__init__.py`):
-
-```python
-from weather_providers.base import *
-from . import current, forecast
-
-class MyProvider:
-    name = "MyWeather"
-    requires_key = True
-
-    def __init__(self, api_key: str) -> None:
-        self._key = api_key
-
-    async def get_weather(self, lat, lon, location, **kwargs):
-        return await current.fetch(self._key, lat, lon, location)
-
-    async def get_forecast(self, lat, lon, location, days=4, **kwargs):
-        return await forecast.fetch(self._key, lat, lon, location, days)
-```
-
-**4. Register the factory** in `weather_providers/__init__.py`:
-
-```python
-def _f_myprovider(cfg):
-    key = cfg.get("weather_providers", "myprovider_key", fallback="").strip()
-    if not key: return None
-    from .myprovider import MyProvider
-    return MyProvider(key)
-
-_reg("myprovider", _f_myprovider)
-```
-
-**5. Add config keys** to `config.ini` under `[weather_providers]`:
-
-```ini
-myprovider_key = your-api-key-here
-```
-
-Add `myprovider` to the `provider_priority` list. The dispatcher auto-discovers capabilities from method names (`get_weather` → "current", `get_hourly` → "hourly", etc.), tracks provider health, and handles fallback automatically. Add more `async def get_*` methods to support additional capabilities (see `CAPABILITY_METHODS` in `_dispatch.py` for the full list).
-
-## Configuring Apple WeatherKit
-
-WeatherKit is a built-in provider for Apple Developer Program members. It is not enabled by default.
-
-**Prerequisites:**
-- Apple Developer Program membership ($99/year, includes 500K WeatherKit API calls/month)
-- `PyJWT` and `cryptography` packages: `pip install internets-irc[weatherkit]`
-
-**Setup:**
-
-1. In the [Apple Developer portal](https://developer.apple.com/account), go to Identifiers and create a new **Services ID** with WeatherKit enabled.
-
-2. Go to Keys and create a new key with **WeatherKit** capability. Download the `.p8` private key file.
-
-3. Store the four values in `config.ini[secrets]`:
-
-```ini
-; config.ini, under [secrets]
-weatherkit_team_id    = YOUR_TEAM_ID
-weatherkit_service_id = com.example.weatherkit-client
-weatherkit_key_id     = YOUR_KEY_ID
-weatherkit_key_file   = /path/to/AuthKey_XXXXXXXX.p8
-```
-
-The `weatherkit_key_file` field is a *path* to the `.p8` file, not its contents — keep the key file outside `config.ini`.
-
-4. The bot signs JWT/ES256 tokens with the private key. Tokens are cached and refreshed before expiry. Apple requires the source to display as "Apple Weather" — the bot handles this via the `[Apple Weather]` tag in output.
-
-If `PyJWT` / `cryptography` are not installed or any of the four values are missing, the WeatherKit provider is silently skipped and the next provider in the chain takes over.
-
-## Operational Notes
-
-**Nick collision recovery:** If the configured nick is taken, the bot appends `_` and retries.
-
-**Auto-reconnect with exponential backoff.** On disconnect, the bot reconnects with exponential backoff: 15s, 30s, 60s, 120s, 240s, capped at 5 minutes. The attempt counter resets on successful connection. Channel list is restored from `channels.json`. If SASL is available, identification happens during registration. Otherwise, if a NickServ password is configured, the bot waits for identification confirmation (up to 10 seconds) before sending JOINs so that `+R` channels and ChanServ access lists work. If a saved channel is invite-only (`+i`), the bot asks ChanServ to re-invite it. Channels that reject with 471 (full), 474 (banned), or 475 (bad key) are logged and removed from the saved list.
-
-**Keepalive:** An async task sends `PING` every 90 seconds. If the read times out after 300 seconds with no data, the connection is presumed dead and the reconnect logic takes over.
-
-**User tracking.** The bot maintains a per-channel registry of nicks, hostmasks, and first/last seen timestamps in memory, flushed to `users.json` every 30 seconds. Populated from observed JOINs, PARTs, QUITs, NICKs, and channel activity — it is not a complete roster (NAMES replies are not used for the general roster). Entries older than 90 days (configurable via `user_max_age_days` in `config.ini`) are automatically pruned during flushes.
-
-**Channel ownership verification:** When a non-admin user runs `.join` or `.part`, the bot verifies they are the channel founder by WHOIS-ing them for their NickServ account (330 numeric) and querying the configured services bot (`services_nick`, default ChanServ) with `INFO #channel` for the founder name. If the account matches the founder (case-insensitive), the action proceeds. Verification times out after 15 seconds. This covers Anope, Atheme, Epona, X2, X3, and compatible forks. The services bot name is the only thing that varies — set `services_nick = X3` (or `Q`, etc.) in `config.ini` for non-ChanServ networks.
-
-**Module conflicts:** If two modules try to register the same command, the second load is rejected with a conflict error.
-
-## Security
-
-**Secret store.** Outbound credentials (NickServ / SASL / server / oper passwords, every API key, the User-Agent contact identifier) live in the `[secrets]` section of a **gitignored** `config.ini`. Lookup order, first hit wins:
-
-1. `INTERNETS_<NAME>` environment variable
-2. Gitignored `config.ini` `[secrets]` section (0600 perms strictly enforced)
-
-`config.ini.example` is the committed credential-free *structural* template — section names, non-secret defaults, comments, plus a placeholder `[secrets]` section listing every supported key with signup URLs and tier limits inline. Personal non-secret overrides may also go in an optional gitignored `config.local.ini` overlay.
-
-These values are **not hashed**. Hashing is one-way; the bot has to send the literal password / API key on the wire, so the correct primitive is encryption-at-rest, not hashing. OS-keyring support was removed in v3.0.0 — the bot targets headless deployments where `keyring` has no usable backend; the 0600 `config.ini` (or `INTERNETS_*` env vars) is the storage.
-
-**Visibility guarantees:**
-
-- The bot never logs the *value* of any secret. Module `on_load()` logs presence only.
-- Outbound IRC traffic is scrubbed for credential prefixes (`PASS`, `NS IDENTIFY`, `OPER`, `AUTHENTICATE`) before being logged by `sender.py`.
-- `python -m secret_store get <name>` prints only `(set, N chars, backend=<env|file>)` — never the value. There is **no CLI flag to print the secret** (closes a scrollback / shell-history exposure surface). For legitimate extraction (key rotation), use `python -c "import secret_store; print(secret_store.get('<name>'))"` so the intent is explicit at the call site.
-- `python -m secret_store list` shows the backend per secret, never the values.
-- `config.ini` `[secrets]` is read only when `stat().st_mode & 0o777 == 0o600`. The store fails closed (returns empty) if perms are looser.
-- Unconfigured providers and modules are hidden: the `BotModule.is_configured()` hook makes `.help` skip them, weather flags for unconfigured providers don't appear in `.w -l`, and forcing such a provider returns "not active" without making an API call.
-
-**Authentication:** Admin passwords are hashed with scrypt (default), bcrypt, or argon2. Constant-time comparison via `hmac.compare_digest`. Brute-force lockout after 5 failures (5-minute cooldown). Sessions are tracked by nickname *and* hostmask — if a nick's hostmask changes after authentication (e.g. someone else takes the nick), the session is automatically invalidated. Sessions are also cleared on disconnect. Auth commands are restricted to PM. All auth state is protected by a dedicated `threading.Lock` for GIL-free Python compatibility.
-
-**Transport:** TLS 1.2 minimum enforced. No fallback to TLS 1.0/1.1. Certificate verification enabled by default (`ssl_verify = true`). Set `ssl_verify = false` only for servers with self-signed certs.
-
-**Input validation:** Module names validated against `^[a-z][a-z0-9_]*$`. Channel names validated against IRC format regex. Command arguments capped at 400 characters. PRIVMSG/NOTICE targets validated (no spaces). All user input treated as untrusted.
-
-**Protocol compliance:** Outgoing lines capped at 512 bytes (RFC 2812). Incoming lines limited to 8KB buffer. CRLF/NUL stripped from all outgoing messages. PING payload reflection capped at 400 bytes.
-
-**Injection prevention:** Log injection prevented via `_SafeFormatter` (sanitizes msg and args). No `eval()`/`exec()` anywhere — calculator uses AST walker with strict whitelist. Module loader blocks symlink traversal. Config path resolved to absolute at startup.
-
-**Resource limits:** Concurrent command tasks capped at 50. Sender queue bounded at 200 messages. INVITE acceptance rate-limited (5s cooldown). Store data files capped at 10MB on load. API and flood rate limiters per-nick.
-
-**Information disclosure:** All error messages sent to IRC are generic ("see log for details"). No stack traces, file paths, or internal state exposed. Outgoing credentials (PASS, IDENTIFY, OPER, AUTHENTICATE) redacted in logs.
-
-**Cross-platform:** Config permission check guarded for POSIX. Store I/O uses explicit UTF-8 encoding. Temp file cleanup is exception-safe on Windows. Restart uses subprocess on Windows (os.execv doesn't replace the process). math.cbrt fallback for Python < 3.11.
+- **Secret store.** Lookup order, first hit wins: `INTERNETS_<NAME>` env var, then `[secrets]` in `config.ini` (read only at exactly 0600, else fail-closed). Secrets are stored encrypted-at-rest, never hashed (the bot must send the literal value on the wire). The bot never logs a secret value; `sender.py` scrubs `PASS` / `NS IDENTIFY` / `OPER` / `AUTHENTICATE` before logging.
+- **Audit log** (`audit_log.py`). Append-only, HMAC-SHA-256-chained over each record's `prev_hash` plus fields; the HMAC key is a 0600 sidecar (`audit.key`), so a leaked copy of `audit.log` cannot be used to forge or recompute entries. `.audit verify` walks the chain. Rotates at a size cap; each segment is independently verifiable. Honest limit: tail-truncation by an attacker holding both files is undetectable from the file alone (needs an external append-only sink).
+- **SSRF guard** (`modules/_netsafe.py`). For user-influenceable URLs it resolves the host, rejects any private/loopback/link-local/metadata/ULA/IPv4-mapped answer, then pins the connection to the validated IP (thread-local DNS pin) so urllib3 cannot re-resolve to an internal address between check and connect; re-validates every redirect hop. SNI/TLS/Host stay correct.
+- **Authentication.** scrypt (default) / bcrypt / argon2; constant-time compare via `hmac.compare_digest`; per-nick brute-force lockout; sessions bound to nick+hostmask and cleared on disconnect; auth state under a dedicated `threading.Lock`.
+- **Transport.** TLS 1.2 minimum, no 1.0/1.1 fallback; cert verification on by default (`ssl_verify`).
+- **Input validation.** Module names `^[a-z][a-z0-9_]*$`; channel-name regex; args capped 400 chars; PRIVMSG/NOTICE targets validated; module loader blocks symlink traversal; no `eval`/`exec` anywhere (calculator is an AST walker with a strict whitelist).
+- **Resource limits.** 50 concurrent command tasks; sender queue bounded at 200; INVITE acceptance rate-limited; state files capped at 10 MB on load; per-nick API + flood limiters.
+- **Information disclosure.** IRC error messages are generic ("see log for details"); no stack traces, paths, or internal state leak to the channel.
+- **Single-instance safety.** `process_lock.py` (PID lock with stale-detection) refuses a second instance that would race the JSON state files.
 
 ## Testing
 
-154+ automated tests across `tests/run_tests.py` (standalone, no dependencies) and `tests/test_*.py` (pytest). No external test framework required for the standalone suite:
-
 ```
-python tests/run_tests.py
-```
-
-For the pytest suite:
-
-```
-pip install pytest
-pytest tests/ -v
+python tests/run_tests.py        # standalone, no dependencies
+pytest tests/ -v                 # full suite (pip install -e ".[dev]")
 ```
 
-Covers protocol parsing, store operations (CRUD, flush, atomic writes, pruning, type validation), calculator sandboxing and DoS guards, dice, weather provider registry, capability-based dispatch, provider health scoring, configuration parsing, output formatting, unit conversions, sender injection prevention and line limits, password hashing, thread-safe containers, async architecture verification, rate limiting, and all security hardening fixes. Both test suites are compatible and can be run independently.
+`tests/run_tests.py` is a self-contained runner. The pytest suite is 31 modules (`tests/test_*.py`) covering protocol parsing, store CRUD/flush/pruning, calculator sandboxing and DoS guards, dice, weather provider registry and capability dispatch, provider health scoring, config parsing, output formatting, unit conversion, sender injection prevention and line limits, password hashing, rate limiting, the SSRF/netsafe guard, `fetch_json` size caps, secret store, and per-module behavior (ipintel, scinews, secinfo, devtools, mathx, physcalc, probe, dnsutils, pkginfo, reflookup, satpass, astro2, crypto-cache, stocks, and more). Coverage gate (`fail_under = 75` in `pyproject.toml`) is **core-only**: `modules/*` and `weather_providers/*` are omitted from the measured source, so the headline percentage measures the top-level orchestration modules, not the whole repo.
 
-## Known Limitations
+## Operational notes
 
-The translation module uses an undocumented Google Translate endpoint (`translate.googleapis.com`). It has no SLA and may break or be rate-limited without notice.
+Full ops detail in `docs/deployment.md`.
 
-**Persistence:** The store loads all JSON files into memory once at startup. Mutations happen in-memory; a background thread flushes dirty data to disk every 30 seconds. Each dataset (locations, channels, users) has its own lock, so weather lookups never block on user-tracking writes. Worst-case data loss on a hard crash is 30 seconds of user-tracking timestamps — channel list and location changes are also flushed on `.shutdown`, `.restart`, and signal handlers.
+- **Reconnect.** Exponential backoff 15s/30s/60s/120s/240s capped at 5 min; counter resets on success. Channels restored from `channels.json`; invite-only channels trigger a ChanServ re-invite; channels rejecting with 471/474/475 are logged and dropped from the saved list.
+- **Keepalive.** `PING` every 90s; a 300s read timeout with no data presumes the link dead and hands off to reconnect.
+- **User tracking.** Per-channel nicks/hostmasks/first-last-seen in memory, flushed to `users.json` every 30s, pruned past `user_max_age_days` (default 90). Populated from observed JOIN/PART/QUIT/NICK and channel activity; `353` NAMES is **not** used for the general roster, so a user already present when the bot joined will not appear in `.users` until they trigger an observable event.
+- **Persistence.** All JSON loads into memory once at startup; a background thread flushes dirty datasets every 30s, each under its own lock. Worst-case hard-crash loss is ~30s of user-tracking timestamps; location/channel changes also flush on `.shutdown`, `.restart`, and signal handlers. `os.replace()` is atomic on POSIX, best-effort on NTFS.
+- **Metrics.** `metrics.py` is an opt-in Prometheus text exporter. Counters are always collected (cheap); the HTTP exporter starts only when `[metrics] enable = true`. It binds 127.0.0.1 by default and **rejects 0.0.0.0** - expose off-host only behind an authenticating reverse proxy.
+- **Nick collision.** If the configured nick is taken, the bot appends `_` and retries.
 
-The bot does not parse `353` (NAMES reply) for user roster purposes. Users who were already in the channel when the bot joined will not appear in `.users` output until they trigger an observable event (JOIN, PART, QUIT, NICK, or sending a message).
+## Known limitations
 
-**Atomic writes on Windows:** `os.replace()` is atomic on POSIX but not guaranteed atomic on NTFS. It is the best Python offers cross-platform. Data loss from a crash during the brief write window is unlikely but theoretically possible on Windows.
+- The translation module uses an undocumented Google Translate endpoint (`translate.googleapis.com`): no SLA, may break or rate-limit without notice.
+- `.qdb` depends on a working QDB-compatible XML endpoint (`[qdb] api_url`); qdb.us is defunct, so `.qdb` is hidden until one is configured.
+- The roster is event-driven, not NAMES-derived (see User tracking above).
+- The audit log detects edit/reorder/delete of any non-tail record but cannot detect tail-truncation by an attacker holding both `audit.log` and `audit.key` from the file alone.
+- Coverage's reported percentage is core-only by design; do not read it as repo-wide.
 
 ## License
 
-ISC — see [LICENSE.md](LICENSE.md).
+ISC - see [LICENSE.md](LICENSE.md).

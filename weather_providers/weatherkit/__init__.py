@@ -1,4 +1,4 @@
-"""Apple WeatherKit provider package — requires Developer membership + PyJWT."""
+"""Apple WeatherKit provider package - requires Developer membership + PyJWT."""
 from __future__ import annotations
 import os
 import stat
@@ -17,14 +17,14 @@ _JWT_LIFETIME = 55 * 60
 
 # Valid PEM headers for an ES256 private key per RFC 7468.
 # Apple ships the .p8 in PKCS#8 form ("BEGIN PRIVATE KEY"); some
-# operators convert to SEC1 ("BEGIN EC PRIVATE KEY") — both are
+# operators convert to SEC1 ("BEGIN EC PRIVATE KEY") - both are
 # acceptable to PyJWT's cryptography backend.
 _VALID_KEY_HEADERS = (
     "-----BEGIN PRIVATE KEY-----",
     "-----BEGIN EC PRIVATE KEY-----",
 )
 
-# Allowed POSIX modes for the .p8 key file — matches secret_store.perms_ok
+# Allowed POSIX modes for the .p8 key file - matches secret_store.perms_ok
 # semantics (owner-only access).  0o400 (read-only) is also fine because
 # we only ever read the file.
 _ALLOWED_KEY_MODES = frozenset({0o600, 0o400})
@@ -35,7 +35,7 @@ def _check_key_perms(path: Path) -> None:
 
     POSIX-only.  Windows ACLs are handled by the filesystem; ``os.name``
     of ``'nt'`` short-circuits this check (the secret_store module makes
-    the same trade-off — POSIX bits are advisory on Windows).
+    the same trade-off - POSIX bits are advisory on Windows).
     """
     if os.name == "nt":
         return
@@ -47,7 +47,7 @@ def _check_key_perms(path: Path) -> None:
     if mode not in _ALLOWED_KEY_MODES:
         raise PermissionError(
             f"REFUSING to load {path}: mode is {oct(mode)}, expected 0o600 "
-            f"or 0o400 (group/other must not have read access) — "
+            f"or 0o400 (group/other must not have read access) - "
             f"run `chmod 600 {path}`"
         )
 
@@ -57,7 +57,7 @@ def _read_private_key(path: Path) -> str:
 
     Trade-off: we re-read on every token refresh (once per ~55 minutes)
     rather than holding the key in memory for the lifetime of the
-    process.  CPython's immutable ``str`` cannot be reliably zeroed —
+    process.  CPython's immutable ``str`` cannot be reliably zeroed -
     the interned/copied buffers in PyJWT, cryptography, and the GC live
     well beyond a `del`.  Re-reading limits the in-memory residency
     window to the few milliseconds the JWT signing call takes, at the
@@ -66,7 +66,7 @@ def _read_private_key(path: Path) -> str:
     _check_key_perms(path)
     text = path.read_text(encoding="utf-8").strip()
     if not text.startswith(_VALID_KEY_HEADERS):
-        # Don't include the file contents in the error — even the header
+        # Don't include the file contents in the error - even the header
         # line of a wrong file may leak info (e.g. a public key marker).
         raise ValueError(
             f"key file {path} does not start with a recognised PEM header "
@@ -80,7 +80,7 @@ def _make_jwt(team_id, service_id, key_id, private_key):
     now = int(time.time())
     # NB: PyJWT derives the "alg" header field from the ``algorithm=``
     # kwarg automatically.  Passing it again in ``headers=`` is redundant
-    # but harmless — PyJWT does not double-set on conflict, it uses the
+    # but harmless - PyJWT does not double-set on conflict, it uses the
     # one from ``algorithm=``.  Left in for explicitness; do not remove
     # ``algorithm="ES256"`` (that one is load-bearing).
     return jwt.encode(
@@ -99,7 +99,7 @@ class WeatherKitProvider:
         if not p.is_file(): raise FileNotFoundError(f"Key not found: {p}")
         # Validate perms + PEM header at init so misconfigurations fail
         # loudly at startup rather than at first weather lookup.  Don't
-        # retain the key text — _headers() re-reads on each refresh.
+        # retain the key text - _headers() re-reads on each refresh.
         _read_private_key(p)
         self._key_path = p
         # nosec B105: empty-string init for the JWT cache (not a hardcoded

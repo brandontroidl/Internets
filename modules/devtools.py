@@ -1,4 +1,4 @@
-"""Developer tools — pure stdlib, no network, no key.
+"""Developer tools - pure stdlib, no network, no key.
 
     .jwt <token>            decode JWT header+payload (NO signature check)
     .semver <a> <b>         compare two semantic versions
@@ -54,14 +54,14 @@ def _jwt(arg: str) -> str:
         return "usage: .jwt <token>"
     parts = token.split(".")
     if len(parts) < 2:
-        return "invalid JWT — expected header.payload.signature"
+        return "invalid JWT - expected header.payload.signature"
     try:
         header = json.loads(_b64url_decode(parts[0]).decode("utf-8"))
         payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
     except (binascii.Error, ValueError, UnicodeDecodeError):
-        return "invalid JWT — header/payload not base64url JSON"
+        return "invalid JWT - header/payload not base64url JSON"
     if not isinstance(header, dict) or not isinstance(payload, dict):
-        return "invalid JWT — header/payload not JSON objects"
+        return "invalid JWT - header/payload not JSON objects"
     alg = header.get("alg", "?")
     bits = [f"alg={alg}"]
     if header.get("typ"):
@@ -130,7 +130,7 @@ def _semver(a: str, b: str) -> str:
         pa = _semver_parse(a)
         pb = _semver_parse(b)
     except (ValueError, TypeError):
-        return "invalid semver — try 1.2.3 / 1.0.0-rc.1 / 2.0.0+build"
+        return "invalid semver - try 1.2.3 / 1.0.0-rc.1 / 2.0.0+build"
     c = _semver_cmp(pa, pb)
     sym = "<" if c < 0 else ("=" if c == 0 else ">")
     return f"{strip_ctrl(a.strip(), 60)} {sym} {strip_ctrl(b.strip(), 60)}"
@@ -191,7 +191,7 @@ def _parse_clock(s: str, zone: ZoneInfo) -> _dt.datetime:
         return dt
     except ValueError:
         pass
-    # bare clock time HH:MM or HH:MM:SS — anchor to a fixed reference date
+    # bare clock time HH:MM or HH:MM:SS - anchor to a fixed reference date
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
             t = _dt.datetime.strptime(s, fmt).time()
@@ -213,7 +213,7 @@ def _tz(time_s: str, from_z: str, to_z: str) -> str:
     try:
         dt = _parse_clock(time_s, src)
     except ValueError:
-        return "bad time — try 15:00 or 2026-01-02T15:00"
+        return "bad time - try 15:00 or 2026-01-02T15:00"
     out = dt.astimezone(dst)
     return (f"{dt.strftime('%Y-%m-%d %H:%M')} {from_z.strip()} = "
             f"{out.strftime('%Y-%m-%d %H:%M %Z')} ({to_z.strip()})")
@@ -325,7 +325,7 @@ def _color(arg: str) -> str:
     try:
         r, g, b = _parse_color(arg)
     except (ValueError, IndexError):
-        return "bad color — try #ff8800, rgb(255,136,0), hsl(32,100%,50%)"
+        return "bad color - try #ff8800, rgb(255,136,0), hsl(32,100%,50%)"
     hx = f"#{r:02x}{g:02x}{b:02x}"
     h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
     hsl = f"hsl({round(h * 360)},{round(s * 100)}%,{round(l * 100)}%)"
@@ -429,7 +429,7 @@ def _cron(expr: str, now: _dt.datetime) -> str:
     try:
         sets = [_cron_field(fields[i], *_CRON_BOUNDS[i]) for i in range(5)]
     except (ValueError, IndexError):
-        return "invalid cron — check field ranges/syntax"
+        return "invalid cron - check field ranges/syntax"
     if now.tzinfo is None:
         now = now.replace(tzinfo=_dt.timezone.utc)
     explain = _cron_explain(fields)
@@ -473,7 +473,7 @@ class DevtoolsModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

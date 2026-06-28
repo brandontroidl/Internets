@@ -7,7 +7,7 @@ Each provider maintains:
     - health_score  : composite score (0.0–1.0) used by the dispatcher
 
 The dispatcher prefers providers with higher health_score values.
-Scores recover over time — a temporary outage doesn't permanently
+Scores recover over time - a temporary outage doesn't permanently
 penalize a provider, and a rate-limit storm also fades on its own.
 """
 
@@ -32,7 +32,7 @@ _W_RATELIMIT = 0.10
 # Latency above this (seconds) gets 0 points in the latency component.
 _LATENCY_CAP = 10.0
 # Failures are penalised with a synthetic latency cost so a provider
-# that keeps timing out gets dinged on the latency axis too — without
+# that keeps timing out gets dinged on the latency axis too - without
 # this, a provider that returns 500s in 50ms looks "fast".
 _FAILURE_LATENCY = _LATENCY_CAP  # i.e. zero latency-component points
 
@@ -44,7 +44,7 @@ _RATELIMIT_CAP = 5
 # isn't permanently locked out by a transient quota burst.
 _RATELIMIT_HALFLIFE = 300.0
 
-# Cold-start default — what new providers score before they have data.
+# Cold-start default - what new providers score before they have data.
 _COLD_DEFAULT = 0.90
 
 # Minimum calls before health score is fully "live" (i.e. ignores the
@@ -58,17 +58,17 @@ _MIN_SAMPLES = 3
 # until a cooldown elapses, then probed once.
 #
 # State machine:
-#   closed  — normal operation.  Failures accumulate in a rolling window.
-#   open    — N consecutive failures within W seconds → open.  All calls
+#   closed  - normal operation.  Failures accumulate in a rolling window.
+#   open    - N consecutive failures within W seconds → open.  All calls
 #             refused (health_score==0.0) for COOLDOWN seconds.
-#   half_open — after cooldown, allow exactly one probe.  Success → closed;
+#   half_open - after cooldown, allow exactly one probe.  Success → closed;
 #               failure → re-open.
 #
 # Tuning: defaults are conservative for the bot's typical "1 call per
 # user request" pattern.  Tune via the dataclass constructor if needed.
 _CB_THRESHOLD = 5        # consecutive failures to trip the breaker
-_CB_WINDOW = 60.0        # seconds — failures must be within this span
-_CB_COOLDOWN = 60.0      # seconds — refuse calls for this long after open
+_CB_WINDOW = 60.0        # seconds - failures must be within this span
+_CB_COOLDOWN = 60.0      # seconds - refuse calls for this long after open
 
 # Circuit-breaker states.
 _CB_CLOSED = "closed"
@@ -99,7 +99,7 @@ class ProviderHealth:
     last_failure: float = 0.0
     # ── circuit-breaker state ───────────────────────────────────────
     # See module-level constants for the state machine.  The breaker
-    # is *additive* to the EMA health score — it doesn't replace the
+    # is *additive* to the EMA health score - it doesn't replace the
     # score, it overrides ``health_score`` to 0.0 while ``open`` and
     # exposes ``is_callable()`` for the dispatcher to gate calls.
     cb_state: str = _CB_CLOSED
@@ -116,7 +116,7 @@ class ProviderHealth:
     def _decayed_rate_limit(self, now: float | None = None) -> float:
         """Return the rate-limit counter after applying time-decay.
 
-        Pure read — does *not* mutate state.  Mutation happens lazily
+        Pure read - does *not* mutate state.  Mutation happens lazily
         on the next record_*() call (see ``_decay_rate_limit_locked``).
         """
         if self.rate_limit_count <= 0:
@@ -149,14 +149,14 @@ class ProviderHealth:
         dead until the cooldown expires.
         """
         # Cheap, lock-free read.  A concurrent state transition may
-        # produce a stale answer for one call — that's acceptable: the
+        # produce a stale answer for one call - that's acceptable: the
         # breaker is a coarse guardrail, not a strict consensus.
         if self.cb_state == _CB_OPEN:
             # Auto-advance to half_open if cooldown has elapsed so
             # consumers polling health_score don't see a stuck zero.
             if (time.time() - self.cb_opened_at) < self.cb_cooldown:
                 return 0.0
-            # Cooldown expired — fall through and report the live
+            # Cooldown expired - fall through and report the live
             # score.  The transition to half_open happens lazily in
             # is_callable() / record_*() under the lock.
 
@@ -201,7 +201,7 @@ class ProviderHealth:
             now = time.time()
             if self.cb_state == _CB_OPEN:
                 if (now - self.cb_opened_at) >= self.cb_cooldown:
-                    # Cooldown elapsed — release a probe.
+                    # Cooldown elapsed - release a probe.
                     self.cb_state = _CB_HALF_OPEN
                     log.info("circuit_breaker[%s]: open → half_open "
                              "(cooldown elapsed, releasing probe)",
@@ -210,7 +210,7 @@ class ProviderHealth:
                 return False
             # closed or half_open: callable.  Note in half_open the
             # caller is expected to make exactly one probe; further
-            # callers will still see ``True`` here — the breaker is
+            # callers will still see ``True`` here - the breaker is
             # not a strict semaphore, it's a coarse guardrail.
             return True
 
@@ -238,7 +238,7 @@ class ProviderHealth:
             self.cb_opened_at = now
             return
         if self.cb_state == _CB_OPEN:
-            # Already open — just refresh the timestamp so a flood of
+            # Already open - just refresh the timestamp so a flood of
             # failures during cooldown doesn't accidentally let the
             # next probe through earlier than intended.  (No-op here:
             # we intentionally keep cb_opened_at fixed so the cooldown
@@ -277,14 +277,14 @@ class ProviderHealth:
             self._decay_rate_limit_locked(now)
             if self.rate_limit_count > 0:
                 self.rate_limit_count = max(0.0, self.rate_limit_count - 1.0)
-            # Circuit breaker — success closes half_open, resets streak.
+            # Circuit breaker - success closes half_open, resets streak.
             self._cb_on_success_locked(now)
 
     def record_failure(self, rate_limited: bool = False) -> None:
         """Record a failed API call.
 
         Penalises the latency EMA too: a provider that fails (timeout,
-        500, oversize body) is implicitly *slow* — without this it
+        500, oversize body) is implicitly *slow* - without this it
         could keep a deceptively-low avg_latency and out-rank healthier
         peers on the latency axis.
         """
@@ -300,7 +300,7 @@ class ProviderHealth:
             if rate_limited:
                 self.rate_limit_count += 1.0
                 self.rate_limit_last_ts = now
-            # Circuit breaker — may trip closed → open or half_open → open.
+            # Circuit breaker - may trip closed → open or half_open → open.
             self._cb_on_failure_locked(now)
 
     def mark_auth_failure(self) -> None:
@@ -316,7 +316,7 @@ class ProviderHealth:
             now = time.time()
             if self.cb_state != _CB_OPEN:
                 log.error(
-                    "provider[%s]: auth/permission error (401/403) — opening "
+                    "provider[%s]: auth/permission error (401/403) - opening "
                     "circuit (check the API key/entitlement); re-probes after "
                     "%.0fs", self.provider_id, self.cb_cooldown)
             self.cb_state = _CB_OPEN
@@ -362,5 +362,5 @@ class HealthRegistry:
         return "\n".join(h.summary() for h in entries)
 
 
-# Global singleton — shared by all dispatcher calls.
+# Global singleton - shared by all dispatcher calls.
 health_registry = HealthRegistry()

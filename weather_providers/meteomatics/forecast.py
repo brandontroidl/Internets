@@ -1,4 +1,4 @@
-"""Meteomatics — daily forecast."""
+"""Meteomatics - daily forecast."""
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from .._http import get_json

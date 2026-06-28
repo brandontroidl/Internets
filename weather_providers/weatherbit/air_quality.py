@@ -1,4 +1,4 @@
-"""WeatherBit.io — air quality (current conditions)."""
+"""WeatherBit.io - air quality (current conditions)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AirQualityResult, aqi_category

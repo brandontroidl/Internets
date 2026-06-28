@@ -1,4 +1,4 @@
-"""Stormglass.io provider package — marine weather specialist.
+"""Stormglass.io provider package - marine weather specialist.
 https://docs.stormglass.io/
 Free tier: 10 requests/day. Best-in-class marine data.
 Wave height, swell, water temperature, tides.

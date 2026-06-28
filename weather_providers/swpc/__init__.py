@@ -1,4 +1,4 @@
-"""NOAA SWPC provider package — space-weather (geomagnetic activity, aurora).
+"""NOAA SWPC provider package - space-weather (geomagnetic activity, aurora).
 
 https://services.swpc.noaa.gov/
 

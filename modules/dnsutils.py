@@ -1,4 +1,4 @@
-"""DNS / RDAP utilities — keyless, over HTTPS.
+"""DNS / RDAP utilities - keyless, over HTTPS.
 
     .dns <host> [type]   A/AAAA/MX/TXT/NS/CNAME (default A) via Cloudflare DoH
     .rdns <ip>           reverse PTR lookup (in-addr.arpa / ip6.arpa)
@@ -20,7 +20,7 @@ from .base import BotModule, ResponseTooLarge, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.dnsutils")
 
-# Conservative hostname / domain charset — letters, digits, dot, hyphen,
+# Conservative hostname / domain charset - letters, digits, dot, hyphen,
 # underscore (for _dmarc / _domainkey style names).  Reject anything else
 # before it ever hits the wire.
 _HOST_RE = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
@@ -88,7 +88,7 @@ def _dns_sync(host: str, rrtype: str, ua: str) -> str:
     if not _HOST_RE.match(host):
         return "invalid host"
     if rrtype not in _TYPES:
-        return f"unknown type '{strip_ctrl(rrtype, 16)}' — try A/AAAA/MX/TXT/NS/CNAME"
+        return f"unknown type '{strip_ctrl(rrtype, 16)}' - try A/AAAA/MX/TXT/NS/CNAME"
     try:
         data = _doh(host, rrtype, ua)
         status = data.get("Status") if isinstance(data, dict) else None
@@ -143,7 +143,7 @@ def _spf_dmarc(host: str, ua: str) -> list[str]:
         spf = next((t for t in txt if "v=spf1" in t.lower()), None)
         if spf:
             out.append(f"SPF: {spf}")
-    except Exception as e:  # noqa: BLE001 — best-effort, never fatal
+    except Exception as e:  # noqa: BLE001 - best-effort, never fatal
         log.warning(f".caa spf {host}: {e}")
     try:
         dm = _answers(_doh(f"_dmarc.{host}", "TXT", ua), "TXT")
@@ -319,7 +319,7 @@ def _asn_sync(target: str, ua: str) -> str:
 
 
 class DnsutilsModule(BotModule):
-    """`.dns` / `.rdns` / `.caa` / `.whois` / `.asn` — DNS & RDAP lookups."""
+    """`.dns` / `.rdns` / `.caa` / `.whois` / `.asn` - DNS & RDAP lookups."""
 
     COMMANDS: dict[str, str] = {
         "dns": "cmd_dns",
@@ -339,7 +339,7 @@ class DnsutilsModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -407,5 +407,5 @@ class DnsutilsModule(BotModule):
 
 
 def setup(bot: object) -> DnsutilsModule:
-    """Module entry point — returns a DnsutilsModule instance."""
+    """Module entry point - returns a DnsutilsModule instance."""
     return DnsutilsModule(bot)  # type: ignore[arg-type]

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import secret_store
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
 
 
 def _secret_or_cfg(secret_name: str, section: str, key: str, default: str = "") -> str:
@@ -47,11 +47,11 @@ def reload_config() -> list[str]:
     file being re-read.  Re-reading config.ini alone (which carries
     empty placeholders for password_hash, etc.)
     silently clobbers values that were only set in config.local.ini.
-    Every reload path — startup, SIGHUP, cmd_rehash, get_hash —
+    Every reload path - startup, SIGHUP, cmd_rehash, get_hash -
     must go through here so the overlay stays intact.
 
     Reads are pinned to UTF-8: the committed config.ini.example uses
-    em-dashes and box-drawing characters in its section headers, and
+    box-drawing characters in its section headers, and
     ``configparser.read()`` otherwise falls back to the platform locale
     (cp1252 on Windows), which raises UnicodeDecodeError on the very
     first non-ASCII byte.
@@ -104,7 +104,7 @@ FLOOD_CD    = max(1, int(cfg["bot"].get("flood_cooldown", "3")))
 MODULES_DIR = Path(cfg["bot"].get("modules_dir", "modules"))
 AUTO_LOAD   = [m.strip() for m in cfg["bot"].get("autoload", "").split(",") if m.strip()]
 
-# All optional — the bot works fine if the server supports none of these.
+# All optional - the bot works fine if the server supports none of these.
 DESIRED_CAPS: set[str] = {
     "multi-prefix", "away-notify", "account-notify", "chghost",
     "extended-join", "server-time", "message-tags", "sasl",
@@ -113,7 +113,7 @@ DESIRED_CAPS: set[str] = {
 # ── CLI ──────────────────────────────────────────────────────────────
 
 _cli = argparse.ArgumentParser(
-    description="Internets — async modular IRC bot",
+    description="Internets - async modular IRC bot",
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog="""\
 debug examples:

@@ -1,4 +1,4 @@
-"""NOAA SWPC — geomagnetic activity (planetary Kp) and aurora probability."""
+"""NOAA SWPC - geomagnetic activity (planetary Kp) and aurora probability."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import SpaceWeatherResult, kp_category
@@ -38,7 +38,7 @@ def _aurora_pct(data, lat, lon) -> float | None:
         if not isinstance(entry, (list, tuple)) or len(entry) < 3:
             continue
         g_lon, g_lat, pct = entry[0], entry[1], entry[2]
-        # squared planar distance on the integer grid — fine for nearest-cell
+        # squared planar distance on the integer grid - fine for nearest-cell
         dist = (g_lon - target_lon) ** 2 + (g_lat - target_lat) ** 2
         if best_dist is None or dist < best_dist:
             best_dist, best = dist, pct
@@ -60,7 +60,7 @@ async def fetch(lat, lon, location):
     try:
         aurora = await get_json(_AURORA_URL, max_bytes=2_000_000)
     except HTTPError:
-        # If both products failed there's nothing to report — fall through.
+        # If both products failed there's nothing to report - fall through.
         if kp_failed:
             raise HTTPError("NOAA SWPC: space-weather data unavailable",
                             status=None, provider_hint="swpc")

@@ -1,4 +1,4 @@
-"""Stormglass.io — marine weather (waves, swell, water temperature)."""
+"""Stormglass.io - marine weather (waves, swell, water temperature)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import MarineResult

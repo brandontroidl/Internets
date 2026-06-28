@@ -114,7 +114,7 @@ def resolve_safe_ip(host: str) -> str | None:
 
 
 def url_is_safe(url: str) -> bool:
-    """Scheme (http/https) + host validation for one URL — a pre-flight check
+    """Scheme (http/https) + host validation for one URL - a pre-flight check
     for handing a user-supplied URL to a third party (e.g. a shortener)."""
     try:
         p = urlparse(url)

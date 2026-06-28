@@ -1,7 +1,7 @@
 """Tests for modules/astro2.py.
 
 Network helpers (_fetch_solar, _fetch_neo, _fetch_launches) are exercised
-by monkeypatching the module-level ``fetch_json`` with canned responses —
+by monkeypatching the module-level ``fetch_json`` with canned responses -
 no real network is hit.  Pure helpers (moon_phase / _moon, sky_lookup) are
 tested directly.
 """

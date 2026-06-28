@@ -1,4 +1,4 @@
-"""Tests for secret_store.py — two-tier env/file secret backend.
+"""Tests for secret_store.py - two-tier env/file secret backend.
 
 These tests never touch the real config.ini.  Each test that exercises
 the file backend monkey-patches ``secret_store.SECRETS_FILE`` to a temp
@@ -82,7 +82,7 @@ class TestFileBackend:
         assert secret_store.get("omdb_key") == ""
 
     def test_delete_missing_returns_empty(self, temp_secrets):
-        # Nothing stored — should not raise, returns empty list.
+        # Nothing stored - should not raise, returns empty list.
         assert secret_store.delete("nothing") == []
 
 # ── Placeholder filter (the bot must never return a template value) ─────
@@ -143,7 +143,7 @@ class TestEnvLookup:
 class TestSecretsSectionMidFile:
     """The text-based editor must edit a [secrets] section that is not the
     first/only section without corrupting neighbours or duplicating the
-    header — config.ini holds [irc], [bot], … then [secrets] at the end."""
+    header - config.ini holds [irc], [bot], … then [secrets] at the end."""
 
     @staticmethod
     def _write(path, text):
@@ -206,7 +206,7 @@ class TestFailClosed:
     def test_get_refuses_world_readable_file(
         self, temp_secrets, monkeypatch
     ):
-        # Plant a value with bad perms — get() must refuse to read it.
+        # Plant a value with bad perms - get() must refuse to read it.
         temp_secrets.write_text("[secrets]\nweatherapi_key = leaked\n")
         os.chmod(temp_secrets, 0o644)
         # Should fail closed and return default rather than the leaked value.
@@ -240,7 +240,7 @@ class TestMigrate:
     def test_migrate_moves_plaintext_into_secrets_section(
         self, temp_secrets, tmp_path, monkeypatch
     ):
-        # config.ini IS the destination now — plaintext in non-[secrets]
+        # config.ini IS the destination now - plaintext in non-[secrets]
         # sections moves into [secrets] within the same file, and the
         # original section gets blanked.
         cfg_path = temp_secrets

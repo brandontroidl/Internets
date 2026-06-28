@@ -1,8 +1,8 @@
-"""Weatherstack — current conditions."""
+"""Weatherstack - current conditions."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import WeatherResult
-# fix: was http:// — leaked access_key in plaintext query string.
+# fix: was http:// - leaked access_key in plaintext query string.
 _B = "https://api.weatherstack.com"
 
 
@@ -11,7 +11,7 @@ def _check_envelope(data, provider_hint="api.weatherstack.com"):
     on a 200 OK response.  Translate that into the usual HTTPError so the
     dispatcher sees it like any other upstream failure."""
     # fix: previously no detection of the {"success":false,"error":...}
-    # envelope — failures were silently treated as empty data.
+    # envelope - failures were silently treated as empty data.
     if isinstance(data, dict) and data.get("success") is False:
         err = data.get("error") or {}
         code = err.get("code")

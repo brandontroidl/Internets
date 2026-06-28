@@ -1,4 +1,4 @@
-"""MET Norway — precipitation nowcast (nowcast/2.0, Nordic radar only)."""
+"""MET Norway - precipitation nowcast (nowcast/2.0, Nordic radar only)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json, HTTPError

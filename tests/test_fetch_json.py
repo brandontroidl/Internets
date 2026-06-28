@@ -1,4 +1,4 @@
-"""Tests for modules.base.fetch_json — the shared HTTP size-cap helper.
+"""Tests for modules.base.fetch_json - the shared HTTP size-cap helper.
 
 fetch_json guards every outbound JSON call in the bot: it streams the
 response, caps the body at ``max_bytes``, and raises before parsing.
@@ -20,7 +20,7 @@ from modules.base import ResponseTooLarge, fetch_json
 # ── Fakes ────────────────────────────────────────────────────────────────
 
 class _FakeRaw:
-    """Stand-in for ``response.raw`` — read() returns at most ``amt`` bytes."""
+    """Stand-in for ``response.raw`` - read() returns at most ``amt`` bytes."""
 
     def __init__(self, data: bytes):
         self._data = data
@@ -30,7 +30,7 @@ class _FakeRaw:
 
 
 class _FakeResponse:
-    """Minimal ``requests.Response`` stand-in — and a context manager,
+    """Minimal ``requests.Response`` stand-in - and a context manager,
     since fetch_json uses ``with requests.get(...) as r``."""
 
     def __init__(self, *, status: int = 200, body: bytes = b"",
@@ -94,7 +94,7 @@ class TestNotFound:
             _call(_FakeResponse(status=404, body=b""))
 
     def test_500_always_raises_even_with_allow_404(self):
-        # allow_404 only short-circuits 404 — a 500 must still raise.
+        # allow_404 only short-circuits 404 - a 500 must still raise.
         with pytest.raises(requests.HTTPError):
             _call(_FakeResponse(status=500, body=b"", reason="Server Error"),
                   allow_404=True)
@@ -128,7 +128,7 @@ class TestRequestWiring:
         assert kwargs["stream"] is True
 
     def test_caller_headers_do_not_mutate_across_calls(self):
-        # A header dict is rebuilt per call — no cross-call leakage.
+        # A header dict is rebuilt per call - no cross-call leakage.
         resp = _FakeResponse(body=b'{"x": 1}')
         with mock.patch("requests.get", return_value=resp) as getter:
             fetch_json("https://example.test", ua="a/1")

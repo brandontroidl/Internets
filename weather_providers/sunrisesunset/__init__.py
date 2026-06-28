@@ -1,4 +1,4 @@
-"""SunriseSunset provider package — sun/moon astronomy.
+"""SunriseSunset provider package - sun/moon astronomy.
 
 https://sunrisesunset.io/api/
 Astronomy only.  No API key required.  Global coverage.

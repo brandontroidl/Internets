@@ -1,8 +1,8 @@
-"""AccuWeather — current conditions."""
+"""AccuWeather - current conditions."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult
-# fix: was http:// — leaked apikey in query string on the wire.
+# fix: was http:// - leaked apikey in query string on the wire.
 _B = "https://dataservice.accuweather.com"
 async def fetch(key, loc_key, location):
     data = await get_json(f"{_B}/currentconditions/v1/{loc_key}", params={"apikey": key, "details": "true"})

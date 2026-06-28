@@ -1,4 +1,4 @@
-"""Hacker News top-stories lookup — wraps the Firebase HN API.
+"""Hacker News top-stories lookup - wraps the Firebase HN API.
 
 No API key required.  Two-step:
   - GET /v0/topstories.json     → array of story IDs
@@ -60,7 +60,7 @@ def _fetch_sync(rank: int, ua: str) -> str:
 
 
 class HnModule(BotModule):
-    """`.hn [rank]` — top Hacker News story (rank 1–30, default 1)."""
+    """`.hn [rank]` - top Hacker News story (rank 1–30, default 1)."""
 
     COMMANDS: dict[str, str] = {"hn": "cmd_hn"}
 
@@ -74,7 +74,7 @@ class HnModule(BotModule):
 
     async def cmd_hn(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         rank = 1
         if arg and arg.strip():

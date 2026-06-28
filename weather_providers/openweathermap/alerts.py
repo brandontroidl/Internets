@@ -1,10 +1,10 @@
-"""OpenWeatherMap — alerts (requires OneCall 3.0 API)."""
+"""OpenWeatherMap - alerts (requires OneCall 3.0 API)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry
 _B = "https://api.openweathermap.org/data/3.0"
 
-# OWM doesn't expose a structured severity on the OneCall alert payload —
+# OWM doesn't expose a structured severity on the OneCall alert payload -
 # the only signal is the ``tags`` array (e.g. ["Extreme temperature value"])
 # and the event name itself. Map common keywords to our severity vocab.
 _SEVERITY_KEYWORDS = (

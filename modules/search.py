@@ -46,7 +46,7 @@ def _extract_ddg_url(href: str) -> str:
 def _ddg_web(query: str, ua: str) -> str:
     """Search DuckDuckGo via the HTML lite endpoint (no API key needed)."""
     try:
-        # `with` releases the socket on every exit path — a stream=True
+        # `with` releases the socket on every exit path - a stream=True
         # response left unclosed leaks the connection / FD.
         with requests.post(
             "https://html.duckduckgo.com/html/",
@@ -78,7 +78,7 @@ def _ddg_web(query: str, ua: str) -> str:
         if len(desc) > 200:
             desc = desc[:197] + "..."
         return (
-            f"[DuckDuckGo] \x02{title}\x02 — {url}"
+            f"[DuckDuckGo] \x02{title}\x02 - {url}"
             + (f" | {desc}" if desc else "")
         )
     except Exception as e:
@@ -108,7 +108,7 @@ def _brave_web(query: str, key: str, ua: str) -> str:
         desc = _strip(top.get("description", ""))
         if len(desc) > 200:
             desc = desc[:197] + "..."
-        return f"[Brave] \x02{title}\x02 — {url}" + (f" | {desc}" if desc else "")
+        return f"[Brave] \x02{title}\x02 - {url}" + (f" | {desc}" if desc else "")
     except Exception as e:
         log.debug(f"Brave web: {e}")
         raise
@@ -133,7 +133,7 @@ def _brave_image(query: str, key: str, ua: str) -> str:
         url = strip_ctrl(top.get("url", top.get("source", "")))
         w = top.get("properties", {}).get("width", "?")
         h = top.get("properties", {}).get("height", "?")
-        return f"[Brave Image] \x02{title}\x02 — {url} | {w}x{h}px"
+        return f"[Brave Image] \x02{title}\x02 - {url} | {w}x{h}px"
     except Exception as e:
         log.debug(f"Brave image: {e}")
         raise
@@ -152,7 +152,7 @@ def _web_sync(query: str, brave_key: str, ua: str) -> str:
         try:
             return _brave_web(query, brave_key, ua)
         except Exception as e:
-            log.warning("search: Brave web failed (%s) — falling back to DuckDuckGo",
+            log.warning("search: Brave web failed (%s) - falling back to DuckDuckGo",
                         type(e).__name__)
     try:
         return _ddg_web(query, ua)
@@ -162,9 +162,9 @@ def _web_sync(query: str, brave_key: str, ua: str) -> str:
 
 
 def _image_sync(query: str, brave_key: str, ua: str) -> str:
-    """Image search — requires a Brave API key."""
+    """Image search - requires a Brave API key."""
     if not brave_key:
-        return "image search requires a Brave API key — see [search] in config.ini"
+        return "image search requires a Brave API key - see [search] in config.ini"
     try:
         return _brave_image(query, brave_key, ua)
     except Exception as e:
@@ -199,7 +199,7 @@ class SearchModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}sw <query>  e.g. {p}sw python asyncio")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_web_sync, arg.strip(), self._brave_key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -211,7 +211,7 @@ class SearchModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}si <query>  e.g. {p}si sunset beach")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_image_sync, arg.strip(), self._brave_key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -224,5 +224,5 @@ class SearchModule(BotModule):
 
 
 def setup(bot: object) -> SearchModule:
-    """Module entry point — returns a SearchModule instance."""
+    """Module entry point - returns a SearchModule instance."""
     return SearchModule(bot)  # type: ignore[arg-type]

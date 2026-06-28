@@ -1,4 +1,4 @@
-"""Visual Crossing — current conditions.
+"""Visual Crossing - current conditions.
 
 https://www.visualcrossing.com/resources/documentation/weather-api/timeline-weather-api/
 """

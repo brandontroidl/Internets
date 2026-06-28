@@ -1,4 +1,4 @@
-"""GitHub repository info — keyless (unauthenticated, 60 req/hr).
+"""GitHub repository info - keyless (unauthenticated, 60 req/hr).
 
     .gh <owner/repo>   stars / forks / open issues / language / license / last push
 """
@@ -15,11 +15,11 @@ _MAX_INPUT = 120
 
 
 def _fetch_sync(repo: str, ua: str) -> str:
-    """Blocking GitHub repo lookup — run via asyncio.to_thread.
+    """Blocking GitHub repo lookup - run via asyncio.to_thread.
 
     Hits the public, unauthenticated REST API (60 req/hr, no key).
     GitHub requires a User-Agent header.  Returns a friendly one-line
-    string on every failure path — never raises to the caller.
+    string on every failure path - never raises to the caller.
     """
     repo = repo.strip().strip("/")
     if repo.count("/") != 1 or not all(repo.split("/")):
@@ -65,7 +65,7 @@ def _fetch_sync(repo: str, ua: str) -> str:
 
 
 class GhinfoModule(BotModule):
-    """`.gh <owner/repo>` — public GitHub repository info (keyless)."""
+    """`.gh <owner/repo>` - public GitHub repository info (keyless)."""
 
     COMMANDS: dict[str, str] = {"gh": "cmd_gh"}
 
@@ -79,7 +79,7 @@ class GhinfoModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -101,5 +101,5 @@ class GhinfoModule(BotModule):
 
 
 def setup(bot: object) -> GhinfoModule:
-    """Module entry point — returns a GhinfoModule instance."""
+    """Module entry point - returns a GhinfoModule instance."""
     return GhinfoModule(bot)  # type: ignore[arg-type]

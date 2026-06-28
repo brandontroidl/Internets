@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from defusedxml import ElementTree  # XML from a 3rd-party HTTP endpoint — defuse XXE/billion-laughs.
+from defusedxml import ElementTree  # XML from a 3rd-party HTTP endpoint - defuse XXE/billion-laughs.
 
 import requests
 from .base import BotModule, help_row, strip_ctrl
@@ -17,9 +17,9 @@ _MAX_BODY_BYTES = 256 * 1024
 
 
 def _lookup_sync(player: str, base_url: str, ua: str) -> str:
-    """Blocking IdleRPG lookup — run via asyncio.to_thread."""
+    """Blocking IdleRPG lookup - run via asyncio.to_thread."""
     try:
-        # `with` releases the socket on every exit path — a stream=True
+        # `with` releases the socket on every exit path - a stream=True
         # response left unclosed leaks the connection / FD.
         with requests.get(
             base_url,
@@ -29,7 +29,7 @@ def _lookup_sync(player: str, base_url: str, ua: str) -> str:
             stream=True,
         ) as r:
             r.raise_for_status()
-            # Cap the body before buffering all of it into RAM — defusedxml
+            # Cap the body before buffering all of it into RAM - defusedxml
             # protects against XML attacks during parsing, but the raw
             # response still has to be read first.
             body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
@@ -42,7 +42,7 @@ def _lookup_sync(player: str, base_url: str, ua: str) -> str:
 
         root = ElementTree.fromstring(text)
         # username/class are third-party XML fields spliced into a formatted
-        # IRC line — strip the full control range (the pre-parse loop above
+        # IRC line - strip the full control range (the pre-parse loop above
         # only drops 4 formatting codes, not CR/LF/ESC/etc).
         name = strip_ctrl(root.findtext("username", ""))
         if not name:
@@ -89,7 +89,7 @@ class IdlerpgModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}irpg <player>  (names are case sensitive)")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(
             _lookup_sync, arg.strip().split()[0], self._url, self._ua
@@ -101,5 +101,5 @@ class IdlerpgModule(BotModule):
 
 
 def setup(bot: object) -> IdlerpgModule:
-    """Module entry point — returns an IdlerpgModule instance."""
+    """Module entry point - returns an IdlerpgModule instance."""
     return IdlerpgModule(bot)  # type: ignore[arg-type]

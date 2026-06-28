@@ -1,6 +1,6 @@
 """Prometheus text-format metrics registry and optional HTTP exporter.
 
-Disabled by default — instantiating the module-level ``registry`` only
+Disabled by default - instantiating the module-level ``registry`` only
 costs a couple of dicts.  To start the exporter, *someone* must call
 ``registry.enable()`` (no-op if already enabled) and then
 ``registry.expose(host, port)``.  Until then this module imposes zero
@@ -17,7 +17,7 @@ Design choices:
   * Renderer emits canonical Prometheus exposition format: HELP, TYPE,
     then one line per labeled sample.
   * HTTP exporter binds **127.0.0.1 only** by default.  Binding to
-    0.0.0.0 is rejected explicitly — this is an internal endpoint and
+    0.0.0.0 is rejected explicitly - this is an internal endpoint and
     must not be exposed off-host without an explicit reverse proxy.
 """
 
@@ -261,10 +261,10 @@ class MetricsRegistry:
         a server already running is a no-op.
         """
         if not self._enabled:
-            log.info("metrics.expose: refused — registry not enabled "
+            log.info("metrics.expose: refused - registry not enabled "
                      "(call registry.enable() first)")
             return
-        # Defensive REFUSAL of all-interfaces binds — these literals appear
+        # Defensive REFUSAL of all-interfaces binds - these literals appear
         # as a guard, never as a target.  Bandit B104 grep-matches the
         # strings regardless of context (false positive); suppress it here.
         # Reject any all-interfaces bind, including the IPv6 / whitespace forms
@@ -288,7 +288,7 @@ class MetricsRegistry:
                 return
             registry = self
             class _Handler(BaseHTTPRequestHandler):
-                # Quiet the default access log — uses stderr otherwise.
+                # Quiet the default access log - uses stderr otherwise.
                 def log_message(self, format: str, *args: object) -> None:
                     log.debug("metrics http: " + format, *args)
 
@@ -345,7 +345,7 @@ def _format_value(v: float) -> str:
     """Render numbers compactly but Prometheus-compatible."""
     # Integers as plain digits, floats with enough precision.
     if isinstance(v, bool):
-        # Defensive — bool is an int subclass; render as 0/1.
+        # Defensive - bool is an int subclass; render as 0/1.
         return "1" if v else "0"
     if float(v).is_integer():
         return str(int(v))
@@ -357,6 +357,6 @@ registry = MetricsRegistry()
 
 
 def enabled_metrics() -> Iterable[str]:
-    """Return registered metric names — handy for tests / introspection."""
+    """Return registered metric names - handy for tests / introspection."""
     with registry._lock:  # noqa: SLF001 (intentional test/inspection accessor)
         return list(registry._metrics)

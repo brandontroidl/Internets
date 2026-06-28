@@ -1,12 +1,12 @@
-"""Number facts — local math + Wikipedia REST for trivia/date/year.
+"""Number facts - local math + Wikipedia REST for trivia/date/year.
 
 numbersapi.com was sold off in 2025 (now 301-redirects to a publisher
 domain that 404s), so this module replaces it with a hybrid:
 
-* ``math``   — computed locally (no network)
-* ``trivia`` — Wikipedia article ``<n>_(number)`` summary
-* ``date``   — Wikipedia ``feed/onthisday/events/MM/DD``
-* ``year``   — Wikipedia ``page/summary/<year>`` summary
+* ``math``   - computed locally (no network)
+* ``trivia`` - Wikipedia article ``<n>_(number)`` summary
+* ``date``   - Wikipedia ``feed/onthisday/events/MM/DD``
+* ``year``   - Wikipedia ``page/summary/<year>`` summary
 
 ``random`` is accepted in place of a number for any type.  When the
 remote summary is just the boilerplate "N is the natural number
@@ -40,10 +40,10 @@ _WIKI_ONTHISDAY = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/events/{m
 _TYPES = {"trivia", "math", "date", "year"}
 # Upper bound on a user-supplied number.  math_fact() runs O(√n) trial
 # division (primality, factorization, divisor count); without a ceiling
-# a 19-digit input burns ~90 s of CPU on a to_thread worker — a trivial
+# a 19-digit input burns ~90 s of CPU on a to_thread worker - a trivial
 # DoS.  10^12 keeps every path's √n ≤ 10^6 iterations (sub-millisecond).
 _MAX_ABS_N = 10 ** 12
-# Wikipedia's on-this-day endpoint returns large blobs — May 20 alone is
+# Wikipedia's on-this-day endpoint returns large blobs - May 20 alone is
 # ~1.5 MB.  Cap generously; trivia/year summaries are tiny so a single
 # global ceiling is fine.
 _MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -53,7 +53,7 @@ _MONTHS = [
 ]
 # Wikipedia boilerplate we want to ignore: "12 (twelve) is the natural
 # number following 11 and preceding 13."  If that's *all* there is in the
-# extract, there's nothing interesting to share — fall back to math_fact.
+# extract, there's nothing interesting to share - fall back to math_fact.
 _BOILERPLATE_RE = re.compile(
     r"^\d+\s*\([^)]+\)\s+is\s+the\s+natural\s+number\s+following\s+\d+\s+and\s+preceding\s+\d+\.\s*$"
 )
@@ -210,7 +210,7 @@ def _divisor_count(n: int) -> int:
 
 def math_fact(n: int) -> str:
     """Return one interesting math fact about ``n`` as a sentence ending with '.'."""
-    # Special cases first — they're the most distinctive
+    # Special cases first - they're the most distinctive
     if n == 0:
         return "0 is the additive identity and the only integer that is neither positive nor negative."
     if n == 1:
@@ -218,7 +218,7 @@ def math_fact(n: int) -> str:
     if n == -1:
         return "-1 is the only integer whose multiplicative inverse is itself (other than 1)."
     if n < 0:
-        # Negatives don't fit most of the predicates below — fall back to a
+        # Negatives don't fit most of the predicates below - fall back to a
         # short sentence rooted in |n|'s properties.
         pos = abs(n)
         bits: list[str] = []
@@ -234,7 +234,7 @@ def math_fact(n: int) -> str:
     # Identify every applicable property, then pick the most distinctive one.
     # Order matters: rarer / more interesting facts win.  A few targeted ties
     # are broken by magnitude (e.g. high powers of two beat their "happens
-    # to also be a square" framing — 1024 reads better as 2^10 than as 32²).
+    # to also be a square" framing - 1024 reads better as 2^10 than as 32²).
     is_prime = _is_prime(n)
     is_square = n >= 4 and _is_perfect_square(n)
     is_cube = n >= 8 and _is_perfect_cube(n)
@@ -282,7 +282,7 @@ def math_fact(n: int) -> str:
         e = _power_exponent(n, 10)
         return f"{n} is a power of ten: 10^{e} = {n}."
 
-    # Fallback — composite, nothing fancy.  Show a short factorization, plus
+    # Fallback - composite, nothing fancy.  Show a short factorization, plus
     # divisor count for tiny extra colour.
     pf = _prime_factorization(n)
     dc = _divisor_count(n)
@@ -292,7 +292,7 @@ def math_fact(n: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Wikipedia REST helpers (blocking — call via asyncio.to_thread)
+# Wikipedia REST helpers (blocking - call via asyncio.to_thread)
 # ---------------------------------------------------------------------------
 
 def _read_capped(r: requests.Response) -> bytes | None:
@@ -424,7 +424,7 @@ def _random_date() -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 
 class NumberfactModule(BotModule):
-    """`.numberfact <n|random|MM/DD> [type]` — number trivia/math/date/year."""
+    """`.numberfact <n|random|MM/DD> [type]` - number trivia/math/date/year."""
 
     COMMANDS: dict[str, str] = {"numberfact": "cmd_numberfact", "nf": "cmd_numberfact"}
 
@@ -438,7 +438,7 @@ class NumberfactModule(BotModule):
 
     async def cmd_numberfact(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         q_raw = "random"

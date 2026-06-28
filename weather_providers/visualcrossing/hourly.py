@@ -1,4 +1,4 @@
-"""Visual Crossing — hourly forecast."""
+"""Visual Crossing - hourly forecast."""
 from __future__ import annotations
 import time
 from datetime import datetime

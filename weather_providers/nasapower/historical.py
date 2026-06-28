@@ -1,4 +1,4 @@
-"""NASA POWER — historical daily weather (global, no key)."""
+"""NASA POWER - historical daily weather (global, no key)."""
 from __future__ import annotations
 from datetime import datetime, timedelta
 from .._http import get_json, HTTPError

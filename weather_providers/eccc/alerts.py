@@ -1,4 +1,4 @@
-"""ECCC — weather alerts (Environment and Climate Change Canada)."""
+"""ECCC - weather alerts (Environment and Climate Change Canada)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry
@@ -24,13 +24,13 @@ async def fetch(lat, lon, location):
     alerts = []
     for f in data.get("features", []):
         p = (f or {}).get("properties") or {}
-        # Skip ended/cancelled entries — keep only active alerts.
+        # Skip ended/cancelled entries - keep only active alerts.
         if str(p.get("status_en", "")).lower() in ("ended", "cancelled", "canceled"):
             continue
         atype = str(p.get("alert_type", "")).lower()
         event = p.get("alert_name_en") or p.get("alert_short_name_en") or "Alert"
         area = p.get("feature_name_en") or ""
-        headline = f"{event} — {area}" if area else event
+        headline = f"{event} - {area}" if area else event
         alerts.append(AlertEntry(
             event=event,
             severity=_SEVERITY.get(atype, "unknown"),

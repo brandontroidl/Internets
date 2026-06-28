@@ -1,8 +1,8 @@
-"""AccuWeather — weather alerts."""
+"""AccuWeather - weather alerts."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry
-# fix: was http:// — leaked apikey in query string on the wire.
+# fix: was http:// - leaked apikey in query string on the wire.
 _B = "https://dataservice.accuweather.com"
 
 # AccuWeather's Priority field is an integer 1-5 (1 = most severe).
@@ -12,7 +12,7 @@ _PRIORITY_TO_SEVERITY = {
 }
 
 def _severity_from_priority(p) -> str:
-    # fix: previously called .lower() on a numeric Priority — TypeError
+    # fix: previously called .lower() on a numeric Priority - TypeError
     # crash. Coerce int, then map; fall back to "unknown" for None/junk.
     if p is None:
         return "unknown"

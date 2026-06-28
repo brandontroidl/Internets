@@ -1,4 +1,4 @@
-"""Open-Meteo — historical weather (ERA5 reanalysis, 1940-present)."""
+"""Open-Meteo - historical weather (ERA5 reanalysis, 1940-present)."""
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json

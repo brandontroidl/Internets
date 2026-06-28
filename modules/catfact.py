@@ -1,4 +1,4 @@
-"""Cat-fact command — wraps catfact.ninja.
+"""Cat-fact command - wraps catfact.ninja.
 
 No API key required.  JSON response shape:
     {"fact": "the fact text", "length": 44}
@@ -44,7 +44,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class CatfactModule(BotModule):
-    """`.catfact` / `.cat` — random cat fact."""
+    """`.catfact` / `.cat` - random cat fact."""
 
     COMMANDS: dict[str, str] = {"catfact": "cmd_catfact", "cat": "cmd_catfact"}
 
@@ -58,7 +58,7 @@ class CatfactModule(BotModule):
 
     async def cmd_catfact(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

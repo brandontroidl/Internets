@@ -1,10 +1,10 @@
-"""Weatherstack — forecast (paid plans only)."""
+"""Weatherstack - forecast (paid plans only)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
 from .current import _check_envelope
-# fix: was http:// — leaked access_key in plaintext query string.
+# fix: was http:// - leaked access_key in plaintext query string.
 _B = "https://api.weatherstack.com"
 async def fetch(key, lat, lon, location, days=4):
     data = await get_json(f"{_B}/forecast", params={"access_key": key, "query": f"{lat},{lon}", "units": "m", "forecast_days": min(days,7)})

@@ -40,11 +40,11 @@ _FLUSH_INTERVAL = 30  # seconds between periodic disk writes
 _USER_MAX_AGE_DAYS = 90  # prune user entries older than this
 
 # ── State-file schema versioning ─────────────────────────────────────
-# v1 (legacy): file is the bare payload — `{"alice": "ny", ...}` etc.
+# v1 (legacy): file is the bare payload - `{"alice": "ny", ...}` etc.
 # v2 (current): file is `{"schema": 2, "checksum": "<sha256>", "data": <payload>}`.
 #
 # On read, v2 files have their SHA-256 checksum validated.  A mismatch
-# means the file is corrupt or has been tampered with — we log a
+# means the file is corrupt or has been tampered with - we log a
 # warning and fall back to the default (empty) state rather than load
 # untrusted data into memory.
 #
@@ -204,7 +204,7 @@ class Store:
                 # Tighten perms BEFORE the atomic replace so the final
                 # file is never world-readable, even momentarily.
                 # locations.json holds user-supplied ZIPs, users.json
-                # holds nick+hostmask+timestamps (PII).  POSIX only —
+                # holds nick+hostmask+timestamps (PII).  POSIX only -
                 # Windows ACLs are the operator's responsibility.
                 if os.name != "nt":
                     try:
@@ -221,14 +221,14 @@ class Store:
                     except OSError as e:
                         log.warning(f"Store backup {p}: {e!r}")
                 os.replace(tmp_path, p)
-                tmp_path = None  # successfully renamed — nothing to clean up
+                tmp_path = None  # successfully renamed - nothing to clean up
                 return True
             finally:
                 if tmp_path is not None:
                     try:
                         tmp_path.unlink()
                     except OSError:
-                        pass  # best effort — may fail on Windows if locked
+                        pass  # best effort - may fail on Windows if locked
         except (OSError, TypeError, ValueError) as e:
             log.warning(f"Store save {path}: {e!r}")
             return False
@@ -440,7 +440,7 @@ class Store:
                     entry["opted_out"] = bool(value)
                     seen = True
             if not seen:
-                # No tracked record — create a sentinel one so the
+                # No tracked record - create a sentinel one so the
                 # preference survives a restart.
                 ch = self._users.setdefault("*", {})
                 ch[key] = {
@@ -466,11 +466,11 @@ class RateLimiter:
 
     Three independent windows:
 
-    * ``flood_check(nick, is_admin)`` — per-nick, fast (default 3s).
+    * ``flood_check(nick, is_admin)`` - per-nick, fast (default 3s).
       Admins bypass.  Catches a single user hammering the bot.
-    * ``api_check(nick)`` — per-nick, slower (default 10s).  Throttles
+    * ``api_check(nick)`` - per-nick, slower (default 10s).  Throttles
       the expensive paths (geocoding + weather APIs).
-    * ``channel_check(channel, threshold)`` — per-channel, sliding window
+    * ``channel_check(channel, threshold)`` - per-channel, sliding window
       across ALL users in that channel.  Catches coordinated floods
       where N different nicks each send 1 command/second.  Returns
       True when the channel has exceeded ``threshold`` commands in
@@ -479,7 +479,7 @@ class RateLimiter:
     Periodic ``_cleanup`` evicts stale entries from all three maps.
     """
     _CLEANUP_INTERVAL = 300
-    _CHANNEL_WINDOW = 10        # seconds — sliding window for channel rate
+    _CHANNEL_WINDOW = 10        # seconds - sliding window for channel rate
     _CHANNEL_DEFAULT_BURST = 20  # commands per window before throttling
 
     def __init__(self, flood_cd: int, api_cd: int) -> None:
@@ -537,13 +537,13 @@ class RateLimiter:
         """Return True if *channel* has exceeded the burst threshold.
 
         Defends against coordinated floods across distinct nicks
-        (per-nick flood/api limits don't catch those — N users each
+        (per-nick flood/api limits don't catch those - N users each
         sending 1 command/second can still saturate the bot).
         Defaults: ``_CHANNEL_DEFAULT_BURST`` commands per
         ``_CHANNEL_WINDOW`` seconds.
         """
         if not channel or not channel.startswith(("#", "&", "+", "!")):
-            return False  # not a channel (PM) — only per-nick limits apply
+            return False  # not a channel (PM) - only per-nick limits apply
         cap = threshold if threshold is not None else self._CHANNEL_DEFAULT_BURST
         now = time.time()
         k = channel.lower()
@@ -552,7 +552,7 @@ class RateLimiter:
             cutoff = now - self._CHANNEL_WINDOW
             recent = [t for t in self._channel.get(k, []) if t > cutoff]
             if len(recent) >= cap:
-                # Channel is over its budget — refuse but do NOT record
+                # Channel is over its budget - refuse but do NOT record
                 # the new attempt (so attackers can't keep the window
                 # full forever by spamming once the limit is hit).
                 self._channel[k] = recent

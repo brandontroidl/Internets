@@ -19,7 +19,7 @@ module, sketch the command name, arguments, and example IRC output.
 ## Alternatives considered
 
 Other approaches you thought about and why you did not pick them.
-"Status quo" is a valid alternative — say what is wrong with it.
+"Status quo" is a valid alternative - say what is wrong with it.
 
 ## Privacy and security implications
 

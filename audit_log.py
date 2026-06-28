@@ -7,7 +7,7 @@ This is intentionally separate from the main ``botlog`` stream.  Goals:
     chain.  Editing or removing any record breaks ``verify()`` from that
     point on.  The HMAC key lives in a 0600 sidecar (``audit.key``), so
     an attacker who obtains only a *copy* of ``audit.log`` (a backup, an
-    accidental commit) cannot recompute the chain to forge entries —
+    accidental commit) cannot recompute the chain to forge entries -
     plain SHA-256 (the pre-3.0.0 scheme) could be recomputed by anyone
     who knew the algorithm, which is in this file.
   * **Append-only on disk**: every ``record()`` opens the file in
@@ -21,7 +21,7 @@ This is intentionally separate from the main ``botlog`` stream.  Goals:
 
 Honest limitation: pure *tail* truncation by an attacker with write
 access to both ``audit.log`` and ``audit.key`` cannot be detected from
-the file alone — that needs an external append-only sink (remote
+the file alone - that needs an external append-only sink (remote
 syslog), which is out of scope for a single-host bot.  Editing,
 reordering, or deleting any non-tail record IS caught: it breaks the
 ``prev_hash`` link and the HMAC.
@@ -91,7 +91,7 @@ def _canonical(prev_hash: str, ts: str, actor: str, host: str,
 
 def _sha_record(prev_hash: str, ts: str, actor: str, host: str,
                 action: str, args_str: str) -> str:
-    """Legacy (pre-3.0.0) unkeyed SHA-256 digest — verify-only."""
+    """Legacy (pre-3.0.0) unkeyed SHA-256 digest - verify-only."""
     return hashlib.sha256(
         _canonical(prev_hash, ts, actor, host, action, args_str)).hexdigest()
 
@@ -122,7 +122,7 @@ class AuditLog:
         self.path: Path = Path(path).resolve()
         self._key_path: Path = self.path.with_name(self.path.name + ".key")
         self._lock = threading.Lock()
-        # Cached tail hash + HMAC key — both initialised lazily.
+        # Cached tail hash + HMAC key - both initialised lazily.
         self._tip: str | None = None
         self._key: bytes | None = None
 
@@ -169,7 +169,7 @@ class AuditLog:
             if os.name != "nt":
                 os.chmod(self._key_path, 0o600)
         except OSError as e:
-            log.error("audit_log: could not persist key (%s) — audit chain "
+            log.error("audit_log: could not persist key (%s) - audit chain "
                       "will not survive restart", type(e).__name__)
         self._key = key
         return key
@@ -188,7 +188,7 @@ class AuditLog:
                     try:
                         obj = json.loads(line)
                     except json.JSONDecodeError:
-                        # Corrupt line — verify() will flag the index;
+                        # Corrupt line - verify() will flag the index;
                         # for tip purposes treat as terminating boundary.
                         return last
                     h = obj.get("this_hash")

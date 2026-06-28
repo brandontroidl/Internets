@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# sbom.sh — generate a CycloneDX Software Bill of Materials for the
+# sbom.sh - generate a CycloneDX Software Bill of Materials for the
 # currently-installed Python environment.
 #
 # Output: ./sbom.cdx.json (CycloneDX 1.x JSON).
 #
 # This script intentionally uses *only* the installed environment so the
-# SBOM reflects what will actually ship — not what pyproject.toml claims.
+# SBOM reflects what will actually ship - not what pyproject.toml claims.
 # Run it inside the same venv you used for `python -m build`.
 #
 # Usage:

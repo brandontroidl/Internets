@@ -1,14 +1,14 @@
-"""Quote-database lookup module — scrapes bash-org-archive.com.
+"""Quote-database lookup module - scrapes bash-org-archive.com.
 
 The classic QDB protocol (RSS-1.0 over ``process.php?action=random&fixed=0``)
 is dead network-wide as of 2026: qdb.us serves an unrelated site, bash.org
 is offline, the original mirrors don't resolve.  The closest living
-spiritual successor is bash-org-archive.com — an HTML-only read-only
+spiritual successor is bash-org-archive.com - an HTML-only read-only
 archive of the original bash.org quotes.
 
 This module HTML-scrapes that archive.  No XML parsing, no defusedxml
 dependency.  The output shape on IRC is unchanged: ``[qdb #N] line``
-followed by up to ``_MAX_LINES`` quote lines, or a "too long — view at"
+followed by up to ``_MAX_LINES`` quote lines, or a "too long - view at"
 fallback link.
 """
 
@@ -32,7 +32,7 @@ _DEFAULT_URL = "https://bash-org-archive.com"
 _MAX_LINES = 5
 _MAX_BODY_BYTES = 256 * 1024
 
-# Same IRC-control-byte strip used elsewhere — defends against vandalised
+# Same IRC-control-byte strip used elsewhere - defends against vandalised
 # quotes injecting CR/LF or IRC formatting/colour codes into the channel.
 def _strip_ctrl(s: str, max_len: int = 400) -> str:
     return strip_ctrl(s, max_len)
@@ -55,7 +55,7 @@ _RE_LINE_BREAK   = re.compile(r'<br\s*/?>|\n')
 
 
 def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
-    """Blocking scrape — invoked via ``asyncio.to_thread``.
+    """Blocking scrape - invoked via ``asyncio.to_thread``.
 
     ``?random1`` returns a random quote (the classic bash.org URL form).
     ``?<id>`` returns a specific numeric quote.  Returns the formatted
@@ -69,9 +69,9 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
             r.raise_for_status()
             body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
             if len(body) > _MAX_BODY_BYTES:
-                log.warning("QDB response exceeded %d bytes — refusing to parse",
+                log.warning("QDB response exceeded %d bytes - refusing to parse",
                             _MAX_BODY_BYTES)
-                return ["QDB response too large — endpoint may be misbehaving"]
+                return ["QDB response too large - endpoint may be misbehaving"]
             text = body.decode("utf-8", errors="replace")
 
             m_body = _RE_QUOTE_BODY.search(text)
@@ -100,7 +100,7 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
             lines = [ln for ln in lines if ln]
 
             if len(lines) > _MAX_LINES:
-                return [f"{tag} long quote — view at {url}"]
+                return [f"{tag} long quote - view at {url}"]
             return [f"{tag} {ln}" for ln in lines]
     except requests.RequestException as e:
         log.warning(f"QDB request: {e}")
@@ -111,7 +111,7 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
 
 
 class QdbModule(BotModule):
-    """`.qdb [id]` — random or specific quote from bash-org-archive.com."""
+    """`.qdb [id]` - random or specific quote from bash-org-archive.com."""
 
     COMMANDS: dict[str, str] = {"qdb": "cmd_qdb"}
 
@@ -126,13 +126,13 @@ class QdbModule(BotModule):
         self._url: str = sect.get("api_url", "").strip() or _DEFAULT_URL
 
     def is_configured(self) -> bool:
-        # Always True now — there's a working default endpoint baked in.
+        # Always True now - there's a working default endpoint baked in.
         return bool(self._url)
 
     async def cmd_qdb(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Show a quote from bash-org-archive.com.  Usage: .qdb [id]"""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         qid: str | None = None
         if arg:

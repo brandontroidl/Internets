@@ -1,4 +1,4 @@
-"""Meteomatics — current conditions."""
+"""Meteomatics - current conditions."""
 from __future__ import annotations
 from datetime import datetime, timezone
 from .._http import get_json

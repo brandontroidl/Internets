@@ -1,4 +1,4 @@
-"""Open-Meteo — air quality endpoint."""
+"""Open-Meteo - air quality endpoint."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AirQualityResult, aqi_category

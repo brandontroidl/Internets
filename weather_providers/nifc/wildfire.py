@@ -1,4 +1,4 @@
-"""NIFC — active US wildfire incidents near a point (WFIGS, ArcGIS).
+"""NIFC - active US wildfire incidents near a point (WFIGS, ArcGIS).
 
 Queries the WFIGS Incident Locations (Current) FeatureServer with a
 point + radius spatial filter and summarises the nearby incidents.
@@ -35,7 +35,7 @@ async def fetch(lat, lon, location):
         raise HTTPError(f"NIFC: {msg}", status=None, provider_hint="nifc")
     features = data.get("features") if isinstance(data, dict) else None
     if not features:
-        # Valid "no active fires within the radius" — return empty result.
+        # Valid "no active fires within the radius" - return empty result.
         return WildfireResult(source="NIFC", location=location, fire_count=0)
 
     nearest_km: float | None = None

@@ -1,4 +1,4 @@
-"""Reminder module — schedule per-user reminders delivered in-channel.
+"""Reminder module - schedule per-user reminders delivered in-channel.
 
 Commands:
     .remind <when> <message>   schedule a reminder for yourself
@@ -63,11 +63,11 @@ def _parse_when(token: str, now_ts: int) -> int:
 
     low = t.lower()
 
-    # tomorrow — exactly 24h from now
+    # tomorrow - exactly 24h from now
     if low == "tomorrow":
         return now_ts + 86400
 
-    # tonight — 20:00 UTC today, or tomorrow if past
+    # tonight - 20:00 UTC today, or tomorrow if past
     if low == "tonight":
         now_dt = datetime.fromtimestamp(now_ts, tz=timezone.utc)
         target = now_dt.replace(hour=20, minute=0, second=0, microsecond=0)
@@ -85,7 +85,7 @@ def _parse_when(token: str, now_ts: int) -> int:
             raise ValueError(f"bad ISO date: {e}") from None
         return int(dt.timestamp())
 
-    # HH:MM — next occurrence
+    # HH:MM - next occurrence
     m = _HHMM_RE.match(t)
     if m:
         hh, mm = int(m.group(1)), int(m.group(2))
@@ -129,7 +129,7 @@ def _fmt_due_utc(ts: int) -> str:
 
 
 class RemindModule(BotModule):
-    """`.remind` / `.remind-list` / `.remind-cancel` — per-user reminders."""
+    """`.remind` / `.remind-list` / `.remind-cancel` - per-user reminders."""
 
     COMMANDS: dict[str, str] = {
         "remind": "cmd_remind",
@@ -322,7 +322,7 @@ class RemindModule(BotModule):
     async def cmd_remind(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Usage: .remind <when> <message>"""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         p = self.bot.cfg["bot"]["command_prefix"]
@@ -330,7 +330,7 @@ class RemindModule(BotModule):
             self.bot.privmsg(
                 reply_to,
                 f"{nick}: usage: {p}remind <when> <message>  "
-                f"(e.g. 30s, 5m, 1h30m, tomorrow, tonight, 14:30, 2026-05-20T18:00 — clock times are UTC)",
+                f"(e.g. 30s, 5m, 1h30m, tomorrow, tonight, 14:30, 2026-05-20T18:00 - clock times are UTC)",
             )
             return
 
@@ -355,7 +355,7 @@ class RemindModule(BotModule):
             return
 
         # Only deliver in channels (privmsg replies have reply_to == nick, which
-        # is fine — but bare DMs are still allowed: we just echo back to nick).
+        # is fine - but bare DMs are still allowed: we just echo back to nick).
         channel = reply_to
 
         now = _now_ts()
@@ -369,13 +369,13 @@ class RemindModule(BotModule):
         if lead < MIN_LEAD_SECONDS:
             self.bot.privmsg(
                 reply_to,
-                f"{nick}: too soon — minimum lead time is {MIN_LEAD_SECONDS}s",
+                f"{nick}: too soon - minimum lead time is {MIN_LEAD_SECONDS}s",
             )
             return
         if lead > MAX_LEAD_SECONDS:
             self.bot.privmsg(
                 reply_to,
-                f"{nick}: too far out — maximum lead time is 30 days",
+                f"{nick}: too far out - maximum lead time is 30 days",
             )
             return
 
@@ -384,7 +384,7 @@ class RemindModule(BotModule):
             if self._count_for(nick_lower) >= MAX_PER_NICK:
                 self.bot.privmsg(
                     reply_to,
-                    f"{nick}: you already have {MAX_PER_NICK} pending reminders — "
+                    f"{nick}: you already have {MAX_PER_NICK} pending reminders - "
                     f"cancel one with {p}remind-cancel <N>",
                 )
                 return
@@ -409,13 +409,13 @@ class RemindModule(BotModule):
 
         self.bot.privmsg(
             reply_to,
-            f"{nick}: ⏰ reminder #{rid} set for {_fmt_due_utc(due_ts)} — {message}",
+            f"{nick}: ⏰ reminder #{rid} set for {_fmt_due_utc(due_ts)} - {message}",
         )
 
     async def cmd_remind_list(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Usage: .remind-list — list YOUR pending reminders."""
+        """Usage: .remind-list - list YOUR pending reminders."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         nick_lower = nick.lower()
@@ -446,7 +446,7 @@ class RemindModule(BotModule):
     async def cmd_remind_cancel(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Usage: .remind-cancel <N>"""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         p = self.bot.cfg["bot"]["command_prefix"]
@@ -485,5 +485,5 @@ class RemindModule(BotModule):
 
 
 def setup(bot: object) -> RemindModule:
-    """Module entry point — returns a RemindModule instance."""
+    """Module entry point - returns a RemindModule instance."""
     return RemindModule(bot)  # type: ignore[arg-type]

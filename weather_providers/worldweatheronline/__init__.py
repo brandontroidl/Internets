@@ -1,4 +1,4 @@
-"""World Weather Online provider package — requires API key.
+"""World Weather Online provider package - requires API key.
 
 https://www.worldweatheronline.com/weather-api/
 Free tier: 500 calls/day.  Current, forecast, hourly, astronomy, historical, marine.

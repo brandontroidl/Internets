@@ -1,4 +1,4 @@
-"""NASA POWER provider package — free, no API key required.
+"""NASA POWER provider package - free, no API key required.
 
 https://power.larc.nasa.gov/docs/services/api/temporal/daily/
 Historical daily weather only.  Global coverage, but the dataset lags

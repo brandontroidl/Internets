@@ -1,8 +1,8 @@
-"""Pirate Weather — hourly forecast."""
+"""Pirate Weather - hourly forecast."""
 from __future__ import annotations
 from datetime import datetime
 from ..base import HourlyResult, HourlyEntry
-# fix: key embedded in URL path leaks into HTTPError messages — use
+# fix: key embedded in URL path leaks into HTTPError messages - use
 # safe_get_json wrapper which redacts the key before re-raising.
 from ._codes import deg_to_card, icon_to_desc, ms_to_kph, safe_get_json
 

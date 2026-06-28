@@ -8,7 +8,7 @@ log = logging.getLogger("internets.imdb")
 
 
 def _lookup_sync(title: str, key: str, ua: str) -> str:
-    """Blocking OMDb lookup — run via asyncio.to_thread."""
+    """Blocking OMDb lookup - run via asyncio.to_thread."""
     try:
         d = fetch_json(
             "https://www.omdbapi.com/",
@@ -47,7 +47,7 @@ class ImdbModule(BotModule):
                              "weather", "user_agent", "Internets/1.0")
         self._key: str = cred(self.bot.cfg, "omdb_key", "imdb", "omdb_key")
         if not self._key:
-            log.warning("imdb: omdb_key not set (secret_store or [imdb]) — .imdb will not work")
+            log.warning("imdb: omdb_key not set (secret_store or [imdb]) - .imdb will not work")
 
     def is_configured(self) -> bool:
         return bool(self._key)
@@ -59,10 +59,10 @@ class ImdbModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}imdb <title>  e.g. {p}imdb The Matrix")
             return
         if not self._key:
-            self.bot.privmsg(reply_to, "OMDb API key not configured — see [imdb] in config.ini")
+            self.bot.privmsg(reply_to, "OMDb API key not configured - see [imdb] in config.ini")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_lookup_sync, arg.strip(), self._key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -72,5 +72,5 @@ class ImdbModule(BotModule):
 
 
 def setup(bot: object) -> ImdbModule:
-    """Module entry point — returns an ImdbModule instance."""
+    """Module entry point - returns an ImdbModule instance."""
     return ImdbModule(bot)  # type: ignore[arg-type]

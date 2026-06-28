@@ -1,4 +1,4 @@
-"""Math toolbox — pure stdlib, no network, no key.
+"""Math toolbox - pure stdlib, no network, no key.
 
     .isprime <n>            deterministic Miller-Rabin primality (big ints)
     .factor <n>             prime factorization (trial division + Pollard rho)
@@ -73,7 +73,7 @@ def _smallest_factor(n: int) -> int:
         return 2
     i = 3
     # Bounded: only used after Miller-Rabin says composite, and we cap the
-    # walk so a stubborn semiprime can't spin forever — fall back to rho.
+    # walk so a stubborn semiprime can't spin forever - fall back to rho.
     limit = 1 << 20
     while i <= limit:
         if n % i == 0:
@@ -144,7 +144,7 @@ def _isprime(arg: str) -> str:
     if not re.fullmatch(r"\d+", s):
         return "usage: .isprime <n>  (non-negative integer)"
     if len(s) > _MAX_ISPRIME_DIGITS:
-        return f"too big — cap is {_MAX_ISPRIME_DIGITS} digits"
+        return f"too big - cap is {_MAX_ISPRIME_DIGITS} digits"
     n = int(s)
     if n < 2:
         return f"{_fmt_int(n)} is not prime (primes are >= 2)"
@@ -160,10 +160,10 @@ def _factor(arg: str) -> str:
     if not re.fullmatch(r"\d+", s):
         return "usage: .factor <n>  (integer >= 2)"
     if len(s) > _MAX_FACTOR_DIGITS:
-        return f"too big — cap is {_MAX_FACTOR_DIGITS} digits"
+        return f"too big - cap is {_MAX_FACTOR_DIGITS} digits"
     n = int(s)
     if n < 2:
-        return "nothing to factor — give an integer >= 2"
+        return "nothing to factor - give an integer >= 2"
     if _is_probable_prime(n):
         return f"{_fmt_int(n)} is prime"
     factors = _prime_factors(n)
@@ -180,7 +180,7 @@ def _gcd(arg: str) -> str:
     if len(toks) < 2:
         return "usage: .gcd <a> <b> [..]  (two or more integers)"
     if len(toks) > _MAX_STATS_NUMS:
-        return f"too many numbers — cap is {_MAX_STATS_NUMS}"
+        return f"too many numbers - cap is {_MAX_STATS_NUMS}"
     nums: list[int] = []
     for t in toks:
         try:
@@ -238,7 +238,7 @@ def _stats(arg: str) -> str:
     if not toks:
         return "usage: .stats <n1 n2 ...>  (whitespace or comma separated)"
     if len(toks) > _MAX_STATS_NUMS:
-        return f"too many numbers — cap is {_MAX_STATS_NUMS}"
+        return f"too many numbers - cap is {_MAX_STATS_NUMS}"
     nums: list[float] = []
     for t in toks:
         try:
@@ -343,7 +343,7 @@ def _pct(arg: str) -> str:
             return "cannot take a percentage of 0"
         r = a / b * 100.0
         return f"{m.group(1)} is {_pct_fmt(r)}% of {m.group(2)}"
-    return ("usage: .pct <expr> — '20% of 150' | '50 to 75' | '30 of 120'")
+    return ("usage: .pct <expr> - '20% of 150' | '50 to 75' | '30 of 120'")
 
 
 def _pct_fmt(x: float) -> str:
@@ -355,7 +355,7 @@ def _pct_fmt(x: float) -> str:
 def _bignum(arg: str) -> str:
     s = arg.strip().lower().replace(" ", "")
     if not s:
-        return "usage: .bignum <expr> — 'n!' | 'fib(n)' | '2^n'"
+        return "usage: .bignum <expr> - 'n!' | 'fib(n)' | '2^n'"
     # factorial: n!
     m = re.fullmatch(r"(\d+)!", s)
     if m:
@@ -378,7 +378,7 @@ def _bignum(arg: str) -> str:
         if a > 1 and b * math.log10(a) > 1_000_000:
             return "power result too large (over ~1M digits)"
         return _bignum_report(f"{a}^{b}", a ** b)
-    return "usage: .bignum <expr> — 'n!' | 'fib(n)' | '2^n'"
+    return "usage: .bignum <expr> - 'n!' | 'fib(n)' | '2^n'"
 
 
 def _fib(n: int) -> int:
@@ -456,11 +456,11 @@ def _const(arg: str) -> str:
     key = arg.strip().lower()
     if not key:
         avail = ", ".join(sorted(_CONSTANTS))
-        return f"usage: .const <name> — known: {avail}"[:380]
+        return f"usage: .const <name> - known: {avail}"[:380]
     key = _CONST_ALIASES.get(key, key)
     entry = _CONSTANTS.get(key)
     if entry is None:
-        return (f"unknown constant '{strip_ctrl(arg.strip(), 30)}' — try one of: "
+        return (f"unknown constant '{strip_ctrl(arg.strip(), 30)}' - try one of: "
                 + ", ".join(sorted(_CONSTANTS)))[:380]
     value, unit, desc = entry
     return f"{desc} = {value:g} {unit}"
@@ -470,7 +470,7 @@ def _const(arg: str) -> str:
 
 class MathxModule(BotModule):
     """`.isprime` / `.factor` / `.gcd` / `.base` / `.stats` / `.roman` /
-    `.pct` / `.bignum` / `.const` — offline math toolbox."""
+    `.pct` / `.bignum` / `.const` - offline math toolbox."""
 
     COMMANDS: dict[str, str] = {
         "isprime": "cmd_isprime",
@@ -489,7 +489,7 @@ class MathxModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

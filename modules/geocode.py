@@ -20,21 +20,21 @@ log = logging.getLogger("internets.geocode")
 # ---------------------------------------------------------------------------
 # Nominatim's usage policy explicitly requires clients to cache results.
 # We cache by ``(lowercased-query, user_agent)`` because the country-pin
-# logic above is fully determined by the query string — same query → same
+# logic above is fully determined by the query string - same query → same
 # upstream call, every time.  The UA is part of the key so two operators
 # sharing a single process (unlikely, but possible during reloads) don't
 # cross-contaminate each other's cache.
 #
 # Implementation: an LRU-ish ``OrderedDict`` keyed by the cache key.
 # ``move_to_end`` on hit; evict from the front when we hit the cap.
-# A ``threading.Lock`` serialises mutations — geocode() is awaited via
+# A ``threading.Lock`` serialises mutations - geocode() is awaited via
 # ``asyncio.to_thread`` so cache access happens from a worker thread.
 #
 # The cache stores a 4-tuple result (lat, lon, name, cc) or the sentinel
-# ``None`` (negative result) — both are valid and worth caching.
+# ``None`` (negative result) - both are valid and worth caching.
 
 _GEOCODE_CACHE_TTL = 24 * 60 * 60   # 24h, per Nominatim ToS
-_GEOCODE_CACHE_MAX = 1000           # bounded — memory cap
+_GEOCODE_CACHE_MAX = 1000           # bounded - memory cap
 _geocode_cache: "OrderedDict[tuple[str, str, str], tuple[float, Optional[tuple[float, float, str, str]]]]" = OrderedDict()
 _geocode_cache_lock = threading.Lock()
 _geocode_cache_stats = {"hits": 0, "misses": 0, "evictions": 0}
@@ -57,7 +57,7 @@ def _cache_get(key: tuple[str, str, str]) -> tuple[bool, Optional[tuple[float, f
             return (False, None)
         ts, value = entry
         if now - ts > _GEOCODE_CACHE_TTL:
-            # Expired — drop and treat as miss.
+            # Expired - drop and treat as miss.
             del _geocode_cache[key]
             _geocode_cache_stats["misses"] += 1
             return (False, None)
@@ -83,10 +83,10 @@ def geocode_cache_stats() -> dict[str, int]:
     """Return a snapshot of cache statistics.
 
     Keys:
-      * ``size``       — current number of cached entries
-      * ``hits``       — successful lookups since process start
-      * ``misses``     — lookups that fell through to the network
-      * ``evictions``  — entries dropped due to the size cap
+      * ``size``       - current number of cached entries
+      * ``hits``       - successful lookups since process start
+      * ``misses``     - lookups that fell through to the network
+      * ``evictions``  - entries dropped due to the size cap
 
     Useful for status output / ops dashboards.
     """
@@ -103,7 +103,7 @@ def geocode_cache_stats() -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Nominatim's usage policy requires a unique, contactable User-Agent.  We
 # refuse to call out if the configured UA looks like the default template
-# placeholder — sending generic UAs gets the bot's IP banned (and is also
+# placeholder - sending generic UAs gets the bot's IP banned (and is also
 # a poor neighbour move).  The check below is intentionally permissive:
 # any "@" or "http" inside the UA is treated as a contact identifier.
 def _ua_has_contact(ua: str) -> bool:
@@ -114,7 +114,7 @@ def _ua_has_contact(ua: str) -> bool:
     return ("@" in ua and "." in ua.split("@", 1)[1]) or "http://" in lower or "https://" in lower
 
 
-# Cap the JSON we read from Nominatim — normal responses are <10 KB; this
+# Cap the JSON we read from Nominatim - normal responses are <10 KB; this
 # bounds memory if upstream misbehaves or a TLS-stripping proxy injects HTML.
 _MAX_BODY_BYTES = 128 * 1024
 
@@ -160,14 +160,14 @@ _STATE_ABBR: dict[str, str] = {
 
 _USZIP_RE = re.compile(r"^\d{5}(-\d{4})?$")
 
-# Coordinate parsing — decimal (comma/space), hemisphere (39°N 98°W), and DMS.
+# Coordinate parsing - decimal (comma/space), hemisphere (39°N 98°W), and DMS.
 # Free-text Nominatim mangles the non-decimal forms ("39°N 98°W" resolves to a
 # random Missouri suburb), so _parse_coords normalises to signed decimal and the
 # exact point is reverse-geocoded instead.
 _COORD_DECIMAL_RE = re.compile(
     r"^\s*([-+]?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*([-+]?\d{1,3}(?:\.\d+)?)\s*$")
 # Two degree[/minute/second] components, each carrying a hemisphere letter on
-# either side — required so the axis (N/S vs E/W) and sign are unambiguous.
+# either side - required so the axis (N/S vs E/W) and sign are unambiguous.
 _COORD_DMS_RE = re.compile(
     r"^\s*"
     r"(?P<ah1>[NSEWnsew])?\s*(?P<ad>\d{1,3}(?:\.\d+)?)\s*[°ºd]?\s*"
@@ -189,7 +189,7 @@ _ZIP4_RE       = re.compile(r"^\d{5}-\d{4}$")               # ZIP+4 → US only
 _CA_POSTAL_RE  = re.compile(r"^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$")
 _UK_POSTAL_RE  = re.compile(r"^[A-Za-z]{1,2}\d[A-Za-z\d]?\s*\d[A-Za-z]{2}$")
 # Distinctive dashed/alphanumeric international formats whose shape alone
-# identifies the country (determinism / provider-independence, not accuracy —
+# identifies the country (determinism / provider-independence, not accuracy -
 # the free-text path resolves these too, but luck-of-ranking, not by contract).
 # Only the country-UNIQUE forms are pinned; bare numeric equivalents (7-digit
 # JP, 8-digit BR) stay generic-numeric since the digit count isn't unique.
@@ -226,7 +226,7 @@ _US_STATE_NAME_RE = re.compile(
 )
 _US_STATE_ABBR_RE = re.compile(
     r"(?<!\w)(?:" + "|".join(re.escape(a) for a in sorted(_US_STATE_ABBRS)) + r")(?!\w)"
-    # No IGNORECASE — uppercase only
+    # No IGNORECASE - uppercase only
 )
 
 
@@ -243,8 +243,8 @@ def _looks_like_us(query: str) -> bool:
 # case-insensitive via regex.
 #
 # Design notes:
-# • "georgia" is absent — it clashes with the US state; word-drop handles it.
-# • Lowercase 2-letter codes (fr, de, gb …) are excluded — too many clash
+# • "georgia" is absent - it clashes with the US state; word-drop handles it.
+# • Lowercase 2-letter codes (fr, de, gb …) are excluded - too many clash
 #   with common words.  A few safe uppercase aliases (UAE, UK) are included.
 # • Canadian provinces and Australian states are included so that
 #   "london ontario" → ca and "brisbane queensland" → au.
@@ -353,13 +353,13 @@ _COUNTRY_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Canadian province abbreviations — none collide with US state abbreviations.
+# Canadian province abbreviations - none collide with US state abbreviations.
 _CA_PROVINCE_ABBRS: frozenset[str] = frozenset(
     ["ON","QC","BC","AB","MB","SK","NS","NB","NL","PE","NT","YT","NU"]
 )
 _CA_PROVINCE_ABBR_RE = re.compile(
     r"(?<!\w)(?:" + "|".join(sorted(_CA_PROVINCE_ABBRS)) + r")(?!\w)"
-    # No IGNORECASE — uppercase only
+    # No IGNORECASE - uppercase only
 )
 
 
@@ -387,7 +387,7 @@ def _country_code_for(query: str) -> str | None:
 # random Ohio motel and "A1A 1A1" with no pin returns a Swiss street.  We
 # fix that by classifying the input and resolving it with structured
 # postal-code lookups (Nominatim ``postalcode=`` / Zippopotam) that match the
-# code AS a postal code — a bogus code returns nothing instead of garbage.
+# code AS a postal code - a bogus code returns nothing instead of garbage.
 
 
 def _normalize_cc(cc: str) -> str:
@@ -404,7 +404,7 @@ def _normalize_cc(cc: str) -> str:
 def _postal_kind(s: str) -> str | None:
     """Classify a string as a postal code, or None if it isn't one.
 
-    Returns ``"us"`` (ZIP+4 — unambiguously US), ``"ca"`` (Canadian
+    Returns ``"us"`` (ZIP+4 - unambiguously US), ``"ca"`` (Canadian
     alphanumeric), ``"uk"`` (UK postcode), ``"ie"`` / ``"jp"`` / ``"br"``
     (distinctive Eircode / dashed-Japan / dashed-Brazil formats, each
     country-unique), ``"num"`` (bare numeric, shared across countries →
@@ -433,7 +433,7 @@ def _postal_kind(s: str) -> str | None:
 # Bare 2-letter country codes accepted as a postal override.  A real ISO2,
 # MINUS those that collide with a US state or Canadian province abbreviation:
 # in a US/CA-centric bot a trailing "ca"/"il"/"oh" means the subdivision
-# (California / Illinois / Ohio), not Canada/Israel/—, so "90210 ca" must
+# (California / Illinois / Ohio), not Canada/Israel/-, so "90210 ca" must
 # resolve the US ZIP, not pin to Canada.  Forcing those countries still works
 # via the full name ("90210 canada", "08000 israel").
 _ISO2_OVERRIDES: frozenset[str] = (
@@ -662,13 +662,13 @@ async def _nominatim_postal(code: str, cc: str | None,
 
 async def _zippo(cc: str, code: str,
                  user_agent: str) -> tuple[float, float, str, str] | None:
-    """Postal lookup via Zippopotam.us — a free, keyless, purpose-built postal
+    """Postal lookup via Zippopotam.us - a free, keyless, purpose-built postal
     geocoder.  Used where OSM/Nominatim lacks postal coverage (notably
     Canada, whose Canada-Post data is proprietary).  A 404 (no such code in
     that country) is a clean miss, not an error; any other failure also
     yields None (fail closed).
     """
-    from .base import fetch_json  # noqa: PLC0415 — lazy, keeps import graph light
+    from .base import fetch_json  # noqa: PLC0415 - lazy, keeps import graph light
     url = f"https://api.zippopotam.us/{cc.lower()}/{code}"
     try:
         data = await asyncio.to_thread(
@@ -688,13 +688,13 @@ async def _resolve_postal(kind: str, code: str, hint: str | None,
     Nominatim; ``uk`` → Nominatim pinned to the hint or gb; ``num`` (bare
     numeric) → explicit-hint pin if given, else home country first (Nominatim
     then Zippopotam backstop), then global best-match.  Returns None if the
-    code resolves nowhere — we deliberately do NOT fall back to fuzzy
+    code resolves nowhere - we deliberately do NOT fall back to fuzzy
     free-text, which is what produced the wrong-country matches.
     """
     if kind == "ca":
         return await _zippo("ca", _fsa(code), user_agent)
     if kind == "us":
-        # ZIP+4 — the +4 is sub-ZIP granularity neither Nominatim nor
+        # ZIP+4 - the +4 is sub-ZIP granularity neither Nominatim nor
         # Zippopotam carries, so resolve the 5-digit base, US-pinned.
         base = code.split("-", 1)[0]
         return (await _nominatim_postal(base, "us", hdrs)
@@ -725,13 +725,13 @@ async def geocode(query: str, user_agent: str, *,
 
     Accepted input formats
     ----------------------
-    • lat,lon          — "34.5,-117.2"
-    • Postal code      — "92253" / "90210-1234" / "A1A 1A1" / "SW1A 1AA"
-    • Postal + country — "08000 spain" / "08000 es"  (explicit override)
-    • City + US state  — "la quinta california" / "portland OR"
-    • City + country   — "paris france" / "london england"
-    • City + province  — "london ontario" / "toronto ON"
-    • City alone       — "london"  (Nominatim global prominence ranking)
+    • lat,lon          - "34.5,-117.2"
+    • Postal code      - "92253" / "90210-1234" / "A1A 1A1" / "SW1A 1AA"
+    • Postal + country - "08000 spain" / "08000 es"  (explicit override)
+    • City + US state  - "la quinta california" / "portland OR"
+    • City + country   - "paris france" / "london england"
+    • City + province  - "london ontario" / "toronto ON"
+    • City alone       - "london"  (Nominatim global prominence ranking)
 
     Postal codes
     ------------
@@ -762,16 +762,16 @@ async def geocode(query: str, user_agent: str, *,
         query = query[:_MAX_QUERY_CHARS]
 
     # Bound the operator-supplied home country: a bad value must not disable
-    # the home bias or inject junk into countrycodes — fall back to "us".
+    # the home bias or inject junk into countrycodes - fall back to "us".
     default_country = _normalize_cc(default_country)
 
     # Nominatim usage policy: require an identifiable User-Agent that
     # includes a contact (email or URL).  If the operator hasn't
-    # configured one we refuse to call out — better to fail the geocode
+    # configured one we refuse to call out - better to fail the geocode
     # than get the bot's IP banned for the whole channel.
     if not _ua_has_contact(user_agent):
         log.warning(
-            "Nominatim UA missing contact info — set [weather] user_agent to "
+            "Nominatim UA missing contact info - set [weather] user_agent to "
             "include an email or URL.  Geocode disabled."
         )
         return None
@@ -779,7 +779,7 @@ async def geocode(query: str, user_agent: str, *,
 
     # ---- TTL cache lookup ------------------------------------------------
     # We only reach this point with a non-empty, length-capped query and a
-    # validated UA — both are part of the cache key.  ``found`` differentiates
+    # validated UA - both are part of the cache key.  ``found`` differentiates
     # a cached negative result (None) from a miss.
     cache_key = _cache_key(query, user_agent, default_country)
     found, cached = _cache_get(cache_key)
@@ -790,7 +790,7 @@ async def geocode(query: str, user_agent: str, *,
         """Cache *result* (including ``None`` negatives) and return it.
 
         We cache failures so a flood of identical bad queries can't
-        keep hammering Nominatim — TTL covers the case where the
+        keep hammering Nominatim - TTL covers the case where the
         upstream eventually starts returning useful data again.
         """
         _cache_put(cache_key, result)
@@ -823,7 +823,7 @@ async def geocode(query: str, user_agent: str, *,
 
     # ---- Postal-code resolution (structured, country-aware) --------------
     # Classify the input; if it's a postal code, resolve it with structured
-    # lookups and return — including a negative cache on miss.  We do NOT fall
+    # lookups and return - including a negative cache on miss.  We do NOT fall
     # through to the fuzzy free-text loop for a postal code: that fuzzy match
     # is exactly what returned the wrong country (a US motel for "08000", a
     # Swiss street for "A1A 1A1").
@@ -879,7 +879,7 @@ async def geocode(query: str, user_agent: str, *,
             addr = hit.get("address", {})
             if not isinstance(addr, dict):
                 addr = {}
-            # display_name and candidate are upstream/user strings — _format_name
+            # display_name and candidate are upstream/user strings - _format_name
                 # will _strip_ctrl them before returning, never interpret IRC codes.
             name, cc = _format_name(addr, hit.get("display_name", candidate))
             if candidate != query:

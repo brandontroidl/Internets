@@ -1,8 +1,8 @@
-"""Pirate Weather — daily forecast."""
+"""Pirate Weather - daily forecast."""
 from __future__ import annotations
 from datetime import datetime
 from ..base import WeatherResult, ForecastDay
-# fix: key embedded in URL path leaks into HTTPError messages — use
+# fix: key embedded in URL path leaks into HTTPError messages - use
 # safe_get_json wrapper which redacts the key before re-raising.
 from ._codes import icon_to_desc, safe_get_json
 

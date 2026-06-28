@@ -1,4 +1,4 @@
-"""Tests for store.py — Store (with pruning) and RateLimiter."""
+"""Tests for store.py - Store (with pruning) and RateLimiter."""
 
 import os
 import json

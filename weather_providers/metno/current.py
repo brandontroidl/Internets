@@ -1,4 +1,4 @@
-"""MET Norway — current conditions (locationforecast/2.0/compact)."""
+"""MET Norway - current conditions (locationforecast/2.0/compact)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult, deg_to_card, ms_to_kph

@@ -26,7 +26,7 @@ def _fmt_thousand(n: int) -> str:
 
 
 def _search_sync(query: str, key: str, ua: str) -> str:
-    """Blocking YouTube search — run via asyncio.to_thread."""
+    """Blocking YouTube search - run via asyncio.to_thread."""
     try:
         # Step 1: search
         items = fetch_json(
@@ -84,7 +84,7 @@ class YoutubeModule(BotModule):
                              "weather", "user_agent", "Internets/1.0")
         self._key: str = cred(self.bot.cfg, "youtube_key", "youtube", "youtube_key")
         if not self._key:
-            log.warning("youtube: youtube_key not set — .yt will not work")
+            log.warning("youtube: youtube_key not set - .yt will not work")
 
     def is_configured(self) -> bool:
         return bool(self._key)
@@ -96,10 +96,10 @@ class YoutubeModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}yt <search>  e.g. {p}yt never gonna give you up")
             return
         if not self._key:
-            self.bot.privmsg(reply_to, "YouTube API key not configured — see [youtube] in config.ini")
+            self.bot.privmsg(reply_to, "YouTube API key not configured - see [youtube] in config.ini")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_search_sync, arg.strip(), self._key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -109,5 +109,5 @@ class YoutubeModule(BotModule):
 
 
 def setup(bot: object) -> YoutubeModule:
-    """Module entry point — returns a YoutubeModule instance."""
+    """Module entry point - returns a YoutubeModule instance."""
     return YoutubeModule(bot)  # type: ignore[arg-type]

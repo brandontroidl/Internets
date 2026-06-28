@@ -1,4 +1,4 @@
-"""Tests for modules/numberfact.py — pure math_fact(n) function.
+"""Tests for modules/numberfact.py - pure math_fact(n) function.
 
 The function may randomly choose among applicable facts, so tests for
 numbers with multiple applicable facts retry a handful of times and

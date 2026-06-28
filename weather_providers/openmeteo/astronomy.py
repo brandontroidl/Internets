@@ -1,4 +1,4 @@
-"""Open-Meteo — astronomy (sunrise/sunset from daily params)."""
+"""Open-Meteo - astronomy (sunrise/sunset from daily params)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

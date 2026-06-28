@@ -1,4 +1,4 @@
-"""Tests for modules/pkginfo.py — _pypi_sync / _npm_sync / _crates_sync.
+"""Tests for modules/pkginfo.py - _pypi_sync / _npm_sync / _crates_sync.
 
 Each test monkeypatches the module's fetch_json with a canned response so
 nothing hits the real network.  We assert the one-line formatting for the

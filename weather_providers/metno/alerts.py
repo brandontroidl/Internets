@@ -1,4 +1,4 @@
-"""MET Norway — weather alerts (metalerts/2.0, Norway only)."""
+"""MET Norway - weather alerts (metalerts/2.0, Norway only)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry

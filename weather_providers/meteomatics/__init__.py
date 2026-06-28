@@ -1,4 +1,4 @@
-"""Meteomatics provider package — requires username + password.
+"""Meteomatics provider package - requires username + password.
 https://www.meteomatics.com/en/api/
 Free tier: limited, professional weather data.
 """

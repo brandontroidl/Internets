@@ -1,4 +1,4 @@
-"""Physics & engineering calculators — pure stdlib, no network, no key.
+"""Physics & engineering calculators - pure stdlib, no network, no key.
 
     .ly <distance>          light travel time <-> distance (ly/au/km/s/min/hr)
     .sr <v>                 special relativity (Lorentz gamma) for v as frac of c
@@ -71,7 +71,7 @@ def _ly(arg: str) -> str:
         metres = t * _C
         return (f"light-{unit} {_fmt(val)} = {_fmt(metres / _LY_M)} ly :: "
                 f"{_fmt(metres / _AU_M)} au :: {_fmt(metres / _KM_M)} km")
-    return "unknown unit — use ly/au/km/m or s/min/hr/day"
+    return "unknown unit - use ly/au/km/m or s/min/hr/day"
 
 
 def _fmt_time(seconds: float) -> str:
@@ -162,7 +162,7 @@ def _ohm(arg: str) -> str:
         except ValueError:
             return "invalid number"
     if len(vals) != 2:
-        return "give exactly two of V,I,R,P — e.g. .ohm V=12 R=4"
+        return "give exactly two of V,I,R,P - e.g. .ohm V=12 R=4"
     V = vals.get("v")
     I = vals.get("i")
     R = vals.get("r")
@@ -341,12 +341,12 @@ def _baud(arg: str) -> str:
         nbytes = float(parts[0])
         bps = float(parts[1])
     except ValueError:
-        return "invalid number — usage: .baud <bytes> <bps> [-fmt 8N1]"
+        return "invalid number - usage: .baud <bytes> <bps> [-fmt 8N1]"
     if nbytes < 0 or bps <= 0:
         return "bytes must be >=0 and bps must be >0"
     bits_per_byte = _parse_framing(fmt)
     if bits_per_byte is None:
-        return "bad framing — use e.g. 8N1, 7E1, 8N2"
+        return "bad framing - use e.g. 8N1, 7E1, 8N2"
     total_bits = nbytes * bits_per_byte
     seconds = total_bits / bps
     return (f"{_fmt(nbytes)} bytes @ {_fmt(bps)} bps ({fmt.upper()}, "
@@ -355,7 +355,7 @@ def _baud(arg: str) -> str:
 
 
 class PhyscalcModule(BotModule):
-    """`.ly` / `.sr` / `.escape` / `.ohm` / `.rc` / `.baud` — physics calculators."""
+    """`.ly` / `.sr` / `.escape` / `.ohm` / `.rc` / `.baud` - physics calculators."""
 
     COMMANDS: dict[str, str] = {
         "ly": "cmd_ly",
@@ -371,7 +371,7 @@ class PhyscalcModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

@@ -1,4 +1,4 @@
-"""WAQI — air quality (nearest-station AQI, World Air Quality Index)."""
+"""WAQI - air quality (nearest-station AQI, World Air Quality Index)."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import AirQualityResult, aqi_category

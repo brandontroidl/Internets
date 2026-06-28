@@ -1,4 +1,4 @@
-"""IQAir (AirVisual) — air quality (US AQI from nearest city station)."""
+"""IQAir (AirVisual) - air quality (US AQI from nearest city station)."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import AirQualityResult, aqi_category
@@ -13,7 +13,7 @@ async def fetch(key, lat, lon, location):
         "key": key,
     })
     # Envelope: {"status": "success", "data": {...}}.  Anything other than
-    # "success" (no nearby station, bad key, quota) means no usable reading —
+    # "success" (no nearby station, bad key, quota) means no usable reading -
     # raise so the dispatcher falls through to another provider.
     if not isinstance(data, dict) or data.get("status") != "success":
         raise HTTPError("IQAir: no AQI coverage for this location",

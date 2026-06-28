@@ -1,4 +1,4 @@
-"""TideCheck provider package — tide predictions for coastal stations.
+"""TideCheck provider package - tide predictions for coastal stations.
 
 https://tidecheck.com/developers
 Tides only.  Resolves the nearest station to the point, then reads its

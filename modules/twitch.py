@@ -62,7 +62,7 @@ class _TwitchAPI:
 
     def get(self, endpoint: str, params: dict | None = None) -> dict[str, Any]:
         # Use the shared size-capped helper to defend against an OOM via a
-        # tampered upstream — even Twitch responses get a 256 KB ceiling.
+        # tampered upstream - even Twitch responses get a 256 KB ceiling.
         hdrs = self._headers()
         ua = hdrs.pop("User-Agent")
         return fetch_json(
@@ -118,7 +118,7 @@ def _fmt_viewers(n: int | str) -> str:
 
 
 def _dispatch_sync(api: _TwitchAPI, subcmd: str, arg: str) -> str:
-    """Route subcommands — blocking, run via to_thread."""
+    """Route subcommands - blocking, run via to_thread."""
     try:
         if subcmd in ("s", "stream", ""):
             if arg:
@@ -140,7 +140,7 @@ def _dispatch_sync(api: _TwitchAPI, subcmd: str, arg: str) -> str:
                 lines = []
                 for i, s in enumerate(streams, 1):
                     lines.append(
-                        f"[{i}] \x02{s.get('game_name', '?')}\x02 — "
+                        f"[{i}] \x02{s.get('game_name', '?')}\x02 - "
                         f"{s['user_name']} ({_fmt_viewers(s.get('viewer_count', 0))} viewers)"
                     )
                 return " | ".join(lines)
@@ -197,7 +197,7 @@ class TwitchModule(BotModule):
         if cid and secret:
             self._api = _TwitchAPI(cid, secret, self._ua)
         else:
-            log.warning("twitch: client_id/client_secret not set — .tw will not work")
+            log.warning("twitch: client_id/client_secret not set - .tw will not work")
 
     def is_configured(self) -> bool:
         return self._api is not None
@@ -205,7 +205,7 @@ class TwitchModule(BotModule):
     async def cmd_twitch(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Look up Twitch streams, channels, or games."""
         if not self._api:
-            self.bot.privmsg(reply_to, "Twitch API not configured — see [twitch] in config.ini")
+            self.bot.privmsg(reply_to, "Twitch API not configured - see [twitch] in config.ini")
             return
 
         raw = (arg or "").strip()
@@ -221,7 +221,7 @@ class TwitchModule(BotModule):
             subcmd, query = "s", raw
 
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_dispatch_sync, self._api, subcmd, query)
         for line in result.split("\n"):
@@ -236,5 +236,5 @@ class TwitchModule(BotModule):
 
 
 def setup(bot: object) -> TwitchModule:
-    """Module entry point — returns a TwitchModule instance."""
+    """Module entry point - returns a TwitchModule instance."""
     return TwitchModule(bot)  # type: ignore[arg-type]

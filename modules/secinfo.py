@@ -1,4 +1,4 @@
-"""Security information lookups — CVE / password-pwn / hash & crypto helpers.
+"""Security information lookups - CVE / password-pwn / hash & crypto helpers.
 
 All commands are KEYLESS.
 
@@ -10,7 +10,7 @@ All commands are KEYLESS.
 
 Network commands route every outbound request through ``base.fetch_json``
 (size-capped) except ``.pwn``, which fetches plain text via a size-capped
-raw ``requests`` stream — and only the 5-char SHA-1 prefix ever leaves the
+raw ``requests`` stream - and only the 5-char SHA-1 prefix ever leaves the
 host (HIBP k-anonymity).
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ _HIBP_MAX_BYTES = 1024 * 1024
 
 # ── .cve ──────────────────────────────────────────────────────────────
 def _cve_sync(cve_id: str, ua: str) -> str:
-    """Blocking NVD CVE lookup — run via asyncio.to_thread."""
+    """Blocking NVD CVE lookup - run via asyncio.to_thread."""
     try:
         data = fetch_json(
             _NVD_URL,
@@ -82,7 +82,7 @@ def _cve_sync(cve_id: str, ua: str) -> str:
             sev_part = "CVSS n/a"
 
         return strip_ctrl(
-            f"\x02{cid}\x02 — {sev_part} | {desc} | published {published}"
+            f"\x02{cid}\x02 - {sev_part} | {desc} | published {published}"
         )
     except (requests.RequestException, ResponseTooLarge) as e:
         log.warning(f"cve request: {e}")
@@ -146,9 +146,9 @@ def _pwn_sync(password: str, ua: str) -> str:
                     count = 0
                 break
         if count > 0:
-            return (f"\x02pwned\x02 — this password appears in "
+            return (f"\x02pwned\x02 - this password appears in "
                     f"{count:,} known breaches. Do not use it.")
-        return "good news — this password was not found in any known breach."
+        return "good news - this password was not found in any known breach."
     except (requests.RequestException, ResponseTooLarge) as e:
         log.warning(f"pwn request: {e}")
         return "lookup failed"
@@ -217,7 +217,7 @@ _CVSS_CIA = {"H": 0.56, "L": 0.22, "N": 0.0}
 
 
 def _cvss_roundup(x: float) -> float:
-    """CVSS v3.1 spec 'roundup' — round up to one decimal place."""
+    """CVSS v3.1 spec 'roundup' - round up to one decimal place."""
     i = int(round(x * 100000))
     if i % 10000 == 0:
         return i / 100000.0
@@ -280,33 +280,33 @@ def _cvss(vector: str) -> str:
 
 # ── .cipher (pure) ──────────────────────────────────────────────────────
 _CIPHERS: dict[str, str] = {
-    "aes": "AES — symmetric block | block 128b | key 128/192/256b | status: secure",
-    "aes-128": "AES-128 — symmetric block | block 128b | key 128b | status: secure",
-    "aes-256": "AES-256 — symmetric block | block 128b | key 256b | status: secure",
-    "des": "DES — symmetric block | block 64b | key 56b | status: broken (key too short)",
-    "3des": "3DES — symmetric block | block 64b | key 112/168b | status: weak/deprecated",
-    "triple-des": "3DES — symmetric block | block 64b | key 112/168b | status: weak/deprecated",
-    "blowfish": "Blowfish — symmetric block | block 64b | key 32-448b | status: weak (64b block)",
-    "twofish": "Twofish — symmetric block | block 128b | key 128/192/256b | status: secure",
-    "rc4": "RC4 — symmetric stream | key 40-2048b | status: broken (biased keystream)",
-    "chacha20": "ChaCha20 — symmetric stream | key 256b | status: secure",
-    "salsa20": "Salsa20 — symmetric stream | key 128/256b | status: secure",
-    "rsa": "RSA — asymmetric | key >=2048b recommended | status: secure (>=2048b)",
-    "ecc": "ECC — asymmetric | key 256b ~ RSA-3072 | status: secure",
-    "ecdsa": "ECDSA — asymmetric signature | key 256/384b | status: secure",
-    "ed25519": "Ed25519 — asymmetric signature | key 256b | status: secure",
-    "dh": "Diffie-Hellman — key exchange | >=2048b group | status: secure (>=2048b)",
-    "md5": "MD5 — hash | digest 128b | status: broken (collisions)",
-    "sha1": "SHA-1 — hash | digest 160b | status: broken (collisions)",
-    "sha-1": "SHA-1 — hash | digest 160b | status: broken (collisions)",
-    "sha256": "SHA-256 — hash | digest 256b | status: secure",
-    "sha-256": "SHA-256 — hash | digest 256b | status: secure",
-    "sha512": "SHA-512 — hash | digest 512b | status: secure",
-    "sha3": "SHA-3 — hash | digest 224/256/384/512b | status: secure",
-    "bcrypt": "bcrypt — password hash | adaptive cost | status: secure",
-    "scrypt": "scrypt — password hash | memory-hard | status: secure",
-    "argon2": "Argon2 — password hash | memory-hard | status: secure (recommended)",
-    "pbkdf2": "PBKDF2 — password hash/KDF | configurable iters | status: acceptable",
+    "aes": "AES - symmetric block | block 128b | key 128/192/256b | status: secure",
+    "aes-128": "AES-128 - symmetric block | block 128b | key 128b | status: secure",
+    "aes-256": "AES-256 - symmetric block | block 128b | key 256b | status: secure",
+    "des": "DES - symmetric block | block 64b | key 56b | status: broken (key too short)",
+    "3des": "3DES - symmetric block | block 64b | key 112/168b | status: weak/deprecated",
+    "triple-des": "3DES - symmetric block | block 64b | key 112/168b | status: weak/deprecated",
+    "blowfish": "Blowfish - symmetric block | block 64b | key 32-448b | status: weak (64b block)",
+    "twofish": "Twofish - symmetric block | block 128b | key 128/192/256b | status: secure",
+    "rc4": "RC4 - symmetric stream | key 40-2048b | status: broken (biased keystream)",
+    "chacha20": "ChaCha20 - symmetric stream | key 256b | status: secure",
+    "salsa20": "Salsa20 - symmetric stream | key 128/256b | status: secure",
+    "rsa": "RSA - asymmetric | key >=2048b recommended | status: secure (>=2048b)",
+    "ecc": "ECC - asymmetric | key 256b ~ RSA-3072 | status: secure",
+    "ecdsa": "ECDSA - asymmetric signature | key 256/384b | status: secure",
+    "ed25519": "Ed25519 - asymmetric signature | key 256b | status: secure",
+    "dh": "Diffie-Hellman - key exchange | >=2048b group | status: secure (>=2048b)",
+    "md5": "MD5 - hash | digest 128b | status: broken (collisions)",
+    "sha1": "SHA-1 - hash | digest 160b | status: broken (collisions)",
+    "sha-1": "SHA-1 - hash | digest 160b | status: broken (collisions)",
+    "sha256": "SHA-256 - hash | digest 256b | status: secure",
+    "sha-256": "SHA-256 - hash | digest 256b | status: secure",
+    "sha512": "SHA-512 - hash | digest 512b | status: secure",
+    "sha3": "SHA-3 - hash | digest 224/256/384/512b | status: secure",
+    "bcrypt": "bcrypt - password hash | adaptive cost | status: secure",
+    "scrypt": "scrypt - password hash | memory-hard | status: secure",
+    "argon2": "Argon2 - password hash | memory-hard | status: secure (recommended)",
+    "pbkdf2": "PBKDF2 - password hash/KDF | configurable iters | status: acceptable",
 }
 
 
@@ -322,11 +322,11 @@ def _cipher(name: str) -> str:
     for k, v in _CIPHERS.items():
         if k.replace("-", "") == alt:
             return v
-    return f"no reference for '{strip_ctrl(n, 30)}' — try aes, rsa, sha256, bcrypt, ..."
+    return f"no reference for '{strip_ctrl(n, 30)}' - try aes, rsa, sha256, bcrypt, ..."
 
 
 class SecinfoModule(BotModule):
-    """`.cve` / `.pwn` / `.hashid` / `.cvss` / `.cipher` — security helpers."""
+    """`.cve` / `.pwn` / `.hashid` / `.cvss` / `.cipher` - security helpers."""
 
     COMMANDS: dict[str, str] = {
         "cve": "cmd_cve",
@@ -346,7 +346,7 @@ class SecinfoModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -366,7 +366,7 @@ class SecinfoModule(BotModule):
             return
         # PM-ONLY: in a channel reply_to is the channel, not the nick.
         if reply_to != nick:
-            self.bot.notice(nick, f"{nick}: please PM me that command — never type a password in a channel")
+            self.bot.notice(nick, f"{nick}: please PM me that command - never type a password in a channel")
             return
         password = arg or ""
         if not password:

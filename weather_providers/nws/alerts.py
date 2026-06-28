@@ -1,4 +1,4 @@
-"""NWS — active weather alerts (most authoritative for US)."""
+"""NWS - active weather alerts (most authoritative for US)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry

@@ -1,4 +1,4 @@
-"""Encoding / text / generator utilities — pure stdlib, no network, no key.
+"""Encoding / text / generator utilities - pure stdlib, no network, no key.
 
 All commands are rate-limited and pure-compute.  Real logic lives in the
 module-level ``_*`` helpers (each returns one ``str``) so they unit-test
@@ -288,7 +288,7 @@ def _ds(arg: str) -> str:
     try:
         value = float(parts[0])
     except ValueError:
-        return "value must be a number — e.g. .ds 1.5 GB"
+        return "value must be a number - e.g. .ds 1.5 GB"
     unit = parts[1].lower()
     if unit not in _DS_UNITS:
         return f"unknown unit '{strip_ctrl(parts[1], 12)}' (B/KB/MB/GB/TB/PB or KiB/MiB/...)"
@@ -430,7 +430,7 @@ def _lorem(arg: str) -> str:
 
 class EncodeModule(BotModule):
     """`.unicode` / `.hash` / `.crc` / `.b32` / `.slug` / `.ulid` / `.ascii`
-    / `.ds` / `.defang` / `.entropy` / `.pw` / `.lorem` — offline codecs."""
+    / `.ds` / `.defang` / `.entropy` / `.pw` / `.lorem` - offline codecs."""
 
     COMMANDS: dict[str, str] = {
         "unicode": "cmd_unicode",
@@ -452,7 +452,7 @@ class EncodeModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

@@ -1,6 +1,6 @@
-"""Google Pollen API provider package — global pollen, requires a key.
+"""Google Pollen API provider package - global pollen, requires a key.
 
-Needs ``[secrets] google_pollen_key`` — a Google Maps Platform API key with
+Needs ``[secrets] google_pollen_key`` - a Google Maps Platform API key with
 the Pollen API enabled.  Native lat/lon (no reverse-geocode).  Returns the
 tree/grass/weed Universal Pollen Index (0-5) for the location.
 """

@@ -1,4 +1,4 @@
-"""NWS (Weather.gov) provider package — free, no API key required.
+"""NWS (Weather.gov) provider package - free, no API key required.
 
 https://api.weather.gov/
 US locations only.  Unlimited calls.  Most authoritative source for US alerts.

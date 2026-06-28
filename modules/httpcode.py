@@ -1,7 +1,7 @@
-"""HTTP status-code lookup — pure local table, no API.
+"""HTTP status-code lookup - pure local table, no API.
 
 Command:
-    .http <code>  — look up a 3-digit HTTP status code.
+    .http <code>  - look up a 3-digit HTTP status code.
 
 Covers the common 1xx/2xx/3xx/4xx/5xx codes plus the WebDAV/RFC-7540
 extras (102, 207, 208, 226, 421, 423, 424, 425, 426, 428, 429, 431,
@@ -87,7 +87,7 @@ _CODES: dict[int, tuple[str, str]] = {
 
 
 class HttpcodeModule(BotModule):
-    """`.http <code>` — look up an HTTP status code locally."""
+    """`.http <code>` - look up an HTTP status code locally."""
 
     COMMANDS: dict[str, str] = {"http": "cmd_http"}
 
@@ -96,7 +96,7 @@ class HttpcodeModule(BotModule):
 
     async def cmd_http(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -112,7 +112,7 @@ class HttpcodeModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: unknown status code {code}")
             return
         reason, desc = entry
-        self.bot.privmsg(reply_to, _strip_ctrl(f"\x02{code}\x02 {reason} — {desc}"))
+        self.bot.privmsg(reply_to, _strip_ctrl(f"\x02{code}\x02 {reason} - {desc}"))
 
     def help_lines(self, prefix: str) -> list[str]:
         return [help_row(prefix, "http <code>", "HTTP status code lookup")]

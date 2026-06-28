@@ -1,4 +1,4 @@
-"""`.seen <nick>` — track when a nick was last seen and what they were doing.
+"""`.seen <nick>` - track when a nick was last seen and what they were doing.
 
 Hooks `on_raw` to passively observe PRIVMSG/JOIN/PART/QUIT/NICK lines and
 records the most recent event per nick in an in-memory dict.  The dict is
@@ -55,7 +55,7 @@ def _parse_trailing(rest: str) -> tuple[list[str], str | None]:
 
 
 class SeenModule(BotModule):
-    """`.seen <nick>` — last seen tracker."""
+    """`.seen <nick>` - last seen tracker."""
 
     COMMANDS: dict[str, str] = {"seen": "cmd_seen"}
 
@@ -78,7 +78,7 @@ class SeenModule(BotModule):
         self._seen: dict[str, dict[str, Any]] = {}
         self._dirty = False
 
-        # Load existing data — any error → empty dict, don't crash
+        # Load existing data - any error → empty dict, don't crash
         try:
             if self._file.exists():
                 with open(self._file, "r", encoding="utf-8") as f:
@@ -222,7 +222,7 @@ class SeenModule(BotModule):
                 # Record NEW nick as last-seen NICK ← oldnick
                 self._record(newnick, "NICK", None, f"← {prefix_nick}")
         except Exception as e:
-            # on_raw must never throw — it runs in the IRC read path
+            # on_raw must never throw - it runs in the IRC read path
             log.debug(f"seen: on_raw parse error: {e!r}")
 
     # ------------------------------------------------------------- persistence
@@ -299,32 +299,32 @@ class SeenModule(BotModule):
         bnick = f"\x02{nick}\x02"
 
         if event == "PRIVMSG":
-            return f'{bnick} last seen {ago} ago — PRIVMSG in {channel}: "{detail}"'
+            return f'{bnick} last seen {ago} ago - PRIVMSG in {channel}: "{detail}"'
         if event == "JOIN":
-            return f"{bnick} last seen {ago} ago — joined {channel}"
+            return f"{bnick} last seen {ago} ago - joined {channel}"
         if event == "PART":
             # detail starts with "left" or "left: <reason>"
             if channel:
-                return f"{bnick} last seen {ago} ago — {detail} {channel}".rstrip()
-            return f"{bnick} last seen {ago} ago — {detail}"
+                return f"{bnick} last seen {ago} ago - {detail} {channel}".rstrip()
+            return f"{bnick} last seen {ago} ago - {detail}"
         if event == "QUIT":
-            return f"{bnick} last seen {ago} ago — {detail}"
+            return f"{bnick} last seen {ago} ago - {detail}"
         if event == "NICK":
             # detail is "→ newnick" or "← oldnick"
             arrow = detail.strip()
             if arrow.startswith("→"):
                 target = arrow[1:].strip()
-                return f"{bnick} last seen {ago} ago — changed nick → {target}"
+                return f"{bnick} last seen {ago} ago - changed nick → {target}"
             if arrow.startswith("←"):
                 target = arrow[1:].strip()
-                return f"{bnick} last seen {ago} ago — changed nick ← {target}"
-            return f"{bnick} last seen {ago} ago — nick change"
-        return f"{bnick} last seen {ago} ago — {event}"
+                return f"{bnick} last seen {ago} ago - changed nick ← {target}"
+            return f"{bnick} last seen {ago} ago - nick change"
+        return f"{bnick} last seen {ago} ago - {event}"
 
     async def cmd_seen(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """`.seen <nick>` — when was the nick last seen."""
+        """`.seen <nick>` - when was the nick last seen."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         target = (arg or "").strip().split()[0] if arg and arg.strip() else ""
         if not target:
@@ -347,5 +347,5 @@ class SeenModule(BotModule):
 
 
 def setup(bot: object) -> SeenModule:
-    """Module entry point — returns a SeenModule instance."""
+    """Module entry point - returns a SeenModule instance."""
     return SeenModule(bot)  # type: ignore[arg-type]

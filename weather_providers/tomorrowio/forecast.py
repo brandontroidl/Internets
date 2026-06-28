@@ -1,4 +1,4 @@
-"""Tomorrow.io — daily forecast."""
+"""Tomorrow.io - daily forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

@@ -25,7 +25,7 @@ class LocationModule(BotModule):
     }
 
     def on_load(self) -> None:
-        """Load geocoding user agent — secret_store overrides config."""
+        """Load geocoding user agent - secret_store overrides config."""
         from .base import cred
         # cred(): secret_store first, then [weather].user_agent, else "" - never
         # a bare KeyError (the template defines no [weather].user_agent), the
@@ -58,7 +58,7 @@ class LocationModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: saved location is {strip_ctrl(display)} ({strip_ctrl(raw)!r})")
         else:
             p = self.bot.cfg["bot"]["command_prefix"]
-            self.bot.privmsg(reply_to, f"{nick}: no location saved — use {p}regloc <zip or city>")
+            self.bot.privmsg(reply_to, f"{nick}: no location saved - use {p}regloc <zip or city>")
 
     async def cmd_delloc(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Delete the user's saved location."""
@@ -77,5 +77,5 @@ class LocationModule(BotModule):
 
 
 def setup(bot: object) -> LocationModule:
-    """Module entry point — returns a LocationModule instance."""
+    """Module entry point - returns a LocationModule instance."""
     return LocationModule(bot)  # type: ignore[arg-type]

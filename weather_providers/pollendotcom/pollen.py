@@ -1,9 +1,9 @@
-"""Pollen.com (IQVIA) — US allergy forecast (unofficial public API).
+"""Pollen.com (IQVIA) - US allergy forecast (unofficial public API).
 
 lat/lon is reverse-geocoded to a US ZIP via Nominatim, then the current
 allergy index (0-12) + dominant allergens are read for that ZIP.  Returns
 ``None`` for non-US locations (so the dispatcher falls through to another
-pollen provider) rather than raising — a coverage gap is not an error.
+pollen provider) rather than raising - a coverage gap is not an error.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ async def fetch(user_agent, lat, lon, location):
     }, headers={"User-Agent": ua})
     addr = rev.get("address", {}) if isinstance(rev, dict) else {}
     if (addr.get("country_code") or "").lower() != "us":
-        return None  # US-only — let the dispatcher try the next provider
+        return None  # US-only - let the dispatcher try the next provider
     zip5 = (addr.get("postcode") or "").split("-")[0].strip()
     if not (len(zip5) == 5 and zip5.isdigit()):
         return None

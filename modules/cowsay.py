@@ -1,10 +1,10 @@
-"""Cowsay — render the classic ASCII cow speaking the given text.
+"""Cowsay - render the classic ASCII cow speaking the given text.
 
 Pure Python: no external ``cowsay`` binary, no library.  The bubble
 is built locally and the cow template is embedded below.
 
 Command:
-    .cowsay <text>   — speak <text>.  Capped at 200 chars.
+    .cowsay <text>   - speak <text>.  Capped at 200 chars.
 
 Each line of the rendered cow is sent as a separate ``privmsg``; the
 bot's send-queue handles flood control naturally.  Rate-limited per nick.
@@ -70,7 +70,7 @@ def _render(text: str) -> list[str]:
 
 
 class CowsayModule(BotModule):
-    """`.cowsay <text>` — ASCII cow speaks the given text."""
+    """`.cowsay <text>` - ASCII cow speaks the given text."""
 
     COMMANDS: dict[str, str] = {"cowsay": "cmd_cowsay"}
 
@@ -79,7 +79,7 @@ class CowsayModule(BotModule):
 
     async def cmd_cowsay(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]

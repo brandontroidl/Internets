@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "internets-irc"
-version = "3.0.0"
+version = "4.0.0"
 description = "Async modular IRC bot with weather, calculator, dice, translation, and more."
 readme = "README.md"
 license = {text = "ISC"}
@@ -31,7 +31,7 @@ classifiers = [
 ]
 # Version policy: lower bounds are the most recent stable release at
 # session time (every package known to be CVE-free at this lower
-# bound).  No upper bounds — pip always installs the newest compatible
+# bound).  No upper bounds - pip always installs the newest compatible
 # release.  CI covers Linux / macOS / Windows across Python 3.10 →
 # 3.14, so any future-breaking upstream release surfaces in the next
 # push.  Each lower bound below is annotated with the CVE / advisory
@@ -41,7 +41,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-async = ["aiohttp>=3.10.11"]  # CVE-2024-52304 (chunked-encoding parser)
+async = ["aiohttp>=3.14.1"]  # 2026 request-smuggling/parser CVEs (subsumes CVE-2024-52304 chunked-encoding floor)
 bcrypt = ["bcrypt>=4.2.0"]    # Rust-backed; current wheels
 argon2 = ["argon2-cffi>=23.1.0"]
 weatherkit = ["PyJWT>=2.10.1", "cryptography>=44.0.0"]
@@ -49,7 +49,7 @@ weatherkit = ["PyJWT>=2.10.1", "cryptography>=44.0.0"]
 # legacy TLS 1.0/1.1 + ships current OpenSSL.
 xml = ["defusedxml>=0.7.1"]
 all = [
-    "aiohttp>=3.10.11",
+    "aiohttp>=3.14.1",
     "bcrypt>=4.2.0",
     "argon2-cffi>=23.1.0",
     "PyJWT>=2.10.1",

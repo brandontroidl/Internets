@@ -1,8 +1,8 @@
-"""Two-tier secret store — env var > config.ini[secrets].
+"""Two-tier secret store - env var > config.ini[secrets].
 
 Outbound credentials (NickServ password, SASL password, server password,
-oper password, weather API keys, etc.) MUST be reversible — the bot has
-to send them on the wire — so this module provides encryption-at-rest,
+oper password, weather API keys, etc.) MUST be reversible - the bot has
+to send them on the wire - so this module provides encryption-at-rest,
 not hashing.  Hashing is one-way and would break authentication.
 
 Lookup order for ``get(name)``:
@@ -17,7 +17,7 @@ optional desktop-session integration brought in ~10 transitive deps
 practical benefit.  The 0o600 file backend is the only secret store;
 ``perms_ok()`` fails closed if the file is group- or world-readable.
 
-config.ini is gitignored — it holds both the non-secret settings and
+config.ini is gitignored - it holds both the non-secret settings and
 the ``[secrets]`` section.  ``config.ini.example`` is the committed
 credential-free template.
 
@@ -51,11 +51,11 @@ ENV_PREFIX = "INTERNETS_"
 # fresh on each `init` call so tests can chdir into a tmp path).
 SECRETS_FILE = Path("config.ini").resolve()
 
-# Canonical secret names — every key the bot considers sensitive.
+# Canonical secret names - every key the bot considers sensitive.
 # Used by migrate / list / status.  Adding a key here makes it part of
 # the migration sweep without any other code changes.
 KNOWN_SECRETS: tuple[str, ...] = (
-    # IRC auth (all sent reversibly on the wire — can't be hashed)
+    # IRC auth (all sent reversibly on the wire - can't be hashed)
     "nickserv_password",
     "sasl_password",     # falls back to nickserv_password if unset
     "server_password",
@@ -79,7 +79,7 @@ KNOWN_SECRETS: tuple[str, ...] = (
     "steam_key",
     "twitch_client_id", "twitch_client_secret",
     "brave_key",
-    # IP reputation (.ip / .rep) — optional; the command is keyless without it
+    # IP reputation (.ip / .rep) - optional; the command is keyless without it
     "abuseipdb_key",
 )
 
@@ -128,7 +128,7 @@ CONFIG_LOCATIONS: dict[str, tuple[str, str]] = {
     "abuseipdb_key":           ("ipintel", "abuseipdb_key"),
 }
 
-# Placeholders that mean "not set" — never migrated, never returned.
+# Placeholders that mean "not set" - never migrated, never returned.
 # All values matched case-insensitively (callers lowercase before lookup).
 # Common dummy strings shipped in example configs, plus the obvious "fill
 # me in" markers we've seen in the wild.
@@ -171,7 +171,7 @@ def perms_ok(path: Path = SECRETS_FILE) -> tuple[bool, str]:
         return True, "windows (acl-based)"
     mode = stat.S_IMODE(st.st_mode)
     if mode != 0o600:
-        return False, f"mode is {oct(mode)}, expected 0o600 — run `chmod 600 {path}`"
+        return False, f"mode is {oct(mode)}, expected 0o600 - run `chmod 600 {path}`"
     return True, "0o600"
 
 
@@ -195,7 +195,7 @@ def get(name: str, default: str = "") -> str:
     if SECRETS_FILE.exists():
         ok, reason = perms_ok(SECRETS_FILE)
         if not ok:
-            log.error("REFUSING to read %s — %s", SECRETS_FILE, reason)
+            log.error("REFUSING to read %s - %s", SECRETS_FILE, reason)
             return default
         parser = configparser.ConfigParser()
         try:
@@ -206,7 +206,7 @@ def get(name: str, default: str = "") -> str:
                     return val
         except configparser.Error as e:
             # configparser includes the offending line in its messages.
-            # That line may contain a partial secret — log type only.
+            # That line may contain a partial secret - log type only.
             log.warning("config.ini parse error: %s", _safe_exc(e))
     return default
 
@@ -214,14 +214,14 @@ def get(name: str, default: str = "") -> str:
 def set_value(name: str, value: str) -> str:
     """Store ``value`` for ``name`` in ``config.ini[secrets]``.
 
-    Returns the backend label (always ``"file"`` — the only backend left
+    Returns the backend label (always ``"file"`` - the only backend left
     after v3.0.0's keyring removal).  Signature retains the return value
     so existing callers / tests continue to work unchanged.
 
     Raises ``ValueError`` if ``value`` contains a CR or LF: the file
     backend writes ``name = value`` as a single line, so an embedded
     newline would inject extra lines (a fake section or key) into
-    config.ini.  Secret values are single-token credentials — a newline
+    config.ini.  Secret values are single-token credentials - a newline
     is always a mistake or an injection attempt.
     """
     if "\n" in value or "\r" in value:
@@ -235,7 +235,7 @@ def delete(name: str) -> list[str]:
 
     Returns ``["file"]`` if a key was removed, ``[]`` if the key was not
     present.  Raises ``PermissionError`` (NOT swallowed) if config.ini
-    exists with perms looser than 0o600 — a failed delete must not be
+    exists with perms looser than 0o600 - a failed delete must not be
     reported as "not found", or an operator trying to remove a leaked
     credential would believe it was already gone.
     """
@@ -352,17 +352,17 @@ def _write_file_secret(name: str, value: str) -> None:
         ok, reason = perms_ok(SECRETS_FILE)
         if not ok:
             raise PermissionError(
-                f"refusing to modify {SECRETS_FILE} — {reason}")
+                f"refusing to modify {SECRETS_FILE} - {reason}")
         text = SECRETS_FILE.read_text(encoding="utf-8")
     new_line = f"{name} = {value}\n"
     lines = text.splitlines(keepends=True)
     if not lines:
-        # Empty / new file — write just the [secrets] header + value.
+        # Empty / new file - write just the [secrets] header + value.
         _atomic_write_text(f"[secrets]\n{new_line}")
         return
     start, end = _find_secrets_section(lines)
     if start is None:
-        # No [secrets] section — append at EOF.
+        # No [secrets] section - append at EOF.
         if not lines[-1].endswith("\n"):
             lines.append("\n")
         lines.append("\n[secrets]\n")
@@ -394,14 +394,14 @@ def _delete_file_secret(name: str) -> bool:
     """Remove ``[secrets].name`` from ``SECRETS_FILE``.  Returns True on hit.
 
     Raises ``PermissionError`` if the file exists with perms looser than
-    0o600 — mirrors ``_write_file_secret`` so a delete blocked by bad
+    0o600 - mirrors ``_write_file_secret`` so a delete blocked by bad
     perms surfaces loudly instead of looking like a no-op.
     """
     if not SECRETS_FILE.exists():
         return False
     ok, reason = perms_ok(SECRETS_FILE)
     if not ok:
-        raise PermissionError(f"refusing to modify {SECRETS_FILE} — {reason}")
+        raise PermissionError(f"refusing to modify {SECRETS_FILE} - {reason}")
     text = SECRETS_FILE.read_text(encoding="utf-8")
     lines = text.splitlines(keepends=True)
     start, end = _find_secrets_section(lines)
@@ -429,7 +429,7 @@ def _scrub_config_ini(cfg_path: Path, names: list[str]) -> None:
     Preserves comments and structure by editing line-by-line instead of
     round-tripping through configparser (which loses formatting).
 
-    The ``[secrets]`` section is intentionally exempt — that's where the
+    The ``[secrets]`` section is intentionally exempt - that's where the
     values are being moved TO, so blanking matching keys there would
     immediately undo the migration when source and destination are the
     same file (the new default, since config.ini is now SECRETS_FILE).
@@ -441,7 +441,7 @@ def _scrub_config_ini(cfg_path: Path, names: list[str]) -> None:
     for line in text.splitlines(keepends=True):
         stripped = line.lstrip()
         bare = stripped.rstrip()
-        # Section header — track it but don't touch.
+        # Section header - track it but don't touch.
         if bare.startswith("[") and bare.endswith("]") and len(bare) >= 3:
             current_section = bare[1:-1].lower()
             out_lines.append(line)
@@ -476,7 +476,7 @@ def migrate(config_path: Path = Path("config.ini"),
             and os.name != "nt"
             and stat.S_IMODE(cfg_path.stat().st_mode) != 0o600):
         os.chmod(cfg_path, 0o600)
-        # NB: don't include the path in this log line — CodeQL's
+        # NB: don't include the path in this log line - CodeQL's
         # py/clear-text-logging-sensitive-data heuristic taints any
         # variable flowing through this function.
         log.info("tightened config file to 0o600 for [secrets] writes")
@@ -495,7 +495,7 @@ def migrate(config_path: Path = Path("config.ini"),
             results[name] = f"stored:{used}"
             migrated.append(name)
         except Exception as e:
-            # Report exception TYPE only — error messages from configparser /
+            # Report exception TYPE only - error messages from configparser /
             # OS file APIs occasionally echo back path fragments we don't
             # want in the log.
             results[name] = f"error:{_safe_exc(e)}"
@@ -518,13 +518,13 @@ def _cmd_status(_: argparse.Namespace) -> int:
 
 
 def _cmd_list(_: argparse.Namespace) -> int:
-    """``python -m secret_store list`` — show which secret keys exist
+    """``python -m secret_store list`` - show which secret keys exist
     and in which backend each is stored.  Prints only the canonical key
     NAME and BACKEND label (env / file / unset), never the secret value
     itself.
 
     The body uses explicit equality branches to map ``list_stored()``'s
-    return into literal display labels — breaks CodeQL's data-flow taint
+    return into literal display labels - breaks CodeQL's data-flow taint
     propagation so its ``py/clear-text-logging-sensitive-data`` query
     doesn't raise a false positive on the print.
     """
@@ -594,11 +594,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     Byte-for-byte copy so every inline comment, signup URL, and tier-limit
     hint is preserved.  Refuses to overwrite an existing config.ini unless
     --force is given (in which case the existing file is replaced wholesale
-    — any local edits are lost; rotate any secrets afterwards).
+    - any local edits are lost; rotate any secrets afterwards).
     """
     src = Path("config.ini.example").resolve()
     if not src.exists():
-        print(f"error: {src} not found — re-clone the repo or fetch it from "
+        print(f"error: {src} not found - re-clone the repo or fetch it from "
               "the project root.", file=sys.stderr)
         return 2
     if SECRETS_FILE.exists() and not args.force:

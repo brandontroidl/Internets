@@ -1,4 +1,4 @@
-# CODEOWNERS — auto-request review for every PR.
+# CODEOWNERS - auto-request review for every PR.
 #
 # GitHub will assign these owners as required reviewers on any PR that
 # touches matching paths.  This file lives at the repo root (GitHub also

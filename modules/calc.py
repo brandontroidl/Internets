@@ -76,7 +76,7 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
         if isinstance(node.op, ast.Pow):
             # Cap BOTH operands of `**`.  Capping only the exponent still
             # let a huge base (e.g. (10**300)**9999) build a multi-hundred-
-            # -thousand-digit int — a CPU/memory amplification.  Bound the
+            # -thousand-digit int - a CPU/memory amplification.  Bound the
             # estimated result bit-length too.
             if isinstance(right, (int, float)) and abs(right) > 10000:
                 raise ValueError("exponent too large")
@@ -101,12 +101,12 @@ def _safe_eval(node: ast.AST, depth: int = 0) -> int | float:
 
 def _calc(expr: str) -> str:
     expr = expr.strip()
-    # Strip CTCP markers (\x01) — they can appear in IRC and collide with
+    # Strip CTCP markers (\x01) - they can appear in IRC and collide with
     # the implicit-multiplication placeholder logic.
     expr = expr.replace("\x01", "")
     held: dict[str, str] = {}
     for i, name in enumerate(_DIGIT_NAMES):
-        tag = f"\ufdd0{i}\ufdd0"  # Unicode noncharacter — safe sentinel
+        tag = f"\ufdd0{i}\ufdd0"  # Unicode noncharacter - safe sentinel
         expr = expr.replace(name, tag)
         held[tag] = name
     for pattern, sub in _IMPLICIT_MUL:
@@ -132,7 +132,7 @@ class CalcModule(BotModule):
     async def cmd_calc(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Evaluate a mathematical expression and display the result."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -149,5 +149,5 @@ class CalcModule(BotModule):
 
 
 def setup(bot: object) -> CalcModule:
-    """Module entry point — returns a CalcModule instance."""
+    """Module entry point - returns a CalcModule instance."""
     return CalcModule(bot)  # type: ignore[arg-type]

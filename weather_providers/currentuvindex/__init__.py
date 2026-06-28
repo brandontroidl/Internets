@@ -1,6 +1,6 @@
-"""currentuvindex provider package — UV index now + today's peak.
+"""currentuvindex provider package - UV index now + today's peak.
 
-https://currentuvindex.com/  — free, keyless API.  Data licensed CC-BY;
+https://currentuvindex.com/  - free, keyless API.  Data licensed CC-BY;
 credit currentuvindex.com.  UV only, global coverage.
 """
 from __future__ import annotations

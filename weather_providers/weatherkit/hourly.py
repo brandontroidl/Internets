@@ -1,4 +1,4 @@
-"""WeatherKit — hourly forecast."""
+"""WeatherKit - hourly forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

@@ -1,9 +1,9 @@
-"""OpenAQ provider package — global open air-quality measurements.
+"""OpenAQ provider package - global open air-quality measurements.
 
 https://docs.openaq.org/  (v3 API; v1/v2 retired)
 Air-quality only.  Aggregates raw concentrations from the nearest
 monitoring location's sensors and derives a US EPA AQI from PM2.5.
-Requires a free API key (header X-API-Key) — register at
+Requires a free API key (header X-API-Key) - register at
 https://explore.openaq.org/.  Raises so the dispatcher falls through to
 another provider when there's no station within the search radius.
 """

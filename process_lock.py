@@ -3,7 +3,7 @@
 Prevents two instances of the bot from running concurrently against the
 same on-disk state.  Two concurrent writers would race on the JSON
 state files (locations / channels / users / secrets) and silently
-corrupt them — the prior writer's tmp-and-rename can clobber the
+corrupt them - the prior writer's tmp-and-rename can clobber the
 later writer's mid-flight changes.
 
 Usage::
@@ -24,7 +24,7 @@ Design notes
 * Stale detection on POSIX uses ``os.kill(pid, 0)`` which returns
   cleanly if the PID is live and raises ``ProcessLookupError`` if
   reaped.  Note this also catches the case where the PID was reused
-  by an unrelated process — we then refuse the lock conservatively
+  by an unrelated process - we then refuse the lock conservatively
   (better safe than corrupt state).
 * On Windows we attempt ``psutil`` for liveness; if psutil isn't
   installed we fail open with a warning rather than refuse to start.
@@ -71,7 +71,7 @@ def _pid_is_alive(pid: int) -> Optional[bool]:
         except ProcessLookupError:
             return False
         except PermissionError:
-            # Process exists but is owned by another user — treat as
+            # Process exists but is owned by another user - treat as
             # live; conservative refusal beats clobbering state.
             return True
         except OSError as e:
@@ -79,12 +79,12 @@ def _pid_is_alive(pid: int) -> Optional[bool]:
                 return False
             log.warning("process_lock: os.kill(%d, 0): %r", pid, e)
             return None
-    # Non-POSIX (Windows) — try psutil; fall back to fail-open.
+    # Non-POSIX (Windows) - try psutil; fall back to fail-open.
     try:
         import psutil  # type: ignore
     except ImportError:
         log.warning(
-            "process_lock: psutil not installed on non-POSIX platform — "
+            "process_lock: psutil not installed on non-POSIX platform - "
             "cannot verify if PID %d is live; assuming dead (fail-open).",
             pid,
         )
@@ -117,7 +117,7 @@ class ProcessLock:
     """
 
     def __init__(self, path: Optional[Path] = None) -> None:
-        # Store unresolved — we resolve at acquire() so CWD changes
+        # Store unresolved - we resolve at acquire() so CWD changes
         # between __init__ and acquire are honoured.
         self._path_arg: Optional[Path] = path
         self._path: Optional[Path] = None
@@ -130,7 +130,7 @@ class ProcessLock:
 
     def _resolved_path(self) -> Path:
         p = self._path_arg if self._path_arg is not None else Path("./internets.pid")
-        # Don't call .resolve() — the parent directory may not exist
+        # Don't call .resolve() - the parent directory may not exist
         # yet for an unusual deployment.  Just convert to an absolute
         # path against the *current* CWD.
         if not p.is_absolute():
@@ -159,7 +159,7 @@ class ProcessLock:
                 if same_host:
                     alive = _pid_is_alive(other_pid)
                 else:
-                    # Different host — we cannot probe it.  Refuse
+                    # Different host - we cannot probe it.  Refuse
                     # conservatively; operator can delete the lockfile
                     # by hand if they're sure the other host is dead.
                     alive = True
@@ -177,7 +177,7 @@ class ProcessLock:
                     self._safe_unlink(self._path)
                 else:
                     # Fail-open: psutil unavailable on Windows.  Log
-                    # and take the lock — better to risk a benign
+                    # and take the lock - better to risk a benign
                     # race than refuse-to-start on an admin's box.
                     log.warning(
                         "process_lock: cannot verify pid=%d liveness; "
@@ -185,9 +185,9 @@ class ProcessLock:
                     )
                     self._safe_unlink(self._path)
             else:
-                # Corrupt / unreadable lockfile — remove and continue.
+                # Corrupt / unreadable lockfile - remove and continue.
                 log.warning(
-                    "process_lock: lockfile %s is unreadable — removing.",
+                    "process_lock: lockfile %s is unreadable - removing.",
                     self._path,
                 )
                 self._safe_unlink(self._path)
@@ -236,7 +236,7 @@ class ProcessLock:
             log.info("process_lock: released %s", self._path)
         else:
             log.warning(
-                "process_lock: not releasing %s — pid mismatch "
+                "process_lock: not releasing %s - pid mismatch "
                 "(file=%s, ours=%d)", self._path, file_pid, self._pid,
             )
         self._owned = False
@@ -256,7 +256,7 @@ class ProcessLock:
         """Return ``(pid, start_time, hostname)`` from the existing
         lockfile, or ``None`` if it's missing / unreadable / malformed.
         """
-        # Bandit B101 — replace assert with a real RuntimeError so the
+        # Bandit B101 - replace assert with a real RuntimeError so the
         # invariant survives `python -O`.  Reaching here without a path
         # would indicate a programming error in the caller.
         if self._path is None:

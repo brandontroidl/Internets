@@ -1,18 +1,18 @@
 """Base types for the multi-provider weather system.
 
 Every provider module implements ``WeatherProvider`` and returns normalized
-dataclasses.  The registry in ``__init__.py`` handles fallback chains —
+dataclasses.  The registry in ``__init__.py`` handles fallback chains -
 providers that don't support a given data type simply omit the method.
 
 Data types
 ----------
-WeatherResult / ForecastDay   — current conditions + daily forecast
-HourlyResult  / HourlyEntry   — hourly forecast (temperature, precip, wind)
-AlertsResult  / AlertEntry    — active weather alerts and warnings
-AirQualityResult              — AQI index, PM2.5, ozone, pollutants
-AstronomyResult               — sunrise, sunset, moon phase, illumination
-HistoricalResult              — weather on a past date
-MarineResult                  — wave height, swell, water temperature
+WeatherResult / ForecastDay   - current conditions + daily forecast
+HourlyResult  / HourlyEntry   - hourly forecast (temperature, precip, wind)
+AlertsResult  / AlertEntry    - active weather alerts and warnings
+AirQualityResult              - AQI index, PM2.5, ozone, pollutants
+AstronomyResult               - sunrise, sunset, moon phase, illumination
+HistoricalResult              - weather on a past date
+MarineResult                  - wave height, swell, water temperature
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ class AirQualityResult:
     no2: float | None          = None
     so2: float | None          = None
     co: float | None           = None
-    aod: float | None          = None   # aerosol optical depth (550nm) — smoke proxy
+    aod: float | None          = None   # aerosol optical depth (550nm) - smoke proxy
 
 
 # ── Astronomy ────────────────────────────────────────────────────────
@@ -250,11 +250,11 @@ class PollenResult:
     mugwort: float | None      = None
     olive: float | None        = None
     ragweed: float | None      = None
-    # Google Pollen — tree/grass/weed index (0-5 Universal Pollen Index)
+    # Google Pollen - tree/grass/weed index (0-5 Universal Pollen Index)
     tree_index: float | None   = None
     grass_index: float | None  = None
     weed_index: float | None   = None
-    # Pollen.com / IQVIA — overall index (0-12) + dominant allergens
+    # Pollen.com / IQVIA - overall index (0-12) + dominant allergens
     overall_index: float | None = None
     category: str              = ""
     triggers: tuple[str, ...]  = ()
@@ -375,7 +375,7 @@ class WeatherProvider(Protocol):
         get_weather, get_forecast
 
     Optional (implement if the API supports it).  Method names listed
-    here MUST match the values in ``_dispatch.CAPABILITY_METHODS`` —
+    here MUST match the values in ``_dispatch.CAPABILITY_METHODS`` -
     that's what the dispatcher uses with ``hasattr`` to discover which
     capabilities a provider supports:
 

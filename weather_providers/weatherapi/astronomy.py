@@ -1,4 +1,4 @@
-"""WeatherAPI.com — astronomy (sun/moon)."""
+"""WeatherAPI.com - astronomy (sun/moon)."""
 from __future__ import annotations
 from datetime import date
 from .._http import get_json

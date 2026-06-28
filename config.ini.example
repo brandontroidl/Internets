@@ -1,5 +1,5 @@
 ; ────────────────────────────────────────────────────────────────────
-;  Internets bot config — TEMPLATE.
+;  Internets bot config - TEMPLATE.
 ;
 ;  Copy this file to config.ini and chmod 600:
 ;
@@ -9,7 +9,7 @@
 ;
 ;  Or run:  python -m secret_store init      # does the above for you
 ;
-;  config.ini is gitignored.  Edit it freely — your changes never get
+;  config.ini is gitignored.  Edit it freely - your changes never get
 ;  committed.  Secrets live in the [secrets] section at the bottom of
 ;  this file; the bot refuses to read them if perms are loose (anything
 ;  other than 0o600).
@@ -25,7 +25,7 @@
 ;    - The bot never logs values from [secrets].
 ;    - Outbound IRC messages are scrubbed for credential prefixes
 ;      (PASS, IDENTIFY, OPER, AUTHENTICATE) before being logged.
-;    - `python -m secret_store get <name>` confirms presence only —
+;    - `python -m secret_store get <name>` confirms presence only -
 ;      it never prints the value (no flag does).
 ;    - `python -m secret_store list` shows backend per secret, not the
 ;      values themselves.
@@ -41,7 +41,7 @@ ssl = true
 ssl_verify = true
 nickname = Internets
 realname = IRC Bot
-; No channels listed here — the bot is invite-only.
+; No channels listed here - the bot is invite-only.
 ; /INVITE Internets #yourchannel   to add it to a channel.
 ; Joined channels are saved to channels.json and rejoined on restart.
 ;
@@ -57,7 +57,7 @@ user_modes = +iwx
 ; Oper-only modes to set after successful OPER (381 numeric).
 oper_modes =
 
-; Server notice mask — set after OPER.  Requires +s in oper_modes.
+; Server notice mask - set after OPER.  Requires +s in oper_modes.
 oper_snomask =
 
 [bot]
@@ -78,7 +78,7 @@ services_nick  = ChanServ
 autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes,netcalc,mathx,encode,devtools,physcalc,pkginfo,reflookup,ghinfo,dnsutils,secinfo,astro2,probe,satpass,scinews,ipintel
 
 [admin]
-; Admin password hash for .load / .unload / .reload — generate with
+; Admin password hash for .load / .unload / .reload - generate with
 ; `python hashpw.py --algo argon2` and place the line in config.local.ini
 ; (so it's not committed).  Leave blank here.  Plaintext passwords are
 ; rejected at startup.
@@ -87,13 +87,13 @@ password_hash =
 [weather]
 ; Default unit system: "us" (°F, mph, inHg) or "metric" (°C, km/h, hPa).
 ; The geocoder / weather-API User-Agent contact identifier is NOT set
-; here — it lives in [secrets].weather_user_agent at the bottom of this
+; here - it lives in [secrets].weather_user_agent at the bottom of this
 ; file (Nominatim and several weather APIs require a real URL or email).
 units = us
 
 ; Home country (ISO 3166-1 alpha-2) for resolving BARE numeric postal codes
 ; that are shared across countries.  A real local code stays local; one that
-; isn't valid here falls back to the global best match — so with "us",
+; isn't valid here falls back to the global best match - so with "us",
 ; `.w 43812` → Ohio but `.w 08000` → Barcelona.  Override per-query with an
 ; explicit country, e.g. `.w 08000 spain` or `.w 08000 es`.  Format-unique
 ; codes (Canadian "A1A 1A1", UK "SW1A 1AA", ZIP+4) ignore this and pin their
@@ -106,7 +106,7 @@ default_country = us
 ; accuracy ranks + live health scores.
 ;
 ; This is an ORDERING, not an allowlist: listing a subset just puts those
-; first — every other supported provider still registers (after the listed
+; first - every other supported provider still registers (after the listed
 ; ones), so adding a provider never requires editing this line.
 ;
 ; Providers register only when their credentials are present in
@@ -130,7 +130,7 @@ provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, acc
 steamids_file = steamids.json
 
 [idlerpg]
-; IdleRPG XML endpoint — default is Rizon's.  Override if you point
+; IdleRPG XML endpoint - default is Rizon's.  Override if you point
 ; at a different network.
 api_url = http://idlerpg.rizon.net/xml.php
 
@@ -142,7 +142,7 @@ api_url =
 [metrics]
 ; Optional Prometheus text-format exporter.  Off by default.
 ; Set enable = true to start an HTTP listener on host:port serving
-; /metrics in Prometheus text format.  NEVER bind to 0.0.0.0 — the
+; /metrics in Prometheus text format.  NEVER bind to 0.0.0.0 - the
 ; endpoint is unauthenticated and exposes internal counters.
 enable = false
 host = 127.0.0.1
@@ -151,7 +151,7 @@ port = 9779
 [logging]
 level = INFO
 log_file = internets.log
-; Log rotation — main log and debug log are both rotated.
+; Log rotation - main log and debug log are both rotated.
 max_bytes    = 5242880      ; 5 MB per file before rotating
 backup_count = 3            ; keep 3 rotated copies (.1, .2, .3)
 ; Optional: separate debug log capturing ALL output including protocol
@@ -160,10 +160,10 @@ debug_file =
 
 ; ════════════════════════════════════════════════════════════════════
 ;
-;                         [secrets]  — sensitive
+;                         [secrets]  - sensitive
 ;
 ; Everything below is read by secret_store.py when no INTERNETS_* env
-; var overrides it.  Strict 0o600 enforced — the bot refuses to read
+; var overrides it.  Strict 0o600 enforced - the bot refuses to read
 ; this file if perms are looser.
 ;
 ; Any of these can instead be supplied via an environment variable,
@@ -175,13 +175,13 @@ debug_file =
 [secrets]
 
 ; ── IRC authentication ──────────────────────────────────────────────
-; All four are sent reversibly on the wire — they CANNOT be hashed.
+; All four are sent reversibly on the wire - they CANNOT be hashed.
 ; The secret store gives encryption-at-rest; hashing would break auth.
 
 ; NickServ / SASL identify password (most networks use the same value).
 nickserv_password =
 
-; SASL PLAIN password — set this only if it differs from
+; SASL PLAIN password - set this only if it differs from
 ; nickserv_password.  If empty, the bot falls back to nickserv_password.
 sasl_password =
 
@@ -195,108 +195,108 @@ oper_password =
 ; ── PII / contact identifier ────────────────────────────────────────
 ; Nominatim and several weather APIs require a real contact in the
 ; User-Agent.  Prefer a URL over an email when possible, e.g.
-; "Internets/3.0.0 (https://github.com/youruser/yourrepo)".
+; "Internets/4.0.0 (https://github.com/youruser/yourrepo)".
 
 weather_user_agent =
 
 
 ; ── Weather provider keys ───────────────────────────────────────────
-; NWS and Open-Meteo need no key — leave them off this list.
+; NWS and Open-Meteo need no key - leave them off this list.
 ; A provider with a missing key is silently inactive: its flag (e.g.
 ; -owm) is hidden from .help, and forcing it returns "not active".
 
-; WeatherAPI.com — free tier: 1M calls/month
+; WeatherAPI.com - free tier: 1M calls/month
 ; https://www.weatherapi.com/signup.aspx
 weatherapi_key =
 
-; Tomorrow.io — free tier: 500 calls/day
+; Tomorrow.io - free tier: 500 calls/day
 ; https://app.tomorrow.io/signup
 tomorrowio_key =
 
-; OpenWeatherMap — free tier: 60 calls/min, 1M calls/month
+; OpenWeatherMap - free tier: 60 calls/min, 1M calls/month
 ; https://home.openweathermap.org/users/sign_up
 openweathermap_key =
 
-; Visual Crossing — free tier: 1000 calls/day
+; Visual Crossing - free tier: 1000 calls/day
 ; https://www.visualcrossing.com/sign-up
 visualcrossing_key =
 
-; Pirate Weather — free tier: 20,000 calls/month (Dark Sky replacement)
+; Pirate Weather - free tier: 20,000 calls/month (Dark Sky replacement)
 ; https://pirateweather.net/getting-started
 pirateweather_key =
 
-; Weatherstack — free tier: 250 calls/month (current only)
+; Weatherstack - free tier: 250 calls/month (current only)
 ; https://weatherstack.com/signup/free
 weatherstack_key =
 
-; Meteomatics — username + password (free trial available)
+; Meteomatics - username + password (free trial available)
 ; https://www.meteomatics.com/en/sign-up-for-free-weather-api-test-account/
 meteomatics_username =
 meteomatics_password =
 
-; AccuWeather — free tier: 50 calls/day
+; AccuWeather - free tier: 50 calls/day
 ; https://developer.accuweather.com/user/register
 accuweather_key =
 
-; World Weather Online — free tier: 500 calls/day
+; World Weather Online - free tier: 500 calls/day
 ; https://www.worldweatheronline.com/weather-api/
 worldweatheronline_key =
 
-; WeatherBit — free tier: 50 calls/day
+; WeatherBit - free tier: 50 calls/day
 ; https://www.weatherbit.io/account/create
 weatherbit_key =
 
-; Stormglass (marine specialist) — free tier: 10 calls/day
+; Stormglass (marine specialist) - free tier: 10 calls/day
 ; https://stormglass.io/sign-up
 stormglass_key =
 
-; AirNow (US EPA official air quality index) — free tier: 500 req/hour
+; AirNow (US EPA official air quality index) - free tier: 500 req/hour
 ; US locations only; powers .aqi with authoritative EPA AQI.
 ; https://docs.airnowapi.org/account/request/
 airnow_key =
 
-; PurpleAir (crowdsourced PM2.5 sensors) — free read key
+; PurpleAir (crowdsourced PM2.5 sensors) - free read key
 ; Global, hyper-local; ranked below model-based AQI sources.
 ; https://develop.purpleair.com/
 purpleair_key =
 
-; WAQI / aqicn.org (global air quality) — free token (non-commercial)
+; WAQI / aqicn.org (global air quality) - free token (non-commercial)
 ; https://aqicn.org/data-platform/token/
 waqi_token =
 
-; OpenAQ (open regulatory + sensor air quality) — free API key
+; OpenAQ (open regulatory + sensor air quality) - free API key
 ; https://docs.openaq.org/  (key via explore.openaq.org)
 openaq_key =
 
-; IQAir AirVisual (global air quality) — free Community tier 10k/mo
+; IQAir AirVisual (global air quality) - free Community tier 10k/mo
 ; https://www.iqair.com/air-pollution-data-api
 iqair_key =
 
-; TideCheck (global tides) — free tier 50 req/day
+; TideCheck (global tides) - free tier 50 req/day
 ; https://tidecheck.com/developers
 tidecheck_key =
 
-; NASA FIRMS (global active-fire detections) — free MAP_KEY
+; NASA FIRMS (global active-fire detections) - free MAP_KEY
 ; https://firms.modaps.eosdis.nasa.gov/api/area/
 firms_key =
 
-; Google Pollen API (global pollen: tree/grass/weed index) — a Google Maps
+; Google Pollen API (global pollen: tree/grass/weed index) - a Google Maps
 ; Platform key with the Pollen API enabled.  Optional: Pollen.com (US) and
 ; Open-Meteo (Europe) provide pollen with no key.
 ; https://developers.google.com/maps/documentation/pollen
 google_pollen_key =
 
-; N2YO satellite tracking (.passes visible-pass predictions) — free key.
+; N2YO satellite tracking (.passes visible-pass predictions) - free key.
 ; https://www.n2yo.com/api/
 n2yo_api_key =
 
-; Apple WeatherKit — Apple Developer Program (500K calls/month)
+; Apple WeatherKit - Apple Developer Program (500K calls/month)
 ; Requires PyJWT + cryptography: pip install internets-irc[weatherkit]
 ; https://developer.apple.com/weatherkit/
 weatherkit_team_id =
 weatherkit_service_id =
 weatherkit_key_id =
-; weatherkit_key_file is a *path* to the .p8 private key file — kept
+; weatherkit_key_file is a *path* to the .p8 private key file - kept
 ; outside this secrets section because it's typically owned by the
 ; bot user already.  Store the path, not the key contents.
 weatherkit_key_file =
@@ -305,35 +305,35 @@ weatherkit_key_file =
 ; ── Other module keys ───────────────────────────────────────────────
 ; A loaded module with a missing key shows no commands in .help.
 
-; OMDb (movies)               — https://www.omdbapi.com/apikey.aspx
+; OMDb (movies)               - https://www.omdbapi.com/apikey.aspx
 omdb_key =
 
-; Last.fm                     — https://www.last.fm/api/account/create
+; Last.fm                     - https://www.last.fm/api/account/create
 lastfm_key =
 
-; YouTube Data API v3         — https://console.cloud.google.com/apis/credentials
+; YouTube Data API v3         - https://console.cloud.google.com/apis/credentials
 youtube_key =
 
 ; Stocks / crypto (any one of the three enables the module)
-; Finnhub                     — https://finnhub.io/register
+; Finnhub                     - https://finnhub.io/register
 finnhub_key =
-; Alpha Vantage               — https://www.alphavantage.co/support/#api-key
+; Alpha Vantage               - https://www.alphavantage.co/support/#api-key
 alphavantage_key =
-; Twelve Data                 — https://twelvedata.com/account
+; Twelve Data                 - https://twelvedata.com/account
 twelvedata_key =
 
-; Steam Web API               — https://steamcommunity.com/dev/apikey
+; Steam Web API               - https://steamcommunity.com/dev/apikey
 steam_key =
 
-; Twitch Helix                — https://dev.twitch.tv/console/apps
+; Twitch Helix                - https://dev.twitch.tv/console/apps
 twitch_client_id =
 twitch_client_secret =
 
-; Brave Search (optional)     — https://brave.com/search/api/
+; Brave Search (optional)     - https://brave.com/search/api/
 ;   .sw/.g fall back to DuckDuckGo if missing; image search needs Brave.
 brave_key =
 
-; AbuseIPDB (optional)        — https://www.abuseipdb.com/account/api
+; AbuseIPDB (optional)        - https://www.abuseipdb.com/account/api
 ;   .ip / .rep work fully keyless (DNSBL + DShield + GreyNoise + Tor);
 ;   adding a key appends the AbuseIPDB confidence score + report count.
 abuseipdb_key =

@@ -1,4 +1,4 @@
-"""WeatherBit.io — hourly forecast (48 hours free, 120 hours paid)."""
+"""WeatherBit.io - hourly forecast (48 hours free, 120 hours paid)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

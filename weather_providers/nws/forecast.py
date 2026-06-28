@@ -1,4 +1,4 @@
-"""NWS — daily forecast."""
+"""NWS - daily forecast."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay

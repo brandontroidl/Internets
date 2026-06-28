@@ -1,9 +1,9 @@
-"""AccuWeather — hourly forecast."""
+"""AccuWeather - hourly forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
-# fix: was http:// — leaked apikey in query string on the wire.
+# fix: was http:// - leaked apikey in query string on the wire.
 _B = "https://dataservice.accuweather.com"
 async def fetch(key, loc_key, location, hours=12):
     data = await get_json(f"{_B}/forecasts/v1/hourly/12hour/{loc_key}", params={"apikey": key, "metric": "true", "details": "true"})

@@ -1,8 +1,8 @@
-"""NASA FIRMS provider package — active wildfire detections (global).
+"""NASA FIRMS provider package - active wildfire detections (global).
 
 Fire Information for Resource Management System.  Satellite thermal-anomaly
 detections (VIIRS S-NPP, near-real-time).  Global coverage.  Requires a free
-MAP_KEY in the URL path — register at https://firms.modaps.eosdis.nasa.gov/api/.
+MAP_KEY in the URL path - register at https://firms.modaps.eosdis.nasa.gov/api/.
 
 These are point detections, not mapped incidents: we get a count of nearby
 detections and the distance to the nearest one, but no incident names or

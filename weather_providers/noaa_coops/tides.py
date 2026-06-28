@@ -1,4 +1,4 @@
-"""NOAA CO-OPS — next high/low tide from the nearest prediction station."""
+"""NOAA CO-OPS - next high/low tide from the nearest prediction station."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import TideResult, haversine_km as _haversine_km
@@ -6,7 +6,7 @@ from ..base import TideResult, haversine_km as _haversine_km
 _STATIONS = ("https://api.tidesandcurrents.noaa.gov"
              "/mdapi/prod/webapi/stations.json")
 _DATA = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
-_MAX_KM = 150.0  # beyond this there's no real US coverage — fall back
+_MAX_KM = 150.0  # beyond this there's no real US coverage - fall back
 
 
 async def _water_temp(station):
@@ -32,7 +32,7 @@ async def _water_temp(station):
 
 
 async def fetch(lat, lon, location):
-    # Step 1 — resolve the nearest tide-prediction station.  The full station
+    # Step 1 - resolve the nearest tide-prediction station.  The full station
     # list is large (~3500 stations), so lift the response cap.
     sdata = await get_json(
         _STATIONS,
@@ -61,14 +61,14 @@ async def fetch(lat, lon, location):
         raise HTTPError("NOAA CO-OPS: no usable station",
                         status=None, provider_hint="noaa_coops")
     if best_km > _MAX_KM:
-        # Nearest station is too far — almost certainly outside US coverage.
+        # Nearest station is too far - almost certainly outside US coverage.
         raise HTTPError("NOAA CO-OPS: no tide coverage for this location",
                         status=None, provider_hint="noaa_coops")
 
     sid = str(best.get("id"))
     name = best.get("name") or sid
 
-    # Step 2 — today's high/low predictions for that station.
+    # Step 2 - today's high/low predictions for that station.
     pdata = await get_json(_DATA, params={
         "product": "predictions",
         "interval": "hilo",

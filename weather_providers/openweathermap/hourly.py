@@ -1,4 +1,4 @@
-"""OpenWeatherMap — "hourly" forecast.
+"""OpenWeatherMap - "hourly" forecast.
 
 CADENCE WARNING: the free /forecast endpoint returns 3-hour steps, NOT
 1-hour steps. The hourly-resolution forecast lives on the paid OneCall

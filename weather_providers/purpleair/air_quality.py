@@ -1,4 +1,4 @@
-"""PurpleAir — air quality from the nearest outdoor community sensor."""
+"""PurpleAir - air quality from the nearest outdoor community sensor."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import AirQualityResult, aqi_category, haversine_km as _haversine_km
@@ -48,7 +48,7 @@ async def fetch(key, lat, lon, location):
 
     pm_corr = epa_correct(_get(best, "pm2.5"), _get(best, "humidity"))
     aqi = pm25_to_aqi(pm_corr)
-    # Provenance matters for crowdsourced data — surface the sensor distance
+    # Provenance matters for crowdsourced data - surface the sensor distance
     # so users know how local the reading is (fits the 30-char source cap).
     source = f"PurpleAir ~{best_km:.0f}km" if best_km is not None else "PurpleAir"
     return AirQualityResult(

@@ -1,4 +1,4 @@
-"""WeatherAPI.com — historical weather."""
+"""WeatherAPI.com - historical weather."""
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json

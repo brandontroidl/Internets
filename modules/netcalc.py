@@ -1,4 +1,4 @@
-"""Network calculators — pure stdlib, no network, no key.
+"""Network calculators - pure stdlib, no network, no key.
 
     .cidr <a.b.c.d/prefix>            network / broadcast / mask / hosts / range
     .subnet <ip/prefix> <new_prefix>  split a block into smaller subnets
@@ -37,7 +37,7 @@ def _cidr(arg: str) -> str:
     try:
         net = ipaddress.ip_network(arg.strip(), strict=False)
     except ValueError:
-        return "invalid CIDR — try 10.0.0.0/24 or 2001:db8::/48"
+        return "invalid CIDR - try 10.0.0.0/24 or 2001:db8::/48"
     total = net.num_addresses
     parts = [str(net.with_prefixlen), f"net {net.network_address}"]
     if isinstance(net, ipaddress.IPv4Network):
@@ -95,7 +95,7 @@ def _port(arg: str) -> str:
 
 
 class NetcalcModule(BotModule):
-    """`.cidr` / `.subnet` / `.port` — offline network calculators."""
+    """`.cidr` / `.subnet` / `.port` - offline network calculators."""
 
     COMMANDS: dict[str, str] = {
         "cidr": "cmd_cidr",
@@ -108,7 +108,7 @@ class NetcalcModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

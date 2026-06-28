@@ -100,7 +100,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class SpacexModule(BotModule):
-    """`.spacex` — next scheduled SpaceX launch (Launch Library 2)."""
+    """`.spacex` - next scheduled SpaceX launch (Launch Library 2)."""
 
     COMMANDS: dict[str, str] = {"spacex": "cmd_spacex"}
 
@@ -114,7 +114,7 @@ class SpacexModule(BotModule):
 
     async def cmd_spacex(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

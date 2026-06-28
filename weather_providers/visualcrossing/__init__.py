@@ -1,4 +1,4 @@
-"""Visual Crossing provider package — requires API key.
+"""Visual Crossing provider package - requires API key.
 
 https://www.visualcrossing.com/weather-api
 Free tier: 1000 calls/day.  Current, forecast, hourly, alerts, historical.

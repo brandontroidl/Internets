@@ -1,7 +1,7 @@
-"""Pirate Weather — weather alerts."""
+"""Pirate Weather - weather alerts."""
 from __future__ import annotations
 from ..base import AlertsResult, AlertEntry
-# fix: key embedded in URL path leaks into HTTPError messages — use
+# fix: key embedded in URL path leaks into HTTPError messages - use
 # safe_get_json wrapper which redacts the key before re-raising.
 from ._codes import safe_get_json
 

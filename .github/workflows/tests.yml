@@ -8,14 +8,14 @@ on:
 
 # CWE-275 / CodeQL actions/missing-workflow-permissions:
 # Explicit least-privilege GITHUB_TOKEN scope.  This workflow only checks
-# out code and runs tests — it never writes to the repo, creates issues,
+# out code and runs tests - it never writes to the repo, creates issues,
 # or publishes packages.
 permissions:
   contents: read
 
 env:
   # Belt-and-braces alongside the explicit encoding='utf-8' kwargs in
-  # tests/run_tests.py — protects any helper that still relies on the
+  # tests/run_tests.py - protects any helper that still relies on the
   # platform's default locale (cp1252 on Windows by default).
   PYTHONIOENCODING: utf-8
 
@@ -38,7 +38,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        # Hash-pinned install from requirements.lock — defends against
+        # Hash-pinned install from requirements.lock - defends against
         # PyPI account-takeover + dependency confusion (a poisoned wheel
         # with the right name but wrong hash will fail to install).
         # Regenerate the lockfile with: scripts/regen-lockfile.sh

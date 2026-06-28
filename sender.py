@@ -1,8 +1,8 @@
 """
 Async priority send queue with token-bucket rate limiting.
 
-priority=0  protocol traffic (PONG, CAP, NICK, QUIT) — bypass bucket
-priority=1  normal output (PRIVMSG, NOTICE, JOIN) — subject to bucket
+priority=0  protocol traffic (PONG, CAP, NICK, QUIT) - bypass bucket
+priority=1  normal output (PRIVMSG, NOTICE, JOIN) - subject to bucket
 
 Burst: 5 tokens.  Refill: 1 per 1.5s (~40 msg/min sustained).
 
@@ -37,7 +37,7 @@ class Sender:
 
     Priority 0 bypasses the bucket (protocol traffic).  Priority 1 is
     subject to rate limiting (~40 msg/min sustained, 5 burst).
-    ``enqueue()`` is thread-safe — modules call it from worker threads.
+    ``enqueue()`` is thread-safe - modules call it from worker threads.
     """
     CAPACITY: int = 5
     REFILL: float = 1.5
@@ -105,7 +105,7 @@ class Sender:
             if priority == 0:
                 # Evict the lowest-priority/highest-seq slot to guarantee
                 # protocol traffic enqueues.  PriorityQueue exposes its
-                # heap as ._queue — using it is acceptable here because
+                # heap as ._queue - using it is acceptable here because
                 # the alternative is dropping a PONG.
                 try:
                     heap = self._q._queue  # type: ignore[attr-defined]
@@ -118,18 +118,18 @@ class Sender:
                         import heapq
                         heapq.heapify(heap)
                         log.warning(
-                            f"Send queue full — evicted pri={evicted[0]} "
+                            f"Send queue full - evicted pri={evicted[0]} "
                             f"to make room for priority-0 traffic"
                         )
                         self._drop()
                         self._q.put_nowait(item)
                         return
-                except Exception as e:  # pragma: no cover — defensive
+                except Exception as e:  # pragma: no cover - defensive
                     log.error(f"Failed to evict for priority-0: {e}")
-                # If eviction failed, log loudly — never silently drop pri-0.
-                log.error("Send queue full — UNABLE to enqueue priority-0 message")
+                # If eviction failed, log loudly - never silently drop pri-0.
+                log.error("Send queue full - UNABLE to enqueue priority-0 message")
             else:
-                log.warning("Send queue full — dropping message")
+                log.warning("Send queue full - dropping message")
                 self._drop()
 
     def enqueue(self, msg: str, priority: int = 1) -> None:
@@ -170,7 +170,7 @@ class Sender:
         # Generic IDENT (older networks / Atheme aliases).
         "IDENT ",
         # SASL: AUTHENTICATE <base64-of-user\0user\0pass> for PLAIN, or
-        # the empty "AUTHENTICATE +" continuation — redact both.  Any
+        # the empty "AUTHENTICATE +" continuation - redact both.  Any
         # non-prefix-stripped AUTHENTICATE payload is treated as secret.
         "AUTHENTICATE ",
     )
@@ -179,7 +179,7 @@ class Sender:
     _MAX_IRC_LINE = 512
 
     def _write_line(self, msg: str) -> None:
-        """Sanitize, log, and buffer a single IRC line.  NOT async — just buffers."""
+        """Sanitize, log, and buffer a single IRC line.  NOT async - just buffers."""
         # Strip embedded CR/LF/NUL to prevent protocol injection.
         msg = msg.replace("\r", "").replace("\n", "").replace("\x00", "")
         # BUG-026: Enforce 512-byte IRC line limit (including \r\n).
@@ -223,7 +223,7 @@ class Sender:
             last   = now
 
             if pri > 0:
-                # Normal traffic — wait for a token.
+                # Normal traffic - wait for a token.
                 while tokens < 1.0:
                     await asyncio.sleep(0.05)
                     now    = self._loop.time()

@@ -1,4 +1,4 @@
-"""MET Norway (api.met.no) weather provider package — free, no API key."""
+"""MET Norway (api.met.no) weather provider package - free, no API key."""
 from __future__ import annotations
 from ..base import (
     WeatherResult, ForecastDay,

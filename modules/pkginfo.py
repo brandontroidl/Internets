@@ -1,4 +1,4 @@
-"""Package registry lookups — KEYLESS network module.
+"""Package registry lookups - KEYLESS network module.
 
     .pypi <pkg>     PyPI: latest version, summary, license, release date, URL.
     .npm <pkg>      npm: latest version, description, license, last publish.
@@ -55,7 +55,7 @@ def _clip(s: object, n: int) -> str:
 
 
 def _pypi_sync(pkg: str, ua: str) -> str:
-    """Blocking PyPI lookup — run via asyncio.to_thread."""
+    """Blocking PyPI lookup - run via asyncio.to_thread."""
     try:
         data = fetch_json(
             f"https://pypi.org/pypi/{quote(pkg, safe='')}/json",
@@ -100,7 +100,7 @@ def _pypi_sync(pkg: str, ua: str) -> str:
 
 
 def _npm_sync(pkg: str, ua: str) -> str:
-    """Blocking npm registry lookup — run via asyncio.to_thread."""
+    """Blocking npm registry lookup - run via asyncio.to_thread."""
     try:
         data = fetch_json(
             f"https://registry.npmjs.org/{quote(pkg, safe='')}",
@@ -143,7 +143,7 @@ def _npm_sync(pkg: str, ua: str) -> str:
 
 
 def _crates_sync(name: str, ua: str) -> str:
-    """Blocking crates.io lookup — run via asyncio.to_thread.
+    """Blocking crates.io lookup - run via asyncio.to_thread.
 
     crates.io requires a descriptive User-Agent (passed via ``ua``).
     """
@@ -196,7 +196,7 @@ def _crates_sync(name: str, ua: str) -> str:
 
 
 class PkginfoModule(BotModule):
-    """`.pypi` / `.npm` / `.crates` — keyless package registry lookups."""
+    """`.pypi` / `.npm` / `.crates` - keyless package registry lookups."""
 
     COMMANDS: dict[str, str] = {
         "pypi": "cmd_pypi",
@@ -213,7 +213,7 @@ class PkginfoModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

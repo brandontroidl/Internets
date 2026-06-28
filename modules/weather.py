@@ -1,14 +1,14 @@
-"""Weather command module — multi-provider with automatic fallback.
+"""Weather command module - multi-provider with automatic fallback.
 
 Commands:
-    .weather / .w     — current conditions
-    .forecast / .f    — multi-day daily forecast
-    .hourly / .h      — hourly forecast (next 12 hours)
-    .alerts / .al     — active weather alerts and warnings
-    .aqi / .air       — air quality index and pollutants
-    .astro / .sun     — sunrise, sunset, moon phase
-    .history / .hist  — weather on a past date (YYYY-MM-DD)
-    .marine / .sea    — ocean conditions (wave height, swell, water temp)
+    .weather / .w     - current conditions
+    .forecast / .f    - multi-day daily forecast
+    .hourly / .h      - hourly forecast (next 12 hours)
+    .alerts / .al     - active weather alerts and warnings
+    .aqi / .air       - air quality index and pollutants
+    .astro / .sun     - sunrise, sunset, moon phase
+    .history / .hist  - weather on a past date (YYYY-MM-DD)
+    .marine / .sea    - ocean conditions (wave height, swell, water temp)
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def _format_alerts(r: object) -> list[str]:
         headline = _sanitize(a.headline, 200)
         line = f"[{sev}] {event}"
         if headline and headline != event:
-            line += f" — {headline}"
+            line += f" - {headline}"
         lines.append(line)
     lines.append(f"[{_sanitize(r.source, 30)}]")
     return lines
@@ -239,7 +239,7 @@ def _format_pollen(r: object) -> str:
         raise TypeError(f"expected PollenResult, got {type(r).__name__}")
     source = _sanitize(r.source, 30)
 
-    # Google Pollen — tree/grass/weed Universal Pollen Index (0-5).
+    # Google Pollen - tree/grass/weed Universal Pollen Index (0-5).
     if any(v is not None for v in (r.tree_index, r.grass_index, r.weed_index)):
         parts = [
             f"{label} {pollen_cat_5(val)} ({val:.0f}/5)"
@@ -251,7 +251,7 @@ def _format_pollen(r: object) -> str:
         parts.append(f"[{source}]")
         return " :: ".join(parts)
 
-    # Pollen.com / IQVIA — overall index (0-12) + dominant allergens.
+    # Pollen.com / IQVIA - overall index (0-12) + dominant allergens.
     if r.overall_index is not None:
         head = f"Pollen index {r.overall_index:.1f}/12"
         if r.category:
@@ -262,7 +262,7 @@ def _format_pollen(r: object) -> str:
         parts.append(f"[{source}]")
         return " :: ".join(parts)
 
-    # Open-Meteo — CAMS per-species concentrations (grains/m³).
+    # Open-Meteo - CAMS per-species concentrations (grains/m³).
     taxa = [("Alder", r.alder), ("Birch", r.birch), ("Grass", r.grass),
             ("Mugwort", r.mugwort), ("Olive", r.olive), ("Ragweed", r.ragweed)]
     parts = [f"{name} {val:.0f}" for name, val in taxa if val is not None]
@@ -334,7 +334,7 @@ def _format_tides(r: object) -> str:
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-# Per-provider flag aliases — each provider gets its own ``-<alias>``
+# Per-provider flag aliases - each provider gets its own ``-<alias>``
 # flag.  All aliases for one provider map to the same canonical id used
 # by the dispatcher.  Keep aliases globally unique; if you add a new
 # provider, pick a fresh short form (``-aw`` is Apple WeatherKit, not
@@ -372,9 +372,9 @@ _PROVIDER_FLAGS: dict[str, str] = {
     "worldweatheronline": "worldweatheronline", "wwo":    "worldweatheronline",
     # Weatherstack
     "weatherstack":       "weatherstack", "ws":           "weatherstack",
-    # AirNow (US EPA air quality — air_quality only)
+    # AirNow (US EPA air quality - air_quality only)
     "airnow":             "airnow",      "an":            "airnow",
-    # PurpleAir (crowdsourced PM2.5 — air_quality only)
+    # PurpleAir (crowdsourced PM2.5 - air_quality only)
     "purpleair":          "purpleair",   "pa":            "purpleair",
     # WAQI / OpenAQ / IQAir (air_quality)
     "waqi":               "waqi",
@@ -421,7 +421,7 @@ def _parse_weather_flags(arg: str | None
 
     Returns (force_provider, list_mode, rest_arg_or_None, unknown_flag_or_None).
     ``unknown_flag`` is the first ``-foo`` token that wasn't a recognized
-    provider, ``-l``, ``-p``, or ``-n`` — caller can warn the user.
+    provider, ``-l``, ``-p``, or ``-n`` - caller can warn the user.
     """
     if not arg:
         return None, False, None, None
@@ -454,7 +454,7 @@ def _parse_weather_flags(arg: str | None
                 i += 1
             continue
         if low.startswith("-") and len(low) > 1 and not low[1].isdigit():
-            # Looks like a flag — check provider alias table.
+            # Looks like a flag - check provider alias table.
             alias = low[1:]
             canonical = _PROVIDER_FLAGS.get(alias)
             if canonical:
@@ -481,7 +481,7 @@ def _flag_examples_for(canonical: str) -> str:
 
 
 class WeatherModule(BotModule):
-    """Multi-provider weather commands — current, forecast, hourly, alerts,
+    """Multi-provider weather commands - current, forecast, hourly, alerts,
     air quality, astronomy, historical, and marine conditions.
 
     All commands accept two leading flags:
@@ -550,7 +550,7 @@ class WeatherModule(BotModule):
         # default (e.g. the geographic-centre point) confuses users who think
         # it's their own weather.  Tell them to register instead.
         p = self.bot.cfg["bot"]["command_prefix"]
-        return None, (f"{nick}: no saved location — set yours with "
+        return None, (f"{nick}: no saved location - set yours with "
                       f"{p}regloc <city, zip, or coords>")
 
     async def _geo(self, nick: str, reply_to: str,
@@ -564,12 +564,12 @@ class WeatherModule(BotModule):
             return None
         geo = await geocode(raw, self._ua, default_country=self._default_country)
         if geo is None:
-            # _sanitize: the echoed query is user input — keep IRC formatting
+            # _sanitize: the echoed query is user input - keep IRC formatting
             # bytes out of bot output (matches location.py's not-found path).
             self.bot.privmsg(reply_to, f"{nick}: location not found: '{_sanitize(raw)}'")
         return geo
 
-    # State badge for ``provider_status()`` — only "active"/"cold"/"failing"
+    # State badge for ``provider_status()`` - only "active"/"cold"/"failing"
     # actually appear in `-l` output since unconfigured providers are hidden.
     _STATE_BADGE: dict[str, str] = {
         "active":  "[OK]",   # registered + auth working + recent calls succeeded
@@ -580,7 +580,7 @@ class WeatherModule(BotModule):
     def _send_provider_list(self, nick: str, reply_to: str, capability: str) -> None:
         """Public ``-l`` listing: only active + configured providers, ranked by
         accuracy for this capability, each tagged with auth state.  Providers
-        without keys are hidden — only what's usable shows up."""
+        without keys are hidden - only what's usable shows up."""
         from weather_providers import dispatcher, provider_status
         from weather_providers._dispatch import CAPABILITY_METHODS
         if capability not in CAPABILITY_METHODS:
@@ -623,7 +623,7 @@ class WeatherModule(BotModule):
     def _warn_unknown_flag(self, nick: str, reply_to: str, flag: str) -> None:
         """Tell the user an unrecognized flag was ignored."""
         self.bot.preply(nick, reply_to,
-            f"{nick}: unknown flag {flag!r} — try -l to list providers.")
+            f"{nick}: unknown flag {flag!r} - try -l to list providers.")
 
     # ── Commands ─────────────────────────────────────────────────────
 
@@ -711,7 +711,7 @@ class WeatherModule(BotModule):
     async def cmd_marine(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_marine
         await self._weather_cmd("marine", "marine", nick, reply_to, arg,
-            get_marine, _format_marine, "marine data unavailable — location may be inland.")
+            get_marine, _format_marine, "marine data unavailable - location may be inland.")
 
     async def cmd_history(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_historical
@@ -782,7 +782,7 @@ class WeatherModule(BotModule):
             parts.append(f"[{_sanitize(result.source, 30)}]")
             self.bot.privmsg(reply_to, f":: {display} :: {' :: '.join(parts)} ::")
         else:
-            self.bot.privmsg(reply_to, f"{nick}: nowcast unavailable — no provider supports precipitation nowcasting.")
+            self.bot.privmsg(reply_to, f"{nick}: nowcast unavailable - no provider supports precipitation nowcasting.")
 
     async def cmd_uv(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_uv
@@ -792,7 +792,7 @@ class WeatherModule(BotModule):
     async def cmd_pollen(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_pollen
         await self._weather_cmd("pollen", "pollen", nick, reply_to, arg,
-            get_pollen, _format_pollen, "pollen data unavailable — CAMS covers Europe only.")
+            get_pollen, _format_pollen, "pollen data unavailable - CAMS covers Europe only.")
 
     async def cmd_wildfire(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_wildfire
@@ -807,12 +807,12 @@ class WeatherModule(BotModule):
     async def cmd_tides(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_tides
         await self._weather_cmd("tides", "tides", nick, reply_to, arg,
-            get_tides, _format_tides, "tide data unavailable — no station near this location.")
+            get_tides, _format_tides, "tide data unavailable - no station near this location.")
 
     async def cmd_providers(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Show provider health and capability status.  Admin only."""
         if not self.bot.is_admin(nick):
-            self.bot.preply(nick, reply_to, f"{nick}: admin only — authenticate first.")
+            self.bot.preply(nick, reply_to, f"{nick}: admin only - authenticate first.")
             return
         from weather_providers import dispatcher
         self.bot.preply(nick, reply_to, "Provider health:")
@@ -825,12 +825,12 @@ class WeatherModule(BotModule):
     def help_lines(self, prefix: str) -> list[str]:
         """Compact, grouped help.
 
-        Seven lines + the ``[weather]`` header — small enough to clear the
+        Seven lines + the ``[weather]`` header - small enough to clear the
         send queue's 5-message burst near-instantly and stay well within a
         10-msg/3-sec network flood limit (output is token-bucketed in
         sender.py regardless).  Commands are grouped by theme rather than
         listed one-per-line, and provider flags are summarised with a
-        pointer to ``-l`` instead of dumping all of them — so this stays
+        pointer to ``-l`` instead of dumping all of them - so this stays
         compact no matter how many providers are loaded.
         """
         p = prefix
@@ -848,7 +848,7 @@ class WeatherModule(BotModule):
             row("Hazards",  f"{p}alerts/.al  {p}wildfire/.fire  {p}space/.aurora"),
             row("Sea/Past", f"{p}marine/.sea  {p}tides/.tide  {p}history/.hist"),
             row("Where",    f"city / ZIP / postal+cc (08000 es) / 'lat,lon' / 39°N 98°W;  {p}regloc saves yours;  -n <nick> for another's"),
-            row("Flags",    f"{n} providers active — force one with -<flag> (e.g. -nws -vc -aw);  {p}<cmd> -l lists them"),
+            row("Flags",    f"{n} providers active - force one with -<flag> (e.g. -nws -vc -aw);  {p}<cmd> -l lists them"),
             row("Try",      f"{p}w 90210   {p}aqi -an 67127   {p}f -vc Tokyo   {p}uv London   {p}tides -coops"),
             row("Admin",    f"{p}providers  provider health + capability chains  [admin]"),
         ]

@@ -1,7 +1,7 @@
-"""IQAir (AirVisual) provider package — global US-AQI from nearest city.
+"""IQAir (AirVisual) provider package - global US-AQI from nearest city.
 
 https://api-docs.iqair.com/
-Air-quality only.  Requires a free API key — register at
+Air-quality only.  Requires a free API key - register at
 https://www.iqair.com/air-pollution-data-api.  The free Community tier
 exposes /v2/nearest_city, which returns US AQI for the monitoring station
 nearest the requested point (no raw µg/m3 concentrations).

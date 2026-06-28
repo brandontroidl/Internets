@@ -1,7 +1,7 @@
-"""Reference lookups — Wikipedia, DOI, ISBN, Stack Overflow, RFC, arXiv, elements.
+"""Reference lookups - Wikipedia, DOI, ISBN, Stack Overflow, RFC, arXiv, elements.
 
 All KEYLESS.  Every outbound HTTP call goes through base.fetch_json (size-capped)
-except .arxiv, whose endpoint returns ATOM XML — that path uses defusedxml plus a
+except .arxiv, whose endpoint returns ATOM XML - that path uses defusedxml plus a
 size-capped raw requests fetch.
 
     .wiki <query>            Wikipedia summary (first sentence + URL)
@@ -9,7 +9,7 @@ size-capped raw requests fetch.
     .isbn <isbn>             Open Library book (title/authors/year/publisher)
     .so <query>              top Stack Overflow question (title/score/answered/link)
     .rfc <number>            RFC metadata (title/status/date)
-    .arxiv <id|query>        arXiv paper (title/authors/date/link) — ATOM XML
+    .arxiv <id|query>        arXiv paper (title/authors/date/link) - ATOM XML
     .element <name|sym|Z>    periodic-table entry (offline, no network)
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ import logging
 import re
 from urllib.parse import quote
 
-from defusedxml import ElementTree  # arXiv ATOM is 3rd-party XML — defuse XXE/billion-laughs.
+from defusedxml import ElementTree  # arXiv ATOM is 3rd-party XML - defuse XXE/billion-laughs.
 
 from .base import (
     BotModule,
@@ -179,7 +179,7 @@ def element_lookup(query: str) -> str:
     if e is None:
         return f"no element matching '{strip_ctrl(q, 40)}'"
     symbol, z, name, mass, group, period, category = e
-    grp = f"group {group}" if group else "group —"
+    grp = f"group {group}" if group else "group -"
     return (f"\x02{name}\x02 ({symbol}) :: Z={z} :: mass {mass} :: "
             f"{grp} :: period {period} :: {category}")
 
@@ -227,11 +227,11 @@ def _wiki_sync(query: str, ua: str) -> str:
             200,
         )
         if data.get("type") == "disambiguation":
-            return f"\x02{page_title}\x02 (disambiguation — be more specific) — {url}"
+            return f"\x02{page_title}\x02 (disambiguation - be more specific) - {url}"
         extract = strip_ctrl(data.get("extract", "").strip(), 300)
         if not extract:
-            return f"\x02{page_title}\x02 — {url}"
-        return f"\x02{page_title}\x02: {extract} — {url}"
+            return f"\x02{page_title}\x02 - {url}"
+        return f"\x02{page_title}\x02: {extract} - {url}"
     except (ResponseTooLarge, KeyError, ValueError, TypeError) as e:
         log.warning(f"wiki lookup: {e}")
         return "lookup failed"
@@ -429,7 +429,7 @@ _RTFM_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+_-]*$")
 
 def _http_text(url: str, ua: str, max_bytes: int = 65536) -> str | None:
     """Size-capped raw text GET for a trusted host; None on 404."""
-    import requests  # noqa: PLC0415 — lazy import matches base.fetch_json
+    import requests  # noqa: PLC0415 - lazy import matches base.fetch_json
     with requests.get(url, headers={"User-Agent": ua}, timeout=10, stream=True) as r:
         if r.status_code == 404:
             return None
@@ -490,13 +490,13 @@ def _rtfm_sync(query: str, ua: str) -> str:
 
 # ── arXiv (ATOM XML) ──────────────────────────────────────────────────────
 def _arxiv_fetch_xml(query: str, ua: str) -> str:
-    """Size-capped raw fetch of the arXiv ATOM feed — returns decoded text.
+    """Size-capped raw fetch of the arXiv ATOM feed - returns decoded text.
 
     Not via fetch_json: the endpoint returns XML, not JSON.  The body is
     capped before buffering so a hostile/huge feed can't OOM the process;
     defusedxml then guards the parse against XXE / billion-laughs.
     """
-    import requests  # noqa: PLC0415 — lazy import matches base.fetch_json
+    import requests  # noqa: PLC0415 - lazy import matches base.fetch_json
     # id_list for a bare arXiv id (e.g. 2101.00001 or hep-th/9901001), else a
     # full-text search.  Heuristic: ids contain a dot+digits or a slash.
     q = query.strip()
@@ -582,7 +582,7 @@ class RefLookupModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

@@ -1,4 +1,4 @@
-"""NOAA CO-OPS provider package — official US tide predictions.
+"""NOAA CO-OPS provider package - official US tide predictions.
 
 https://api.tidesandcurrents.noaa.gov/
 Tides only.  US locations only (raises so the dispatcher falls through to a

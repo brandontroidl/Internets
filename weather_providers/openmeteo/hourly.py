@@ -1,4 +1,4 @@
-"""Open-Meteo — hourly forecast endpoint."""
+"""Open-Meteo - hourly forecast endpoint."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from .._http import get_json
@@ -9,7 +9,7 @@ _BASE = "https://api.open-meteo.com/v1/forecast"
 
 
 # fix: previously every field used ``h.get(field, [None]*999)[i]
-# if i < len(h.get(field, []))`` — a 999-wide dead fallback (allocated
+# if i < len(h.get(field, []))`` - a 999-wide dead fallback (allocated
 # per field per hour) that the guard never let through. Replace with a
 # safe one-liner: only index when the array is long enough.
 def _at(arr, i):

@@ -62,7 +62,7 @@ def _fetch_sync(name: str, ua: str) -> str:
 
 
 class CocktailModule(BotModule):
-    """`.cocktail <name>` — cocktail recipe lookup via TheCocktailDB."""
+    """`.cocktail <name>` - cocktail recipe lookup via TheCocktailDB."""
 
     COMMANDS: dict[str, str] = {"cocktail": "cmd_cocktail", "drink": "cmd_cocktail"}
 
@@ -80,7 +80,7 @@ class CocktailModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}cocktail <name>")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, arg.strip(), self._ua)
         self.bot.privmsg(reply_to, text)

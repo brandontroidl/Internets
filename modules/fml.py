@@ -9,7 +9,7 @@ import re
 import requests
 from .base import BotModule, help_row, strip_ctrl
 
-# Bandit B311 false-positive — picking which scraped quote to print is
+# Bandit B311 false-positive - picking which scraped quote to print is
 # not security-relevant, but routing through SystemRandom keeps scans
 # clean without per-line ``# nosec``.
 _rng = random.SystemRandom()
@@ -45,9 +45,9 @@ def _strip_tags(s: str) -> str:
 
 
 def _lookup_sync(ua: str) -> str:
-    """Fetch a random FML quote — blocking, run via asyncio.to_thread."""
+    """Fetch a random FML quote - blocking, run via asyncio.to_thread."""
     try:
-        # `with` releases the socket on every exit path — a stream=True
+        # `with` releases the socket on every exit path - a stream=True
         # response left unclosed leaks the connection / FD.
         with requests.get(
             "https://www.fmylife.com/random",
@@ -59,14 +59,14 @@ def _lookup_sync(ua: str) -> str:
             stream=True,
         ) as r:
             r.raise_for_status()
-            # Cap the page at 512 KB — FML's /random is normally ~200 KB.
+            # Cap the page at 512 KB - FML's /random is normally ~200 KB.
             body = r.raw.read(512 * 1024 + 1, decode_content=True)
         if len(body) > 512 * 1024:
             return "fmylife.com response too large"
         text = body.decode("utf-8", errors="replace")
         raw_matches = _FML_ARTICLE.findall(text)
         if not raw_matches:
-            return "could not parse FML page — site layout may have changed"
+            return "could not parse FML page - site layout may have changed"
 
         # Filter to real user posts.  FML's /random page occasionally
         # serves editorial compilation articles ("Welcome to the
@@ -93,7 +93,7 @@ def _lookup_sync(ua: str) -> str:
         qid, text = _rng.choice(candidates)
         if len(text) > 400:
             text = text[:397] + "..."
-        # Scraped quote text is third-party — strip IRC control bytes before
+        # Scraped quote text is third-party - strip IRC control bytes before
         # it hits the channel.  qid is digits from the regex, so it's safe.
         return f"[fml #{qid}] {strip_ctrl(text)}"
     except Exception as e:
@@ -114,7 +114,7 @@ class FmlModule(BotModule):
     async def cmd_fml(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Show a random FMyLife quote."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_lookup_sync, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -124,5 +124,5 @@ class FmlModule(BotModule):
 
 
 def setup(bot: object) -> FmlModule:
-    """Module entry point — returns a FmlModule instance."""
+    """Module entry point - returns a FmlModule instance."""
     return FmlModule(bot)  # type: ignore[arg-type]

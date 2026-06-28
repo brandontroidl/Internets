@@ -1,10 +1,10 @@
-"""Games — small chance/choice commands.
+"""Games - small chance/choice commands.
 
 Pure local, no network.  Commands:
-    .coin                 — flip a coin
-    .8ball <question>     — classic Magic-8-Ball answer
-    .rps <choice>         — rock / paper / scissors vs the bot
-    .choose A, B, C, ...  — pick one of a comma-separated list
+    .coin                 - flip a coin
+    .8ball <question>     - classic Magic-8-Ball answer
+    .rps <choice>         - rock / paper / scissors vs the bot
+    .choose A, B, C, ...  - pick one of a comma-separated list
 
 Uses ``random.SystemRandom`` for unpredictable picks.  All commands
 are rate-limited per nick via ``self.bot.rate_limited``.
@@ -56,7 +56,7 @@ _RPS_BEATS: dict[str, str] = {
 
 
 class GamesModule(BotModule):
-    """`.coin` / `.8ball` / `.rps` / `.choose` — small chance games."""
+    """`.coin` / `.8ball` / `.rps` / `.choose` - small chance games."""
 
     COMMANDS: dict[str, str] = {
         "coin": "cmd_coin",
@@ -70,13 +70,13 @@ class GamesModule(BotModule):
 
     async def cmd_coin(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         self.bot.privmsg(reply_to, _RNG.choice(("Heads", "Tails")))
 
     async def cmd_8ball(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -86,7 +86,7 @@ class GamesModule(BotModule):
 
     async def cmd_rps(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -105,12 +105,12 @@ class GamesModule(BotModule):
         else:
             outcome = "you lose"
         self.bot.privmsg(reply_to, _strip_ctrl(
-            f"you: {choice}, bot: {bot_pick} — {outcome}"
+            f"you: {choice}, bot: {bot_pick} - {outcome}"
         ))
 
     async def cmd_choose(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or "," not in arg:
             p = self.bot.cfg["bot"]["command_prefix"]

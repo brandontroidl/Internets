@@ -1,4 +1,4 @@
-"""Dad-joke command — wraps icanhazdadjoke.com.
+"""Dad-joke command - wraps icanhazdadjoke.com.
 
 No API key required.  The endpoint returns JSON when the request carries
 an ``Accept: application/json`` header; otherwise it serves HTML.  We
@@ -50,7 +50,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class DadjokeModule(BotModule):
-    """`.dadjoke` / `.joke` — random dad joke from icanhazdadjoke.com."""
+    """`.dadjoke` / `.joke` - random dad joke from icanhazdadjoke.com."""
 
     COMMANDS: dict[str, str] = {"dadjoke": "cmd_dadjoke", "joke": "cmd_dadjoke"}
 
@@ -64,7 +64,7 @@ class DadjokeModule(BotModule):
 
     async def cmd_dadjoke(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         joke = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, joke)

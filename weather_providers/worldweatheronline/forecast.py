@@ -1,9 +1,9 @@
-"""World Weather Online — daily forecast."""
+"""World Weather Online - daily forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
-# fix: _float was duplicated in every endpoint file — moved to _codes.
+# fix: _float was duplicated in every endpoint file - moved to _codes.
 from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"

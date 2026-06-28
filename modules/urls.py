@@ -90,7 +90,7 @@ class UrlsModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: URL must start with http:// or https://")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_shorten_sync, url, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -106,7 +106,7 @@ class UrlsModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: URL must start with http:// or https://")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_expand_sync, url, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -119,5 +119,5 @@ class UrlsModule(BotModule):
 
 
 def setup(bot: object) -> UrlsModule:
-    """Module entry point — returns a UrlsModule instance."""
+    """Module entry point - returns a UrlsModule instance."""
     return UrlsModule(bot)  # type: ignore[arg-type]

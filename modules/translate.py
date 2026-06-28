@@ -11,7 +11,7 @@ log = logging.getLogger("internets.translate")
 
 # Language codes from Google Translate are always 2-letter or 2/3-letter
 # with optional "-region" (zh-CN, pt-BR, etc.).  Be conservative on input:
-# accept only the simple 2-letter form here — the legacy gtx endpoint
+# accept only the simple 2-letter form here - the legacy gtx endpoint
 # rejects anything else anyway, and accepting "-" makes URL escaping
 # trickier than it needs to be.
 _LANG_RE = re.compile(r"^[a-z]{2}$")
@@ -31,7 +31,7 @@ def _strip_ctrl(s: object, max_len: int = 400) -> str:
 
 
 def _translate_sync(src: str | None, tgt: str, text: str) -> str:
-    """Blocking HTTP call — run via asyncio.to_thread."""
+    """Blocking HTTP call - run via asyncio.to_thread."""
     # Validate language codes one more time inside the worker so a future
     # caller that bypasses the handler-level regex can't smuggle in
     # arbitrary path/query characters via sl/tl.
@@ -44,7 +44,7 @@ def _translate_sync(src: str | None, tgt: str, text: str) -> str:
 
     try:
         # ``requests`` will percent-encode params for us so ``text`` is safe
-        # to pass through verbatim — but we still need to cap response size.
+        # to pass through verbatim - but we still need to cap response size.
         with requests.get(
             "https://translate.googleapis.com/translate_a/single",
             params={"client": "gtx", "sl": src or "auto", "tl": tgt, "dt": "t", "q": text},
@@ -59,7 +59,7 @@ def _translate_sync(src: str | None, tgt: str, text: str) -> str:
                 return "translation failed"
             data = json.loads(body.decode("utf-8", errors="replace"))
 
-            # The response shape is loose JSON arrays — be defensive about every
+            # The response shape is loose JSON arrays - be defensive about every
             # index and never assume any element is a string.
             if not isinstance(data, list) or not data or not isinstance(data[0], list):
                 return "translation failed"
@@ -70,7 +70,7 @@ def _translate_sync(src: str | None, tgt: str, text: str) -> str:
             translated = "".join(chunks)
             detected_raw = data[2] if len(data) > 2 and isinstance(data[2], str) else (src or "auto")
             # Re-validate detected language against the same conservative regex
-            # before splicing — otherwise upstream could return "xx\r\nQUIT" and
+            # before splicing - otherwise upstream could return "xx\r\nQUIT" and
             # bypass our PRIVMSG framing.
             detected = detected_raw if _LANG_RE.match(detected_raw or "") else "??"
             translated = _strip_ctrl(translated, 400)
@@ -106,7 +106,7 @@ class TranslateModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: input too long (max {_MAX_QUERY_CHARS} chars)")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_translate_sync, src, tgt, text)
         self.bot.privmsg(reply_to, result)
@@ -117,5 +117,5 @@ class TranslateModule(BotModule):
 
 
 def setup(bot: object) -> TranslateModule:
-    """Module entry point — returns a TranslateModule instance."""
+    """Module entry point - returns a TranslateModule instance."""
     return TranslateModule(bot)  # type: ignore[arg-type]

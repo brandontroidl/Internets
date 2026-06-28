@@ -1,4 +1,4 @@
-"""Tests for modules/calc.py — safe expression evaluator."""
+"""Tests for modules/calc.py - safe expression evaluator."""
 
 import sys
 sys.path.insert(0, ".")

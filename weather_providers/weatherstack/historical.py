@@ -1,10 +1,10 @@
-"""Weatherstack — historical weather (paid plans only)."""
+"""Weatherstack - historical weather (paid plans only)."""
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json
 from ..base import HistoricalResult
 from .current import _check_envelope
-# fix: was http:// — leaked access_key in plaintext query string.
+# fix: was http:// - leaked access_key in plaintext query string.
 _B = "https://api.weatherstack.com"
 async def fetch(key, lat, lon, location, target_date=""):
     if not target_date: target_date = (date.today() - timedelta(days=1)).isoformat()

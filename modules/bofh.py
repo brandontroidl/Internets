@@ -12,7 +12,7 @@ log = logging.getLogger("internets.bofh")
 # stays clean without per-line ``# nosec`` annotations.
 _rng = random.SystemRandom()
 
-# Classic BOFH excuse list — sourced from the community-maintained canon.
+# Classic BOFH excuse list - sourced from the community-maintained canon.
 _EXCUSES: list[str] = [
     "clock speed",
     "solar flares",
@@ -137,5 +137,5 @@ class BofhModule(BotModule):
 
 
 def setup(bot: object) -> BofhModule:
-    """Module entry point — returns a BofhModule instance."""
+    """Module entry point - returns a BofhModule instance."""
     return BofhModule(bot)  # type: ignore[arg-type]

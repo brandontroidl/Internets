@@ -1,4 +1,4 @@
-"""Top reddit post for a subreddit — wraps old.reddit.com JSON.
+"""Top reddit post for a subreddit - wraps old.reddit.com JSON.
 
 No API key required, but reddit aggressively 403s default User-Agents
 so we use the configured weather_user_agent (which includes a contact
@@ -38,7 +38,7 @@ def _fetch_sync(sub: str, period: str, ua: str) -> str:
             if r.status_code == 403:
                 return f"r/{sub} is private or quarantined"
             if r.status_code in (301, 302, 303):
-                return f"r/{sub} redirected — likely private or banned"
+                return f"r/{sub} redirected - likely private or banned"
             r.raise_for_status()
             body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
             if len(body) > _MAX_BODY_BYTES:
@@ -67,7 +67,7 @@ def _fetch_sync(sub: str, period: str, ua: str) -> str:
 
 
 class RedditModule(BotModule):
-    """`.reddit <sub> [t]` — top post (t=hour/day/week/month/year/all)."""
+    """`.reddit <sub> [t]` - top post (t=hour/day/week/month/year/all)."""
 
     COMMANDS: dict[str, str] = {"reddit": "cmd_reddit", "r": "cmd_reddit"}
 
@@ -94,7 +94,7 @@ class RedditModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: period must be hour|day|week|month|year|all")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, sub, period, self._ua)
         self.bot.privmsg(reply_to, text)

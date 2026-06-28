@@ -1,4 +1,4 @@
-"""STEM news / journal / paper aggregator + reader — curated keyless feeds.
+"""STEM news / journal / paper aggregator + reader - curated keyless feeds.
 
     .sci [topic]    latest science headlines, merged + deduped from RSS/Atom
                     feeds.  topic = all (default) / physics / cs / math / bio
@@ -8,7 +8,7 @@
 
 All feeds are keyless RSS/Atom (parsed with defusedxml).  The reader fetches
 the chosen article (size-capped + SSRF-guarded via base.resolve_public) and
-extracts its og:description / meta description / first paragraph — no LLM.
+extracts its og:description / meta description / first paragraph.
 """
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ def _parse_feed(raw: bytes) -> list[tuple[str, str, float]]:
     out: list[tuple[str, str, float]] = []
     try:
         root = _ET.fromstring(raw)
-    except Exception:  # noqa: BLE001 — malformed feed
+    except Exception:  # noqa: BLE001 - malformed feed
         return out
     for e in root.iter():
         if _localname(e.tag) not in ("item", "entry"):
@@ -252,7 +252,7 @@ def _read_article(url: str, ua: str) -> str:
 
 
 class ScinewsModule(BotModule):
-    """`.sci` — STEM news aggregator + keyless article reader."""
+    """`.sci` - STEM news aggregator + keyless article reader."""
 
     COMMANDS: dict[str, str] = {"sci": "cmd_sci"}
 
@@ -269,7 +269,7 @@ class ScinewsModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -352,7 +352,7 @@ class ScinewsModule(BotModule):
 
         topic = parts[0].lower() if parts else "all"
         if topic not in _TOPICS:
-            self.bot.privmsg(reply_to, f"{nick}: unknown topic — try: {', '.join(_TOPICS)}")
+            self.bot.privmsg(reply_to, f"{nick}: unknown topic - try: {', '.join(_TOPICS)}")
             return
         items = await self._get_items(topic)
         if not items:
@@ -363,7 +363,7 @@ class ScinewsModule(BotModule):
         # channels/nicks (PM keys are attacker-controlled).
         self._last = {k: v for k, v in self._last.items() if now - v[0] <= _LIST_TTL}
         self._last[reply_to] = (now, items)
-        self.bot.privmsg(reply_to, f":: STEM news ({topic}) — {p}sci read <N> for details ::")
+        self.bot.privmsg(reply_to, f":: STEM news ({topic}) - {p}sci read <N> for details ::")
         for i, (src, title, _url) in enumerate(items, 1):
             self.bot.privmsg(reply_to, f"  {i}. [{strip_ctrl(src, 18)}] {strip_ctrl(title, 150)}")
 

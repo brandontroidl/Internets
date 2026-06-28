@@ -1,10 +1,10 @@
-"""QR-code link generator — emits a URL only, no network fetch.
+"""QR-code link generator - emits a URL only, no network fetch.
 
 Command:
-    .qr <text>   — returns a goqr.me image URL that renders <text> as a QR.
+    .qr <text>   - returns a goqr.me image URL that renders <text> as a QR.
 
 Input is capped at 1000 chars; empty or oversize input yields a usage hint.
-No HTTP is performed — the URL is just constructed locally so the user
+No HTTP is performed - the URL is just constructed locally so the user
 can click it.  Rate-limited per nick.
 """
 
@@ -24,7 +24,7 @@ def _strip_ctrl(s: str, max_len: int = 400) -> str:
 
 
 class QRModule(BotModule):
-    """`.qr <text>` — build a QR-code image URL."""
+    """`.qr <text>` - build a QR-code image URL."""
 
     COMMANDS: dict[str, str] = {"qr": "cmd_qr"}
 
@@ -33,7 +33,7 @@ class QRModule(BotModule):
 
     async def cmd_qr(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]

@@ -36,10 +36,10 @@ class _SafeFormatter(logging.Formatter):
     formatting chain, not into ``msg``/``args``.
 
     Strips:
-      * ASCII C0 controls (0x00–0x08, 0x0a–0x1f) — covers CR, LF, NUL,
+      * ASCII C0 controls (0x00–0x08, 0x0a–0x1f) - covers CR, LF, NUL,
         tab is preserved (0x09) for readable structured output.
       * ASCII DEL (0x7f).
-      * C1 controls (0x80–0x9f) — many terminals interpret these as
+      * C1 controls (0x80–0x9f) - many terminals interpret these as
         escape sequences (CSI etc.).
     """
 
@@ -165,7 +165,7 @@ def get_hash() -> str:
     """Re-read the layered config and return the current password_hash.
 
     Uses ``config.reload_config()`` so BOTH config.ini and
-    config.local.ini are re-read in the right order — re-reading
+    config.local.ini are re-read in the right order - re-reading
     config.ini alone would clobber the value merged in from
     config.local.ini with the template's empty placeholder.
     """
@@ -185,22 +185,22 @@ def _validate_hash() -> None:
     prefix means ``verify_password`` will raise ``ValueError`` on every
     auth attempt, which silently disables admin commands.  Better to
     refuse to start so the operator sees the problem immediately.
-    Empty hash is *not* fatal — the bot still runs with auth disabled
+    Empty hash is *not* fatal - the bot still runs with auth disabled
     (intentional for first-run before the operator runs hashpw.py).
     """
     h = get_hash()
     if not h:
-        log.warning("No password_hash in config.ini — auth disabled. Run hashpw.py.")
+        log.warning("No password_hash in config.ini - auth disabled. Run hashpw.py.")
         return
     # Tight prefix check: must split exactly on '$' and be one of the
-    # known algorithms.  Do NOT echo the prefix back if it's invalid —
+    # known algorithms.  Do NOT echo the prefix back if it's invalid -
     # the hash is sensitive material, and a malformed prefix could
     # contain arbitrary bytes from a corrupted config.
     prefix = h.split("$", 1)[0] if "$" in h else ""
     if prefix not in _VALID_HASH_PREFIXES:
         log.critical(
             "Invalid password_hash format in config.ini "
-            "(must start with one of: %s) — run hashpw.py and restart.",
+            "(must start with one of: %s) - run hashpw.py and restart.",
             ", ".join(_VALID_HASH_PREFIXES),
         )
         sys.exit(1)
@@ -214,7 +214,7 @@ if os.name == "posix":
     try:
         _cfg_stat = os.stat(CONFIG_PATH)
         if _cfg_stat.st_mode & 0o004:
-            log.warning("config.ini is world-readable — consider: chmod 640 config.ini")
+            log.warning("config.ini is world-readable - consider: chmod 640 config.ini")
     except OSError:
         pass
 
@@ -222,7 +222,7 @@ _MODE_VALID = re.compile(r"^[a-zA-Z+\- ]*$")
 for _name, _val in [("user_modes", USER_MODES), ("oper_modes", OPER_MODES),
                      ("oper_snomask", OPER_SNOMASK)]:
     if _val and not _MODE_VALID.match(_val):
-        log.critical(f"Invalid {_name} = {_val!r} in config.ini — "
+        log.critical(f"Invalid {_name} = {_val!r} in config.ini - "
                      f"only letters, +, -, and spaces allowed.")
         sys.exit(1)
     if _val:
@@ -273,7 +273,7 @@ def apply_loglevel(args: list[str], reply: Any = print) -> str | None:
     if len(args) == 1:
         level = args[0].upper()
         if level not in VALID_LEVELS:
-            return f"Invalid level — use: {', '.join(VALID_LEVELS)}"
+            return f"Invalid level - use: {', '.join(VALID_LEVELS)}"
         log_filter.set_base_level(getattr(logging, level))
         log_filter.global_debug = False
         reply(f"Base level set to {level}")
@@ -297,7 +297,7 @@ def apply_loglevel(args: list[str], reply: Any = print) -> str | None:
             log_filter.remove_subsystem(full)
             reply(f"{full} = {level}")
         else:
-            return f"Invalid level — use: {', '.join(VALID_LEVELS)} or NOTSET"
+            return f"Invalid level - use: {', '.join(VALID_LEVELS)} or NOTSET"
         return None
 
     return "usage: loglevel [LEVEL | <logger> LEVEL]"

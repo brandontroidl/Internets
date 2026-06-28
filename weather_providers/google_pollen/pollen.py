@@ -1,4 +1,4 @@
-"""Google Pollen API — global tree/grass/weed pollen (0-5 UPI).
+"""Google Pollen API - global tree/grass/weed pollen (0-5 UPI).
 
 https://developers.google.com/maps/documentation/pollen/forecast
 Returns ``None`` when the API has no pollen data for the location so the
@@ -35,7 +35,7 @@ async def fetch(key, lat, lon, location):
             except (TypeError, ValueError):
                 pass
     if not by_code:
-        return None  # no usable index — let the dispatcher fall through
+        return None  # no usable index - let the dispatcher fall through
     return PollenResult(
         source="Google Pollen",
         location=location,

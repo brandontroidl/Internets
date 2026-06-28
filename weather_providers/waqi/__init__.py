@@ -1,8 +1,8 @@
-"""WAQI provider package — World Air Quality Index (aqicn.org).
+"""WAQI provider package - World Air Quality Index (aqicn.org).
 
 https://aqicn.org/api/
 Air-quality only.  Global coverage via the nearest reporting station.
-Requires a free token — register at https://aqicn.org/data-platform/token/.
+Requires a free token - register at https://aqicn.org/data-platform/token/.
 """
 from __future__ import annotations
 

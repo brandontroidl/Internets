@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hashpw.py — generate a hashed admin password for config.ini
+hashpw.py - generate a hashed admin password for config.ini
 
     python hashpw.py
     python hashpw.py --algo bcrypt
@@ -8,15 +8,15 @@ hashpw.py — generate a hashed admin password for config.ini
 
 Algorithms (preference order, strongest first):
 
-    argon2id   pip install argon2-cffi    RECOMMENDED — memory-hard, side-channel
+    argon2id   pip install argon2-cffi    RECOMMENDED - memory-hard, side-channel
                                           resistant, OWASP 2024 first choice.
     scrypt     stdlib, no extra packages  Strong; memory-hard but older design.
-    bcrypt     pip install bcrypt         OK; CPU-bound only — weaker vs GPU/ASIC
+    bcrypt     pip install bcrypt         OK; CPU-bound only - weaker vs GPU/ASIC
                                           than the two above.
 
 The default CLI algorithm remains ``scrypt`` for backwards-compatibility with
-existing deployments (changing it would not invalidate old hashes — the
-stored ``algo$rest`` format carries its own algorithm tag — but operators
+existing deployments (changing it would not invalidate old hashes - the
+stored ``algo$rest`` format carries its own algorithm tag - but operators
 expect the default to be stable).  New deployments SHOULD pass ``--algo argon2``.
 
 Parameter tuning env vars:
@@ -71,7 +71,7 @@ _ARGON2_HASH_LEN        = 32
 _ARGON2_SALT_LEN        = 16
 
 _ARGON2_MEM_MIN_MIB = 19               # OWASP 2024 floor
-_ARGON2_MEM_MAX_MIB = 4096             # 4 GiB hard cap — anything more is
+_ARGON2_MEM_MAX_MIB = 4096             # 4 GiB hard cap - anything more is
                                        # almost certainly a misconfiguration
 _ARGON2_TIME_MIN    = 1
 _ARGON2_TIME_MAX    = 20
@@ -115,7 +115,7 @@ def _argon2_params() -> tuple[int, int, int]:
 # OWASP 2024: scrypt N ≥ 2**17 (131 072), r=8, p=1.  We probe downward
 # only if the host's OpenSSL build refuses the cost (it enforces a
 # per-process memory cap via ``maxmem``; the stdlib wrapper inherits it).
-# Don't touch the order of this list without re-reading the comment —
+# Don't touch the order of this list without re-reading the comment -
 # the degradation chain is a deliberate cliff from "OWASP-strong" through
 # "RFC-default" down to "still better than plaintext".
 
@@ -128,9 +128,9 @@ def _best_scrypt_params() -> tuple[int, int, int]:
     """
     salt = os.urandom(16)
     for N, r, p in [
-        (131072, 8, 1),   # 2**17 — OWASP 2024 recommended
-        ( 65536, 8, 1),   # 2**16 — historical "strong"
-        ( 32768, 8, 1),   # 2**15 — RFC 7914 default
+        (131072, 8, 1),   # 2**17 - OWASP 2024 recommended
+        ( 65536, 8, 1),   # 2**16 - historical "strong"
+        ( 32768, 8, 1),   # 2**15 - RFC 7914 default
         ( 16384, 8, 2),
         ( 16384, 8, 1),
         (  8192, 8, 2),
@@ -142,13 +142,13 @@ def _best_scrypt_params() -> tuple[int, int, int]:
             return N, r, p
         except (ValueError, OSError, MemoryError):
             continue
-    raise RuntimeError("scrypt failed on every param set — try --algo bcrypt or --algo argon2")
+    raise RuntimeError("scrypt failed on every param set - try --algo bcrypt or --algo argon2")
 
 
 def hash_scrypt(password: str) -> str:
     """Hash *password* with scrypt (stdlib, no extra packages).
 
-    Prefer ``hash_argon2`` for new deployments — argon2id resists GPU/ASIC
+    Prefer ``hash_argon2`` for new deployments - argon2id resists GPU/ASIC
     attacks better.  scrypt remains the default only for compatibility.
     """
     N, r, p = _best_scrypt_params()
@@ -174,13 +174,13 @@ def hash_bcrypt(password: str) -> str:
     """Hash *password* with bcrypt (requires ``pip install bcrypt``).
 
     Cost is configurable via ``INTERNETS_BCRYPT_ROUNDS`` (default: 13).
-    Prefer argon2id or scrypt — bcrypt is CPU-bound only, so it gains
+    Prefer argon2id or scrypt - bcrypt is CPU-bound only, so it gains
     nothing against an attacker with FPGA/ASIC hardware.
     """
     try:
         import bcrypt
     except ImportError:
-        sys.exit("bcrypt not installed — run: pip install bcrypt")
+        sys.exit("bcrypt not installed - run: pip install bcrypt")
     rounds = _bcrypt_rounds()
     return f"bcrypt${bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=rounds)).decode()}"
 
@@ -197,7 +197,7 @@ def hash_argon2(password: str) -> str:
     try:
         from argon2 import PasswordHasher
     except ImportError:
-        sys.exit("argon2-cffi not installed — run: pip install argon2-cffi")
+        sys.exit("argon2-cffi not installed - run: pip install argon2-cffi")
     mem_kib, t_cost, p = _argon2_params()
     ph = PasswordHasher(
         time_cost=t_cost, memory_cost=mem_kib, parallelism=p,
@@ -212,7 +212,7 @@ def verify_password(password: str, stored: str) -> bool:
     """Verify *password* against a stored hash.  Supports scrypt, bcrypt, argon2.
 
     The stored hash carries its own params (cost, salt, etc.) so bumping
-    the defaults above never invalidates existing hashes — new hashes get
+    the defaults above never invalidates existing hashes - new hashes get
     the new params on next ``set``, old hashes continue to verify with
     their embedded params until the user re-sets.  See KEY_ROTATION.md.
     """
@@ -225,7 +225,7 @@ def verify_password(password: str, stored: str) -> bool:
     if stored.startswith("argon2$"):
         return _verify_argon2(password, stored)
     raise ValueError(
-        "Unrecognised hash format — must start with 'scrypt$', 'bcrypt$', or 'argon2$'"
+        "Unrecognised hash format - must start with 'scrypt$', 'bcrypt$', or 'argon2$'"
     )
 
 
@@ -247,7 +247,7 @@ def _verify_bcrypt(password: str, stored: str) -> bool:
     try:
         import bcrypt
     except ImportError as e:
-        raise ValueError(f"bcrypt not installed — run: pip install bcrypt ({e})")
+        raise ValueError(f"bcrypt not installed - run: pip install bcrypt ({e})")
     try:
         return bcrypt.checkpw(password.encode(), stored.split("$", 1)[1].encode())
     except (ValueError, TypeError, IndexError):
@@ -259,7 +259,7 @@ def _verify_argon2(password: str, stored: str) -> bool:
         from argon2 import PasswordHasher
         from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
     except ImportError as e:
-        raise ValueError(f"argon2-cffi not installed — run: pip install argon2-cffi ({e})")
+        raise ValueError(f"argon2-cffi not installed - run: pip install argon2-cffi ({e})")
     try:
         return PasswordHasher().verify(stored.split("$", 1)[1], password)
     except (VerifyMismatchError, VerificationError, InvalidHashError, IndexError):
@@ -285,7 +285,7 @@ _NOTES: dict[str, str] = {
 # ── Self-test / benchmark ─────────────────────────────────────────────
 
 # A single hash that takes <50 ms is essentially free for an attacker on
-# a 2026 GPU farm — flag it.  Anything >1 s blocks login latency and we
+# a 2026 GPU farm - flag it.  Anything >1 s blocks login latency and we
 # back off automatically (drop memory by 25%, then time_cost by 1).
 
 _FAST_HASH_THRESHOLD_S = 0.050
@@ -293,17 +293,17 @@ _SLOW_HASH_THRESHOLD_S = 1.000
 
 
 def main() -> None:
-    """CLI entry point — prompt for password, hash it, and print config.ini snippet."""
+    """CLI entry point - prompt for password, hash it, and print config.ini snippet."""
     parser = argparse.ArgumentParser(description="Generate an admin password hash for Internets.")
     parser.add_argument("--algo", choices=_ALGOS, default="scrypt",
-                        help="Hashing algorithm (default: scrypt — but argon2 is RECOMMENDED)")
+                        help="Hashing algorithm (default: scrypt - but argon2 is RECOMMENDED)")
     args = parser.parse_args()
 
     if args.algo != "argon2":
         print("\nNOTE: argon2id is the OWASP-recommended choice for new deployments.")
         print(f"      You picked '{args.algo}'; consider --algo argon2 next time.\n")
 
-    print(f"\nInternets password hasher — {args.algo} ({_NOTES[args.algo]})\n")
+    print(f"\nInternets password hasher - {args.algo} ({_NOTES[args.algo]})\n")
 
     pw  = getpass.getpass("Password  : ")
     pw2 = getpass.getpass("Confirm   : ")
@@ -331,10 +331,10 @@ def main() -> None:
 
     # Surface latency anomalies regardless of algo.
     if dt < _FAST_HASH_THRESHOLD_S:
-        print(f"WARNING: hash took only {dt:.3f}s — parameters may be too weak "
+        print(f"WARNING: hash took only {dt:.3f}s - parameters may be too weak "
               "for 2026 GPU/ASIC attackers.")
     elif dt > _SLOW_HASH_THRESHOLD_S:
-        print(f"NOTE: hash took {dt:.2f}s — if this is too slow for login UX, "
+        print(f"NOTE: hash took {dt:.2f}s - if this is too slow for login UX, "
               "lower the cost via env vars (see module docstring).")
 
     print("─" * 72)

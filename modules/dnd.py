@@ -1,4 +1,4 @@
-"""D&D 5e SRD lookup — wraps dnd5eapi.co.
+"""D&D 5e SRD lookup - wraps dnd5eapi.co.
 
 No API key required.  Tries the spells endpoint first, falls back to
 monsters.  Slugs are kebab-case lower (the API enforces this).
@@ -56,7 +56,7 @@ def _fmt_spell(d: dict) -> str:
     desc = " ".join(desc_l)[:240]
     return _strip_ctrl(
         f"\x02{name}\x02 [{level_s} {school}] | cast: {casting} | "
-        f"range: {range_s} | duration: {duration} — {desc}"
+        f"range: {range_s} | duration: {duration} - {desc}"
     )
 
 
@@ -93,7 +93,7 @@ def _fetch_sync(query: str, ua: str) -> str:
 
 
 class DndModule(BotModule):
-    """`.dnd <name>` — D&D 5e SRD spell or monster lookup."""
+    """`.dnd <name>` - D&D 5e SRD spell or monster lookup."""
 
     COMMANDS: dict[str, str] = {"dnd": "cmd_dnd"}
 
@@ -111,7 +111,7 @@ class DndModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}dnd <spell-or-monster>")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, arg.strip(), self._ua)
         self.bot.privmsg(reply_to, text)

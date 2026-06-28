@@ -1,4 +1,4 @@
-"""pytest configuration — ensure the project root is importable."""
+"""pytest configuration - ensure the project root is importable."""
 
 import sys
 from pathlib import Path

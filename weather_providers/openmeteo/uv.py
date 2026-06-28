@@ -1,4 +1,4 @@
-"""Open-Meteo — UV index (current + today's max)."""
+"""Open-Meteo - UV index (current + today's max)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import UVResult, uv_category

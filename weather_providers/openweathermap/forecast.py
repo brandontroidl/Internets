@@ -1,4 +1,4 @@
-"""OpenWeatherMap — 5-day/3-hour forecast → daily aggregation."""
+"""OpenWeatherMap - 5-day/3-hour forecast → daily aggregation."""
 from __future__ import annotations
 from datetime import datetime
 from collections import defaultdict

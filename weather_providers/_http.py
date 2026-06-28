@@ -25,7 +25,7 @@ from typing import Any
 log = logging.getLogger("internets.weather.http")
 
 _TIMEOUT = 10  # seconds
-# 1 MB default — weather APIs return ~5-50 KB typical.  Configurable
+# 1 MB default - weather APIs return ~5-50 KB typical.  Configurable
 # via set_max_response_bytes() or per-call ``max_bytes=``.
 _MAX_RESPONSE_BYTES = 1_048_576
 
@@ -44,11 +44,11 @@ class HTTPError(Exception):
     Attributes:
         status: HTTP status code (int) or None for non-status failures
             (timeouts, DNS errors, JSON decode errors, oversized body).
-        provider_hint: caller-supplied tag (typically a URL host) — used
+        provider_hint: caller-supplied tag (typically a URL host) - used
             in dispatcher logs to identify which upstream failed.
         is_rate_limit: True when ``status == 429`` or when the upstream
             signalled rate-limiting in a non-status way (aiohttp's
-            TooManyRedirects is *not* this — we mean 429 specifically).
+            TooManyRedirects is *not* this - we mean 429 specifically).
     """
     __slots__ = ("status", "provider_hint", "is_rate_limit")
 
@@ -80,7 +80,7 @@ class ResponseTooLargeError(HTTPError):
         self.limit = limit
 
 
-# Back-compat alias — some out-of-tree code or tests may have imported
+# Back-compat alias - some out-of-tree code or tests may have imported
 # the old private name.  Deprecated; remove once nothing references it.
 _ResponseTooLarge = ResponseTooLargeError
 
@@ -104,7 +104,7 @@ def get_max_response_bytes() -> int:
 
 # Per-call ClientSession creation costs ~1 ms + TLS handshake on first
 # hit per host.  At dispatcher fan-out across 14 providers that adds
-# up.  Cache one session per running event loop — when aiohttp is used
+# up.  Cache one session per running event loop - when aiohttp is used
 # off a different loop (rare) we transparently create a fresh one.
 _session_cache: dict[int, "aiohttp.ClientSession"] = {}
 _session_lock = asyncio.Lock() if _HAS_AIOHTTP else None
@@ -119,13 +119,13 @@ def _loop_key() -> int:
 
 async def _get_session(timeout: int) -> "aiohttp.ClientSession":
     """Return a cached aiohttp ClientSession keyed by event loop."""
-    # Bandit B101 — replace `assert _HAS_AIOHTTP` with a real check so
+    # Bandit B101 - replace `assert _HAS_AIOHTTP` with a real check so
     # the guard survives `python -O`.  This function is only reachable
     # from code paths that already checked the flag, so the raise is
     # purely defensive (broken-invariant report, not user input).
     if not _HAS_AIOHTTP:
         raise RuntimeError(
-            "_get_session called without aiohttp — caller forgot to check _HAS_AIOHTTP")
+            "_get_session called without aiohttp - caller forgot to check _HAS_AIOHTTP")
     key = _loop_key()
     sess = _session_cache.get(key)
     if sess is not None and not sess.closed:
@@ -229,7 +229,7 @@ async def _get_json_aiohttp(
     max_bytes: int,
     provider_hint: str,
 ) -> Any:
-    """aiohttp path — true non-blocking I/O, with cached session."""
+    """aiohttp path - true non-blocking I/O, with cached session."""
     session = await _get_session(timeout)
     try:
         # Per-request timeout (in case cached session was built with a
@@ -297,7 +297,7 @@ def _requests_get(
     max_bytes: int,
     provider_hint: str,
 ) -> Any:
-    """Blocking requests path — called via asyncio.to_thread."""
+    """Blocking requests path - called via asyncio.to_thread."""
     import requests
     try:
         r = requests.get(url, params=params, headers=headers,

@@ -1,12 +1,12 @@
-"""AccuWeather — daily forecast."""
+"""AccuWeather - daily forecast."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json
 from ..base import WeatherResult, ForecastDay
-# fix: was http:// — leaked apikey in query string on the wire.
+# fix: was http:// - leaked apikey in query string on the wire.
 _B = "https://dataservice.accuweather.com"
 async def fetch(key, loc_key, location, days=4):
-    # fix: dead-code `ep = "5day" if days <= 5 else "5day"` — both
+    # fix: dead-code `ep = "5day" if days <= 5 else "5day"` - both
     # branches returned the same value. Free tier only exposes 5-day;
     # 10/15-day are paid plans not yet wired up here. Hardcode.
     ep = "5day"

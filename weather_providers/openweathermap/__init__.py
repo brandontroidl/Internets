@@ -1,4 +1,4 @@
-"""OpenWeatherMap provider package — requires API key.
+"""OpenWeatherMap provider package - requires API key.
 https://openweathermap.org/api
 Free tier: 60 calls/min, current + 5-day/3-hour forecast.
 """

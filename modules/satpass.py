@@ -1,4 +1,4 @@
-"""Satellite visible passes via N2YO — requires an n2yo_api_key.
+"""Satellite visible passes via N2YO - requires an n2yo_api_key.
 
     .passes <sat> <lat,lon>   next visible pass: start, max elevation, duration
 
@@ -48,13 +48,13 @@ def _fetch(satid: int, lat: float, lon: float, key: str, ua: str) -> str:
     except (requests.RequestException, ResponseTooLarge) as e:
         log.warning("satpass request: %s", e)
         return "satellite pass lookup failed"
-    except Exception as e:  # parse — never raise to caller  # noqa: BLE001
+    except Exception as e:  # parse - never raise to caller  # noqa: BLE001
         log.warning("satpass parse: %r", e)
         return "satellite pass data unavailable"
 
 
 class SatpassModule(BotModule):
-    """`.passes` — next visible satellite pass (N2YO, needs n2yo_api_key)."""
+    """`.passes` - next visible satellite pass (N2YO, needs n2yo_api_key)."""
 
     COMMANDS: dict[str, str] = {"passes": "cmd_passes"}
 
@@ -69,7 +69,7 @@ class SatpassModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -94,7 +94,7 @@ class SatpassModule(BotModule):
         if satid is None:
             names = ", ".join(sorted(_SATS)[:6])
             self.bot.privmsg(
-                reply_to, f"{nick}: unknown satellite '{strip_ctrl(sat, 20)}' — "
+                reply_to, f"{nick}: unknown satellite '{strip_ctrl(sat, 20)}' - "
                 f"use a NORAD id or one of: {names}…")
             return
         try:

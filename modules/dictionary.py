@@ -11,9 +11,9 @@ _IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 
 
 def _lookup_sync(word: str, index: int, ua: str) -> str:
-    """Blocking dictionary lookup — run via asyncio.to_thread.
+    """Blocking dictionary lookup - run via asyncio.to_thread.
 
-    Uses the Free Dictionary API (dictionaryapi.dev) — no key required.
+    Uses the Free Dictionary API (dictionaryapi.dev) - no key required.
     """
     try:
         entries = fetch_json(
@@ -46,7 +46,7 @@ def _lookup_sync(word: str, index: int, ua: str) -> str:
             defn = defn[:397] + "..."
 
         pos_str = f" ({strip_ctrl(pos)})" if pos else ""
-        return f"[{idx + 1}/{total}] \x02{strip_ctrl(word)}\x02{pos_str} — {strip_ctrl(defn)}"
+        return f"[{idx + 1}/{total}] \x02{strip_ctrl(word)}\x02{pos_str} - {strip_ctrl(defn)}"
     except Exception as e:
         log.warning(f"Dictionary lookup: {e}")
         return "lookup failed"
@@ -75,7 +75,7 @@ class DictionaryModule(BotModule):
         word = m.group(1).strip() if m else arg.strip()
         idx = int(m.group(2)) if m else 1
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_lookup_sync, word, idx, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -87,5 +87,5 @@ class DictionaryModule(BotModule):
 
 
 def setup(bot: object) -> DictionaryModule:
-    """Module entry point — returns a DictionaryModule instance."""
+    """Module entry point - returns a DictionaryModule instance."""
     return DictionaryModule(bot)  # type: ignore[arg-type]

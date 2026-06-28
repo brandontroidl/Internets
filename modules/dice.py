@@ -7,7 +7,7 @@ from .base import BotModule, help_row
 
 log = logging.getLogger("internets.dice")
 
-# Bandit B311 false-positive — dice rolls aren't a security primitive but
+# Bandit B311 false-positive - dice rolls aren't a security primitive but
 # using SystemRandom keeps the scan clean and gives marginally better
 # entropy at no perceptible cost.
 _rng = random.SystemRandom()
@@ -18,7 +18,7 @@ _DICE_RE = re.compile(r"^(?:(\d+)d)?(\d+)([+-]\d+)?$")
 def _roll(expr: str) -> str:
     m = _DICE_RE.match(expr.strip().lower().replace(" ", ""))
     if not m:
-        return "invalid format — use: N  XdN  XdN+M"
+        return "invalid format - use: N  XdN  XdN+M"
     count  = int(m.group(1)) if m.group(1) else 1
     sides  = int(m.group(2))
     mod    = int(m.group(3)) if m.group(3) else 0
@@ -55,5 +55,5 @@ class DiceModule(BotModule):
 
 
 def setup(bot: object) -> DiceModule:
-    """Module entry point — returns a DiceModule instance."""
+    """Module entry point - returns a DiceModule instance."""
     return DiceModule(bot)  # type: ignore[arg-type]

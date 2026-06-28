@@ -1,4 +1,4 @@
-"""Magic: the Gathering card lookup — wraps Scryfall.
+"""Magic: the Gathering card lookup - wraps Scryfall.
 
 No API key required.  Scryfall asks for a descriptive User-Agent and a
 short delay between calls; we comply naturally via the channel rate
@@ -66,7 +66,7 @@ def _fetch_sync(name: str, ua: str) -> str:
 
 
 class MtgModule(BotModule):
-    """`.mtg <card>` — Magic: the Gathering card lookup via Scryfall."""
+    """`.mtg <card>` - Magic: the Gathering card lookup via Scryfall."""
 
     COMMANDS: dict[str, str] = {"mtg": "cmd_mtg"}
 
@@ -84,7 +84,7 @@ class MtgModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}mtg <card name>")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, arg.strip(), self._ua)
         self.bot.privmsg(reply_to, text)

@@ -1,4 +1,4 @@
-"""OpenAQ — air quality from the nearest monitoring location (v3 API).
+"""OpenAQ - air quality from the nearest monitoring location (v3 API).
 
 Two calls: find the nearest location (with its sensor list), then pull
 that location's latest measurements.  The latest endpoint returns only

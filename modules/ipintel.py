@@ -1,4 +1,4 @@
-"""IP reputation aggregator — .ip / .rep — keyless multi-source threat intel.
+"""IP reputation aggregator - .ip / .rep - keyless multi-source threat intel.
 
     .ip <ip|host>    one-line reputation across DNSBLs, SANS ISC / DShield,
                      GreyNoise, the Tor exit list, and AbuseIPDB (if a key
@@ -8,7 +8,7 @@ Every source is keyless except AbuseIPDB, which uses the optional
 ``abuseipdb_key`` secret (the command degrades gracefully without it).
 
 Safety model: the target is resolved to ONE public IP through the shared
-SSRF-safe resolver (``_netsafe.resolve_safe_ip``) — private / loopback /
+SSRF-safe resolver (``_netsafe.resolve_safe_ip``) - private / loopback /
 link-local / reserved / unresolvable targets are refused before any request
 goes out, and an internal IP can never be leaked to a third party.  The
 validated IP only ever appears as a query parameter / path segment against
@@ -17,7 +17,7 @@ surface here the way there is for ``probe`` / ``scinews``.  Every upstream
 string is run through ``strip_ctrl``; every outbound body is size-capped.
 
 DNSBL lookups go over Cloudflare DNS-over-HTTPS (a large public resolver),
-so Spamhaus ZEN — which deliberately refuses public resolvers — is NOT in
+so Spamhaus ZEN - which deliberately refuses public resolvers - is NOT in
 the default zone set; the zones here all answer public-resolver queries.
 A returned A record in 127.0.0.0/8 (excluding the 127.255.255.0/24
 "query refused" sentinel) counts as a listing.
@@ -56,7 +56,7 @@ _DNSBL_ZONES: tuple[tuple[str, str], ...] = (
     ("truncate.gbudb.net",     "GBUdb"),
 )
 # A DNSBL "listed" answer lives in 127.0.0.0/8; 127.255.255.0/24 is the
-# public-resolver / error sentinel several zones return — never a listing.
+# public-resolver / error sentinel several zones return - never a listing.
 _DNSBL_LISTED_NET = ipaddress.ip_network("127.0.0.0/8")
 _DNSBL_SENTINEL_NET = ipaddress.ip_network("127.255.255.0/24")
 
@@ -76,7 +76,7 @@ _TOR_TTL = 3600          # seconds; the bulk exit list changes slowly
 # The bot's sender splits PRIVMSG bodies at ~400 bytes, so keep one .ip reply
 # to a single message (realistic lines are far shorter).  Every untrusted
 # field is strip_ctrl'd individually, so the assembled line is sanitized only
-# for transport bytes (\r\n\x00) at the end — it must NOT be run through
+# for transport bytes (\r\n\x00) at the end - it must NOT be run through
 # strip_ctrl again or that would delete the intentional \x02 emphasis codes.
 _MAX_LINE = 400
 _TRANSPORT_RE = re.compile(r"[\r\n\x00]")
@@ -131,7 +131,7 @@ def _dnsbl_one(ip: str, zone: str, ua: str) -> int:
     except _NET_ERRORS as e:
         log.warning("dnsbl %s: %s", zone, e)
         return -1
-    except Exception as e:  # noqa: BLE001 — one dead source must not break the reply
+    except Exception as e:  # noqa: BLE001 - one dead source must not break the reply
         log.warning("dnsbl %s (unexpected): %s", zone, e)
         return -1
 
@@ -151,7 +151,7 @@ def _dshield_sync(ip: str, ua: str) -> dict | None:
     except _NET_ERRORS as e:
         log.warning("dshield: %s", e)
         return None
-    except Exception as e:  # noqa: BLE001 — one dead source must not break the reply
+    except Exception as e:  # noqa: BLE001 - one dead source must not break the reply
         log.warning("dshield (unexpected): %s", e)
         return None
 
@@ -171,7 +171,7 @@ def _greynoise_sync(ip: str, ua: str) -> dict | None:
     except _NET_ERRORS as e:
         log.warning("greynoise: %s", e)
         return None
-    except Exception as e:  # noqa: BLE001 — one dead source must not break the reply
+    except Exception as e:  # noqa: BLE001 - one dead source must not break the reply
         log.warning("greynoise (unexpected): %s", e)
         return None
 
@@ -195,7 +195,7 @@ def _abuseipdb_sync(ip: str, ua: str, key: str) -> dict | None:
     except _NET_ERRORS as e:
         log.warning("abuseipdb: %s", e)
         return None
-    except Exception as e:  # noqa: BLE001 — one dead source must not break the reply
+    except Exception as e:  # noqa: BLE001 - one dead source must not break the reply
         log.warning("abuseipdb (unexpected): %s", e)
         return None
 
@@ -237,7 +237,7 @@ def _tor_is_exit(ip: str, ua: str) -> int:
     except (requests.RequestException, ResponseTooLarge, ValueError) as e:
         log.warning("tor: %s", e)
         return -1
-    except Exception as e:  # noqa: BLE001 — one dead source must not break the reply
+    except Exception as e:  # noqa: BLE001 - one dead source must not break the reply
         log.warning("tor (unexpected): %s", e)
         return -1
 
@@ -328,7 +328,7 @@ def _format(ip: str, r: dict) -> str:
 
 
 class IpintelModule(BotModule):
-    """`.ip` / `.rep` — multi-source IP reputation aggregator."""
+    """`.ip` / `.rep` - multi-source IP reputation aggregator."""
 
     COMMANDS: dict[str, str] = {"ip": "cmd_ip", "rep": "cmd_ip"}
 
@@ -345,7 +345,7 @@ class IpintelModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -431,5 +431,5 @@ class IpintelModule(BotModule):
 
 
 def setup(bot: object) -> IpintelModule:
-    """Module entry point — returns an IpintelModule instance."""
+    """Module entry point - returns an IpintelModule instance."""
     return IpintelModule(bot)  # type: ignore[arg-type]

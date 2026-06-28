@@ -19,24 +19,24 @@ Usage::
     hourly = await get_hourly(lat, lon, "Tokyo", hours=12)
 
 Providers, ranked by scientific accuracy (see _dispatch.DEFAULT_RELIABILITY):
-    NWS                — free, no key, US only (NDFD + HRRR + WaveWatch III)
-    Meteomatics        — user/pass (premium ECMWF IFS / ICON / GFS blend)
-    Apple WeatherKit   — Apple Dev (NWS + IBM TWC blend)
-    Open-Meteo         — free, no key (ECMWF / ICON / GFS multi-model + CAMS AQ + ERA5)
-    Visual Crossing    — key (ECMWF + ERA5 reanalysis)
-    AccuWeather        — key (proprietary long-range models)
-    OpenWeatherMap     — key (GFS + ECMWF + CAMS AQ)
-    WeatherBit         — key (GFS + station obs)
-    WeatherAPI.com     — key (GFS-derived)
-    Pirate Weather     — key (Dark Sky compatible — HRRR + MRMS for US)
-    Stormglass         — key (marine specialist — 7-model wave blend)
-    Tomorrow.io        — key (proprietary nowcasting focus)
-    World Weather Online — key (basic single-model)
-    Weatherstack       — key (basic, plaintext HTTP — least preferred)
+    NWS                - free, no key, US only (NDFD + HRRR + WaveWatch III)
+    Meteomatics        - user/pass (premium ECMWF IFS / ICON / GFS blend)
+    Apple WeatherKit   - Apple Dev (NWS + IBM TWC blend)
+    Open-Meteo         - free, no key (ECMWF / ICON / GFS multi-model + CAMS AQ + ERA5)
+    Visual Crossing    - key (ECMWF + ERA5 reanalysis)
+    AccuWeather        - key (proprietary long-range models)
+    OpenWeatherMap     - key (GFS + ECMWF + CAMS AQ)
+    WeatherBit         - key (GFS + station obs)
+    WeatherAPI.com     - key (GFS-derived)
+    Pirate Weather     - key (Dark Sky compatible - HRRR + MRMS for US)
+    Stormglass         - key (marine specialist - 7-model wave blend)
+    Tomorrow.io        - key (proprietary nowcasting focus)
+    World Weather Online - key (basic single-model)
+    Weatherstack       - key (basic, plaintext HTTP - least preferred)
 
 Air-quality-only providers (not part of the current/forecast ranking):
-    AirNow             — key (US EPA official AQI — authoritative, US only)
-    PurpleAir          — key (crowdsourced PM2.5 sensors — global, hyper-local)
+    AirNow             - key (US EPA official AQI - authoritative, US only)
+    PurpleAir          - key (crowdsourced PM2.5 sensors - global, hyper-local)
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ from ._dispatch import Dispatcher, CAPABILITY_METHODS
 from ._health import health_registry, format_health_score
 from ._http import HTTPError, ResponseTooLargeError
 
-# Lazy imports — provider packages are imported only when needed.
+# Lazy imports - provider packages are imported only when needed.
 _PROVIDER_FACTORIES: dict[str, Any] = {}
 
 
@@ -102,7 +102,7 @@ _MAX_FORECAST_DAYS = 16
 # ── Per-provider quota tracking ───────────────────────────────────────
 # Operators care about staying under each upstream's free-tier ceiling.
 # We track a *daily* counter per provider (resets at UTC midnight) and
-# compare it to a per-provider limit.  Limits are best-effort — most
+# compare it to a per-provider limit.  Limits are best-effort - most
 # vendors publish monthly or per-minute caps that don't translate
 # directly to a "calls today" number, so the dispatcher just uses
 # these for visibility, not enforcement.
@@ -122,7 +122,7 @@ _MAX_FORECAST_DAYS = 16
 #   - Tomorrow.io:       500        (500/day free tier)
 #   - WeatherBit:        50         (50/day free tier)
 #   - Visual Crossing:   1_000      (1000/day free tier)
-#   - WeatherStack:      1_000      (1000/mo ≈ 33/day — use monthly value)
+#   - WeatherStack:      1_000      (1000/mo ≈ 33/day - use monthly value)
 #   - AccuWeather:       50         (50/day free tier)
 #   - World Weather Online: 500     (500/day free)
 #   - Pirate Weather:    10_000     (10k/mo free tier)
@@ -143,11 +143,11 @@ _DEFAULT_QUOTA_LIMITS: dict[str, int | None] = {
     "openmeteo":            None,
     "meteomatics":          None,
     "weatherkit":           None,
-    "airnow":               500,    # 500 req/hour upstream — shown as a soft marker
+    "airnow":               500,    # 500 req/hour upstream - shown as a soft marker
     "purpleair":            None,   # points-budget based, no fixed daily call cap
 }
 
-# Public module-level dict — operators / status pages can read this
+# Public module-level dict - operators / status pages can read this
 # directly if they prefer not to round-trip through quota_status().
 quota: dict[str, dict[str, Any]] = {}
 _quota_lock = threading.Lock()
@@ -177,7 +177,7 @@ def _quota_entry_locked(provider_id: str) -> dict[str, Any]:
 def record_call(provider_id: str) -> None:
     """Increment today's quota counter for *provider_id*.
 
-    NOTE: This is **not** called from the dispatcher automatically —
+    NOTE: This is **not** called from the dispatcher automatically -
     callers (e.g. the dispatch agent's wiring) must invoke it once per
     upstream request.  Resets at midnight UTC.
     """
@@ -194,10 +194,10 @@ def quota_status(provider_id: str) -> dict[str, Any]:
     Returns a dict with::
 
         {
-            "used":      int   — calls made today (UTC)
-            "limit":     int|None — daily cap (None = no published limit)
-            "remaining": int|None — limit - used, None when limit is None
-            "pct":       float — used / limit * 100 (0.0 when limit is None)
+            "used":      int   - calls made today (UTC)
+            "limit":     int|None - daily cap (None = no published limit)
+            "remaining": int|None - limit - used, None when limit is None
+            "pct":       float - used / limit * 100 (0.0 when limit is None)
         }
     """
     with _quota_lock:
@@ -242,7 +242,7 @@ def _f_weatherkit(cfg):
     try:
         import jwt as _  # noqa
     except ImportError:
-        log.warning("weatherkit: skipped — PyJWT not installed "
+        log.warning("weatherkit: skipped - PyJWT not installed "
                     "(pip install PyJWT cryptography)")
         return None
     t = _cred(cfg, "weatherkit_team_id",    "weatherkit_team_id")
@@ -250,7 +250,7 @@ def _f_weatherkit(cfg):
     k = _cred(cfg, "weatherkit_key_id",     "weatherkit_key_id")
     f = _cred(cfg, "weatherkit_key_file",   "weatherkit_key_file")
     # We need all four of team_id / service_id / key_id / key_file.
-    # `missing` is a count, not a list of names — CodeQL's
+    # `missing` is a count, not a list of names - CodeQL's
     # py/clear-text-logging-sensitive-data heuristic flags a list-comp
     # that binds the secret value to a tuple even when only the name
     # is logged, so we stay aggregate.
@@ -499,7 +499,7 @@ def configure(cfg: ConfigParser) -> None:
         # tie-breaker), NOT an allowlist.  Append every other known provider
         # after the listed ones so providers added after this config file was
         # written still register (they simply sort last).  Without this, a
-        # stale list silently disables whole capabilities — e.g. a config
+        # stale list silently disables whole capabilities - e.g. a config
         # predating the air-quality/wildfire/space-weather/tides providers
         # would never load them.
         order += [p for p in _PROVIDER_FACTORIES if p not in order]
@@ -509,7 +509,7 @@ def configure(cfg: ConfigParser) -> None:
     for pid in order:
         factory = _PROVIDER_FACTORIES.get(pid)
         if factory is None:
-            log.warning("Unknown weather provider %r — skipping", pid)
+            log.warning("Unknown weather provider %r - skipping", pid)
             continue
         try:
             provider = factory(cfg)
@@ -524,7 +524,7 @@ def configure(cfg: ConfigParser) -> None:
     if not dispatcher.provider_ids:
         from .openmeteo import OpenMeteoProvider
         dispatcher.register(OpenMeteoProvider(), "openmeteo")
-        log.warning("No providers configured — falling back to Open-Meteo")
+        log.warning("No providers configured - falling back to Open-Meteo")
 
     log.info("Provider chain: %s", " → ".join(dispatcher.provider_ids))
     log.info("Capability matrix:\n%s", dispatcher.capability_matrix())
@@ -556,14 +556,14 @@ def provider_status() -> list[dict]:
             "fails":        int (recent failure count),
             "success_rate": float (EMA, 0.0–1.0),
             "health_score": float (0.0–1.0),
-            "quota":        dict (see quota_status() — used/limit/remaining/pct),
+            "quota":        dict (see quota_status() - used/limit/remaining/pct),
         }
 
     ``state`` decoder:
-      - ``unconfigured`` — factory exists but no key in secret_store/config
-      - ``cold``         — registered but no API calls have happened yet
-      - ``failing``      — registered, calls have happened, success_rate ≤ 0.5
-      - ``active``       — registered, calls have happened, success_rate > 0.5
+      - ``unconfigured`` - factory exists but no key in secret_store/config
+      - ``cold``         - registered but no API calls have happened yet
+      - ``failing``      - registered, calls have happened, success_rate ≤ 0.5
+      - ``active``       - registered, calls have happened, success_rate > 0.5
         (i.e. the upstream API is currently accepting our credentials).
     """
     result: list[dict] = []
@@ -597,7 +597,7 @@ def provider_status() -> list[dict]:
 # All accept ``force_provider=<id>`` (e.g. "nws") to pin the dispatch
 # chain to a single provider, bypassing the accuracy/health ordering.
 # That kwarg is used by the user-facing `-p <name>` flag in
-# modules/weather.py — passing None (the default) restores normal
+# modules/weather.py - passing None (the default) restores normal
 # fallback behaviour.  Extra keyword arguments are forwarded to the
 # selected provider's method untouched.
 
@@ -685,7 +685,7 @@ async def get_uv(
 async def get_pollen(
     lat, lon, location, *, force_provider: str | None = None, **kw,
 ) -> PollenResult | None:
-    """Airborne pollen (CAMS — Europe).  ``force_provider`` pins one provider."""
+    """Airborne pollen (CAMS - Europe).  ``force_provider`` pins one provider."""
     return await dispatcher.dispatch(
         "pollen", lat, lon, location, **_force_kw(force_provider, kw))
 

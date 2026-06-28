@@ -2,7 +2,7 @@
 
 Guards the whole help surface, not one module:
   * every primary command (one per handler method) is documented in
-    help_lines() — catches "added to COMMANDS, forgot the help line";
+    help_lines() - catches "added to COMMANDS, forgot the help line";
   * help lines are IRC-safe (well under the 512-byte line limit, correctly
     indented) so they never get truncated or mis-rendered;
   * alias separators are normalized (no spaced " / ." form);
@@ -10,7 +10,7 @@ Guards the whole help surface, not one module:
 
 Output is also flood-safe by construction: all replies go through
 sender.py's token bucket (5 burst, ~40/min), comfortably inside a 10/3
-network limit — see test_help_row_is_compact for the per-line bound.
+network limit - see test_help_row_is_compact for the per-line bound.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _help(stem: str):
     cls = _module_class(stem)
     if cls is None:
         return None, []
-    inst = cls.__new__(cls)        # skip __init__ — help_lines only needs prefix
+    inst = cls.__new__(cls)        # skip __init__ - help_lines only needs prefix
     inst.bot = MagicMock()         # cover any module that reads self.bot
     return cls, cls.help_lines(inst, ".")
 

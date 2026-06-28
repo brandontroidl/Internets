@@ -4,7 +4,7 @@
 #
 # Run this whenever requirements.txt changes (Dependabot, manual bump,
 # or any pip dep edit).  Commit both requirements.txt and
-# requirements.lock together — CI installs with --require-hashes
+# requirements.lock together - CI installs with --require-hashes
 # against the lockfile, so the two must stay in sync.
 #
 # Why it matters: hash-pinning defends against PyPI account-takeover,
@@ -15,7 +15,7 @@
 #     scripts/regen-lockfile.sh
 #
 # Requirements:
-#   * Python 3.10 SPECIFICALLY on PATH — the lock MUST be resolved on the
+#   * Python 3.10 SPECIFICALLY on PATH - the lock MUST be resolved on the
 #     lowest supported Python so conditional transitive deps gated
 #     `python_version < "3.11"` (e.g. async-timeout) are captured.  A lock
 #     generated on 3.14 silently omits them and breaks CI's 3.10 jobs.
@@ -26,7 +26,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Locate a Python 3.10 interpreter — fail loudly rather than silently
+# Locate a Python 3.10 interpreter - fail loudly rather than silently
 # producing a lock missing the < 3.11 conditional transitives.
 PYBIN=""
 for cand in python3.10 python3; do

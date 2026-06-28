@@ -1,4 +1,4 @@
-"""WeatherBit.io — current conditions."""
+"""WeatherBit.io - current conditions."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult

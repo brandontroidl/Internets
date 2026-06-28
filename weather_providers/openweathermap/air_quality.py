@@ -1,4 +1,4 @@
-"""OpenWeatherMap — air quality (air pollution API)."""
+"""OpenWeatherMap - air quality (air pollution API)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AirQualityResult, aqi_category

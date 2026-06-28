@@ -1,8 +1,8 @@
-"""World Weather Online — hourly forecast (3-hourly intervals)."""
+"""World Weather Online - hourly forecast (3-hourly intervals)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import HourlyResult, HourlyEntry
-# fix: _float was duplicated in every endpoint file — moved to _codes.
+# fix: _float was duplicated in every endpoint file - moved to _codes.
 from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"

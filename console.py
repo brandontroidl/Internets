@@ -5,7 +5,7 @@ dispatches debug, loglevel, status, and shutdown commands.
 
 SECURITY MODEL: the console grants admin-equivalent capability (debug
 toggle, log-level changes, graceful shutdown) to anyone with stdin
-access on the bot's host.  This is intentional — anyone with local
+access on the bot's host.  This is intentional - anyone with local
 shell access can already kill the process, read config.ini, etc., so
 the console is not an additional attack surface in that context.  But
 it MUST NOT run when stdin is shared with an untrusted user.  Pass
@@ -42,7 +42,7 @@ log = logging.getLogger("internets")
 def should_skip_console() -> bool:
     """Return True when the console should auto-skip.
 
-    The console is unsafe when stdin isn't an interactive TTY — e.g.
+    The console is unsafe when stdin isn't an interactive TTY - e.g.
     under systemd, in a Docker container without -it, or with stdin
     redirected to a file.  Skipping in those cases prevents the
     console from looping on EOF and avoids granting admin equivalence
@@ -51,7 +51,7 @@ def should_skip_console() -> bool:
     try:
         return not sys.stdin.isatty()
     except (AttributeError, ValueError):
-        # No stdin at all, or it was closed — skip safely.
+        # No stdin at all, or it was closed - skip safely.
         return True
 
 
@@ -61,11 +61,11 @@ def _console_dispatch_loop(bot: IRCBot) -> None:
 
     All commands we dispatch are thread-safe to call from outside the
     asyncio loop:
-      * ``apply_debug`` / ``apply_loglevel`` — touch logger state
+      * ``apply_debug`` / ``apply_loglevel`` - touch logger state
         (RLock-guarded internally by the logging module).
-      * ``_print_status`` — reads bot fields through their dedicated
+      * ``_print_status`` - reads bot fields through their dedicated
         ``threading.Lock``-guarded accessors.
-      * ``bot.request_shutdown`` — already uses
+      * ``bot.request_shutdown`` - already uses
         ``loop.call_soon_threadsafe`` internally to set the stop event.
 
     Exits on EOFError (Ctrl-D / closed stdin), KeyboardInterrupt
@@ -95,7 +95,7 @@ def _console_dispatch_loop(bot: IRCBot) -> None:
             bot.request_shutdown(reason)
             return
         else:
-            print(f"Unknown command: {cmd!r} — type 'help' for commands.")
+            print(f"Unknown command: {cmd!r} - type 'help' for commands.")
 
 
 async def run_console(bot: IRCBot) -> None:
@@ -106,16 +106,16 @@ async def run_console(bot: IRCBot) -> None:
     parks the calling thread on a blocking ``read(0)`` syscall that
     nothing short of process death can interrupt.  If that thread
     isn't ``daemon=True``, ``asyncio.run()``'s cleanup path will
-    ``loop.shutdown_default_executor()`` — which waits forever for
+    ``loop.shutdown_default_executor()`` - which waits forever for
     the input-blocked worker to return.  Net effect of the old design:
     the whole process hung on the last shutdown log line until the
     operator hit Ctrl-C.  A daemon thread dies with the process, so
     cleanup completes and the bot exits cleanly.
     """
-    # Loud warning on entry — anyone reading the log sees that the
+    # Loud warning on entry - anyone reading the log sees that the
     # console is live and grants admin equivalence to stdin.
     log.warning(
-        "event=console_active stdin=tty pid=%d — "
+        "event=console_active stdin=tty pid=%d - "
         "the local console grants admin-equivalent capability "
         "(debug, loglevel, status, shutdown) WITHOUT authentication. "
         "Pass --no-console for daemon deployments.",
@@ -127,7 +127,7 @@ async def run_console(bot: IRCBot) -> None:
     def _wrap() -> None:
         try:
             _console_dispatch_loop(bot)
-        except Exception as e:  # noqa: BLE001 — protect the loop
+        except Exception as e:  # noqa: BLE001 - protect the loop
             log.exception(f"console thread crashed: {e!r}")
         finally:
             # call_soon_threadsafe is safe even if the loop has already

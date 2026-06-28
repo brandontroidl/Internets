@@ -1,4 +1,4 @@
-"""NWS Weather.gov — current conditions from nearest observation station.
+"""NWS Weather.gov - current conditions from nearest observation station.
 
 https://api.weather.gov/
 Free, no API key.  US locations only.  Requires User-Agent header.

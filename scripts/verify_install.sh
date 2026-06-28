@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# verify_install.sh — supply-chain install smoke test.
+# verify_install.sh - supply-chain install smoke test.
 #
 # 1. Build sdist + wheel via `python -m build`.
 # 2. Create a throw-away venv.
@@ -88,7 +88,7 @@ for line in record.splitlines():
         continue
     path, hashspec, _size = parts
     if not hashspec:
-        # RECORD itself, .pth files, etc. — skip per PEP 376.
+        # RECORD itself, .pth files, etc. - skip per PEP 376.
         continue
     algo, _, b64 = hashspec.partition("=")
     if algo != "sha256" or not b64:

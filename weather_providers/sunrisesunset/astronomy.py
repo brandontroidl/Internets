@@ -1,4 +1,4 @@
-"""SunriseSunset.io — astronomy (sun/moon).  Times are 12-hour local strings."""
+"""SunriseSunset.io - astronomy (sun/moon).  Times are 12-hour local strings."""
 from __future__ import annotations
 from .._http import get_json, HTTPError
 from ..base import AstronomyResult

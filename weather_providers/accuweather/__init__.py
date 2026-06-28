@@ -1,11 +1,11 @@
-"""AccuWeather provider package — requires API key.
+"""AccuWeather provider package - requires API key.
 https://developer.accuweather.com/apis
 Free tier: 50 calls/day. Requires location key lookup.
 
 NOTE: AccuWeather supports HTTPS on all tiers; we use https:// uniformly
 to avoid leaking the apikey query parameter on the wire. If the free
 tier ever rejects TLS for a given endpoint the dispatcher will surface
-a 400/403 — switch to ``http://`` only as a documented downgrade.
+a 400/403 - switch to ``http://`` only as a documented downgrade.
 """
 from __future__ import annotations
 import logging
@@ -21,7 +21,7 @@ from . import current, forecast, hourly, alerts
 
 log = logging.getLogger("internets.weather.accuweather")
 
-# fix: was an unbounded dict — under attack or just long-running this
+# fix: was an unbounded dict - under attack or just long-running this
 # grows without limit. Bounded LRU (move-to-end on hit, evict-oldest on
 # overflow). ~2 KB ceiling at LRU_MAX = 512 entries.
 _LRU_MAX = 512
@@ -32,7 +32,7 @@ async def _get_location_key(key: str, lat: float, lon: float) -> str:
     if cache_key in _LOC_CACHE:
         _LOC_CACHE.move_to_end(cache_key)
         return _LOC_CACHE[cache_key]
-    # fix: was http:// — leaked apikey in plaintext query string.
+    # fix: was http:// - leaked apikey in plaintext query string.
     data = await get_json(
         "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search",
         params={"apikey": key, "q": f"{lat},{lon}"},

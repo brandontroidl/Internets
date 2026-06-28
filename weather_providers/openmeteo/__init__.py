@@ -1,4 +1,4 @@
-"""Open-Meteo weather provider package — free, no API key required."""
+"""Open-Meteo weather provider package - free, no API key required."""
 from __future__ import annotations
 # fix: replaced "from ..base import *" with explicit imports for clarity
 from ..base import (

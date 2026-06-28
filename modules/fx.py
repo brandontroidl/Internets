@@ -1,4 +1,4 @@
-"""FX (foreign-exchange) command — wraps frankfurter.dev (ECB rates).
+"""FX (foreign-exchange) command - wraps frankfurter.dev (ECB rates).
 
 No API key required.  Single call::
 
@@ -11,7 +11,7 @@ Response shape::
 
 Output::
 
-    1.00 USD = 0.9215 EUR  (frankfurter.dev — ECB rates)
+    1.00 USD = 0.9215 EUR  (frankfurter.dev - ECB rates)
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _strip_ctrl(s, max_len=400):
 
 
 def _fmt_amount(n: float) -> str:
-    """Format a money amount — 2 decimals for ≥1, 4 sig figs for <1."""
+    """Format a money amount - 2 decimals for ≥1, 4 sig figs for <1."""
     if abs(n) >= 1:
         return f"{n:,.2f}"
     # 4 significant digits for sub-unit results
@@ -77,13 +77,13 @@ def _fetch_sync(src: str, dst: str, amount: float, ua: str) -> str:
     converted = rate * amount
     text = (
         f"{_fmt_amount(amount)} {src} = {_fmt_amount(converted)} {dst}  "
-        f"(frankfurter.dev — ECB rates)"
+        f"(frankfurter.dev - ECB rates)"
     )
     return _strip_ctrl(text)
 
 
 class FxModule(BotModule):
-    """`.fx <from> <to> [amount]` — ECB foreign-exchange rate lookup."""
+    """`.fx <from> <to> [amount]` - ECB foreign-exchange rate lookup."""
 
     COMMANDS: dict[str, str] = {"fx": "cmd_fx"}
 
@@ -97,7 +97,7 @@ class FxModule(BotModule):
 
     async def cmd_fx(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         parts = (arg or "").split()
         if len(parts) < 2 or len(parts) > 3:

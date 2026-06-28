@@ -1,4 +1,4 @@
-"""WeatherBit.io provider package — requires API key.
+"""WeatherBit.io provider package - requires API key.
 https://www.weatherbit.io/api
 Free tier: 500 calls/day, current + 16-day forecast + hourly + alerts + AQ + historical.
 """

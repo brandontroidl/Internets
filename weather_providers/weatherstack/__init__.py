@@ -1,4 +1,4 @@
-"""Weatherstack provider package — requires API key.
+"""Weatherstack provider package - requires API key.
 https://weatherstack.com/documentation
 Free tier: 250 calls/month, current only. Paid adds forecast + historical.
 

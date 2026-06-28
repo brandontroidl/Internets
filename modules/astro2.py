@@ -1,10 +1,10 @@
-"""Astronomy / space-weather commands — all KEYLESS.
+"""Astronomy / space-weather commands - all KEYLESS.
 
   .solar          NOAA SWPC latest GOES X-ray flux class + recent flare
   .neo            NASA NeoWs near-earth-object feed (DEMO_KEY default)
   .launches [n]   The Space Devs upcoming launches (1-3)
-  .moon [date]    Moon phase — pure compute, no network
-  .sky <object>   Bundled Messier catalog lookup — pure data
+  .moon [date]    Moon phase - pure compute, no network
+  .sky <object>   Bundled Messier catalog lookup - pure data
 
 Every outbound call goes through ``base.fetch_json`` (size-capped); no
 API key is required (NASA ``DEMO_KEY`` is the documented public default,
@@ -41,7 +41,7 @@ _LAUNCH_URL = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/"
 _LAUNCH_MAX_BYTES = 512 * 1024
 
 
-# ── .solar — NOAA SWPC GOES X-ray + flare ─────────────────────────────
+# ── .solar - NOAA SWPC GOES X-ray + flare ─────────────────────────────
 def _fetch_solar(ua: str) -> str:
     try:
         flare = fetch_json(_XRAY_URL, ua=ua, timeout=10)
@@ -56,7 +56,7 @@ def _fetch_solar(ua: str) -> str:
         parts = [f"GOES X-ray flare class \x02{cls}\x02"]
         if when:
             parts.append(f"peak {when}")
-        # Best-effort sunspot number — non-fatal if the feed is unavailable.
+        # Best-effort sunspot number - non-fatal if the feed is unavailable.
         try:
             ssn = fetch_json(_SSN_URL, ua=ua, timeout=10)
             srec = ssn[-1] if isinstance(ssn, list) and ssn else ssn
@@ -76,7 +76,7 @@ def _fetch_solar(ua: str) -> str:
         return "solar data unavailable"
 
 
-# ── .neo — NASA Near-Earth Object feed ────────────────────────────────
+# ── .neo - NASA Near-Earth Object feed ────────────────────────────────
 def _fetch_neo(key: str, ua: str) -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
@@ -116,7 +116,7 @@ def _fetch_neo(key: str, ua: str) -> str:
         return "NEO data unavailable"
 
 
-# ── .launches — The Space Devs upcoming ───────────────────────────────
+# ── .launches - The Space Devs upcoming ───────────────────────────────
 def _fetch_launches(n: int, ua: str) -> str:
     n = max(1, min(n, 3))
     try:
@@ -138,7 +138,7 @@ def _fetch_launches(n: int, ua: str) -> str:
                 continue
             name = strip_ctrl(r.get("name") or "?", 80)
             # In LL2 "list" mode these nested fields may be a dict, a bare
-            # string, or absent — handle all shapes.
+            # string, or absent - handle all shapes.
             prov = r.get("launch_service_provider")
             prov_name = strip_ctrl(
                 (prov.get("name") if isinstance(prov, dict) else prov) or "?", 40)
@@ -153,12 +153,12 @@ def _fetch_launches(n: int, ua: str) -> str:
     except (requests.RequestException, ResponseTooLarge) as e:
         log.warning("launches request: %s", e)
         return "launch lookup failed"
-    except Exception as e:  # parsing — never raise to the caller  # noqa: BLE001
+    except Exception as e:  # parsing - never raise to the caller  # noqa: BLE001
         log.warning("launches parse: %r", e)
         return "launch data unavailable"
 
 
-# ── .moon — pure mean-phase compute ───────────────────────────────────
+# ── .moon - pure mean-phase compute ───────────────────────────────────
 _PHASES = [
     "New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous",
     "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent",
@@ -193,7 +193,7 @@ def moon_phase(dt: datetime) -> str:
     frac = (1 - math.cos(2 * math.pi * age / _SYNODIC)) / 2
     idx = int((age / _SYNODIC) * 8 + 0.5) % 8
     name = _PHASES[idx]
-    return (f"\x02{name}\x02 — {frac * 100:.0f}% illuminated, "
+    return (f"\x02{name}\x02 - {frac * 100:.0f}% illuminated, "
             f"{age:.1f} days old")
 
 
@@ -211,7 +211,7 @@ def _moon(arg: str | None) -> str:
     return strip_ctrl(f"Moon {label}: {moon_phase(dt)}")
 
 
-# ── .sky — bundled Messier catalog (pure data) ────────────────────────
+# ── .sky - bundled Messier catalog (pure data) ────────────────────────
 # (number) -> (common name, type, constellation, magnitude)
 _MESSIER: dict[int, tuple[str, str, str, str]] = {
     1: ("Crab Nebula", "Supernova remnant", "Taurus", "8.4"),
@@ -354,12 +354,12 @@ def sky_lookup(query: str) -> str:
     name, typ, const, mag = _MESSIER[num]
     label = f"M{num}" + (f" ({strip_ctrl(name, 50)})" if name else "")
     return strip_ctrl(
-        f"\x02{label}\x02 — {strip_ctrl(typ, 40)} in {strip_ctrl(const, 30)}, "
+        f"\x02{label}\x02 - {strip_ctrl(typ, 40)} in {strip_ctrl(const, 30)}, "
         f"mag {strip_ctrl(mag, 8)}")
 
 
 class Astro2Module(BotModule):
-    """`.solar` / `.neo` / `.launches` / `.moon` / `.sky` — space & astronomy."""
+    """`.solar` / `.neo` / `.launches` / `.moon` / `.sky` - space & astronomy."""
 
     COMMANDS: dict[str, str] = {
         "solar": "cmd_solar",
@@ -381,7 +381,7 @@ class Astro2Module(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 
@@ -415,7 +415,7 @@ class Astro2Module(BotModule):
     async def cmd_moon(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._gate(nick):
             return
-        # Pure compute — no network, but keep the gate + to_thread shape.
+        # Pure compute - no network, but keep the gate + to_thread shape.
         self.bot.privmsg(reply_to, _moon(arg))
 
     async def cmd_sky(self, nick: str, reply_to: str, arg: str | None) -> None:

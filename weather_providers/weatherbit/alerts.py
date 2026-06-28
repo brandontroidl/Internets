@@ -1,4 +1,4 @@
-"""WeatherBit.io — weather alerts."""
+"""WeatherBit.io - weather alerts."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AlertsResult, AlertEntry

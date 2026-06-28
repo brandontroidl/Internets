@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone test runner — no pytest required.
+Standalone test runner - no pytest required.
 
 Usage:  python tests/run_tests.py
 """
@@ -234,7 +234,7 @@ def _():
 @test("security: modules that emit upstream/user text route it through a sanitizer")
 def _():
     # Completeness gate (enumerate the security-relevant modules, assert each
-    # sanitizes) — NOT a change-detector: these splice third-party/user text
+    # sanitizes) - NOT a change-detector: these splice third-party/user text
     # into bot-attributed IRC lines, so each MUST reference the canonical
     # base.strip_ctrl. Catches a future module (or a removed call) that drifts.
     for name in ("search", "seen", "tell", "stocks", "remind", "location"):
@@ -417,7 +417,7 @@ def _():
 
 @test("calc: nested depth limit")
 def _():
-    # 55 nested sin() calls — should hit depth limit
+    # 55 nested sin() calls - should hit depth limit
     expr = "sin(" * 55 + "1" + ")" * 55
     assert "error" in _calc(expr)
 
@@ -481,7 +481,7 @@ def _():
     assert r.source == "Test"
     assert r.temperature == 20.0
     assert r.forecast == []
-    # Frozen — attributes can't be mutated.
+    # Frozen - attributes can't be mutated.
     try:
         r.source = "Other"
         assert False, "should be frozen"
@@ -675,7 +675,7 @@ def _():
     wp.configure(cfg)
     providers = wp.get_providers()
     # Listed providers register first, in order (unlisted keyless providers
-    # append after — priority is an ordering, not an allowlist).
+    # append after - priority is an ordering, not an allowlist).
     assert providers[:3] == ["weatherapi", "tomorrowio", "openmeteo"]
 
 @test("configure: ignores unknown provider IDs")
@@ -1014,7 +1014,7 @@ def _():
     from internets import IRCBot
     bot = IRCBot()
     # The TOCTOU sentinel: a binding stored as "unknown" (admin quit during the
-    # verify-password window, re-created by cmd_auth) must NEVER grant admin —
+    # verify-password window, re-created by cmd_auth) must NEVER grant admin -
     # otherwise a later nick-grabber inherits a nick-only admin session.
     bot._authed["a"] = "unknown"
     bot._nick_hosts["a"] = "a@host"
@@ -1085,8 +1085,8 @@ def _():
     cb = lambda t: t in tasks and tasks.remove(t)
     cb(2)           # normal removal
     assert 2 not in tasks
-    cb(2)           # already removed — should NOT raise ValueError
-    cb(99)          # never existed — should NOT raise ValueError
+    cb(2)           # already removed - should NOT raise ValueError
+    cb(99)          # never existed - should NOT raise ValueError
     assert tasks == [1, 3]
 
 
@@ -1134,7 +1134,7 @@ def _():
         s = Sender(loop)
         s.start(FakeWriter())
 
-        # Enqueue 10 priority-0 messages rapidly — should all send immediately.
+        # Enqueue 10 priority-0 messages rapidly - should all send immediately.
         for i in range(10):
             s.enqueue(f"PONG :test{i}", priority=0)
         await asyncio.sleep(0.5)
@@ -1229,7 +1229,7 @@ def _():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Sixth Pass — Security hardening
+# Sixth Pass - Security hardening
 # ══════════════════════════════════════════════════════════════════════
 print("\n=== Security hardening (sixth pass) ===")
 
@@ -1288,7 +1288,7 @@ def _():
 
 @test("BUG-027: privmsg rejects targets containing spaces")
 def _():
-    # Behavioural: a target with a space (or empty) must be dropped, not sent —
+    # Behavioural: a target with a space (or empty) must be dropped, not sent -
     # it would let an attacker inject extra IRC command args.
     from internets import IRCBot
     b = IRCBot.__new__(IRCBot)          # no __init__: only send + _split_msg needed
@@ -1355,7 +1355,7 @@ def _():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Seventh Pass — CISO final audit
+# Seventh Pass - CISO final audit
 # ══════════════════════════════════════════════════════════════════════
 print("\n=== CISO final audit (seventh pass) ===")
 
@@ -1398,7 +1398,7 @@ def _():
 @test("SEC-017: get_hash and cmd_rehash go through reload_config()")
 def _():
     # Both must use config.reload_config() so config.local.ini is re-read
-    # alongside config.ini — re-reading only config.ini would clobber
+    # alongside config.ini - re-reading only config.ini would clobber
     # the overlay's values (e.g. password_hash) with the template's empty
     # placeholders.  See the comment on config.reload_config().
     bl_src = Path("botlog.py").read_text(encoding="utf-8")
@@ -1829,7 +1829,7 @@ def _():
     assert _postal_kind("D02AF30")  == "ie"      # Eircode without the space
     assert _postal_kind("1000001")  == "num"     # bare 7-digit is NOT uniquely JP
     assert _postal_kind("01310100") == "num"     # bare 8-digit is NOT uniquely BR
-    # Format-unique kinds remain disjoint — no cannibalisation
+    # Format-unique kinds remain disjoint - no cannibalisation
     assert _postal_kind("A1A 1A1") == "ca"
     assert _postal_kind("SW1A 1AA") == "uk"
 

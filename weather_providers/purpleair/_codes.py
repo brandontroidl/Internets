@@ -1,9 +1,9 @@
-"""PurpleAir helpers — EPA PM2.5 → AQI conversion and humidity correction.
+"""PurpleAir helpers - EPA PM2.5 → AQI conversion and humidity correction.
 
 The breakpoints below are the EPA's **2024** revised PM2.5 AQI table
 (effective 2024-05-06): the AQI=50 boundary dropped from 12.0 to 9.0
 µg/m³ and the upper AQI 200/300/500 boundaries were lowered to
-125.4/225.4/325.4.  Frozen on purpose — these are a regulatory standard,
+125.4/225.4/325.4.  Frozen on purpose - these are a regulatory standard,
 not a tunable knob.
 
 Source: EPA, "Final Updates to the Air Quality Index (AQI) for
@@ -11,7 +11,7 @@ Particulate Matter" fact sheet (Feb 2024).
 """
 from __future__ import annotations
 
-# (conc_low, conc_high, aqi_low, aqi_high) — µg/m³ (24-hr PM2.5) → AQI.
+# (conc_low, conc_high, aqi_low, aqi_high) - µg/m³ (24-hr PM2.5) → AQI.
 _PM25_BREAKPOINTS: tuple[tuple[float, float, int, int], ...] = (
     (0.0,   9.0,   0,   50),
     (9.1,   35.4,  51,  100),

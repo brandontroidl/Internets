@@ -1,4 +1,4 @@
-"""Open-Meteo — pollen (CAMS; values are non-null over Europe only)."""
+"""Open-Meteo - pollen (CAMS; values are non-null over Europe only)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import PollenResult
@@ -20,7 +20,7 @@ async def fetch(lat: float, lon: float, location: str) -> PollenResult | None:
         "olive": c.get("olive_pollen"), "ragweed": c.get("ragweed_pollen"),
     }
     if all(v is None for v in vals.values()):
-        # CAMS is Europe-only — no data here.  Return None so the dispatcher
+        # CAMS is Europe-only - no data here.  Return None so the dispatcher
         # falls through to another pollen provider (Pollen.com / Google).
         return None
     return PollenResult(source="Open-Meteo", location=location, **vals)

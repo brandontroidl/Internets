@@ -1,4 +1,4 @@
-"""Stormglass.io — current weather conditions."""
+"""Stormglass.io - current weather conditions."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult

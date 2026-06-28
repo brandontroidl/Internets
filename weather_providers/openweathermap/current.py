@@ -1,4 +1,4 @@
-"""OpenWeatherMap — current conditions (2.5 API)."""
+"""OpenWeatherMap - current conditions (2.5 API)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult

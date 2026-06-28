@@ -64,7 +64,7 @@ def _get_status(steamid: str, key: str, ua: str) -> dict[str, Any]:
 
 
 def _get_games(steamid: str, key: str, ua: str) -> dict[str, Any]:
-    # Owned-games payloads can be large for power users — bump the cap
+    # Owned-games payloads can be large for power users - bump the cap
     # to 1 MB to fit accounts with hundreds of titles + appinfo metadata.
     return fetch_json(
         "https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/",
@@ -78,7 +78,7 @@ def _get_games(steamid: str, key: str, ua: str) -> dict[str, Any]:
 
 
 def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:
-    """Blocking Steam lookup — run via asyncio.to_thread."""
+    """Blocking Steam lookup - run via asyncio.to_thread."""
     try:
         d = _get_status(steamid, key, ua)
     except Exception as e:
@@ -161,9 +161,9 @@ class SteamModule(BotModule):
                              "weather", "user_agent", "Internets/1.0")
         self._key: str = cred(self.bot.cfg, "steam_key", "steam", "steam_key")
         if not self._key:
-            log.warning("steam: steam_key not set — .steam will not work")
+            log.warning("steam: steam_key not set - .steam will not work")
 
-        # Nick → steamid mapping (own JSON file — not a secret, just storage path)
+        # Nick → steamid mapping (own JSON file - not a secret, just storage path)
         sect = self.bot.cfg["steam"] if "steam" in self.bot.cfg else {}
         self._ids_file = Path(sect.get("steamids_file", "steamids.json"))
         self._lock = threading.Lock()
@@ -185,7 +185,7 @@ class SteamModule(BotModule):
     async def cmd_steam(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Show Steam user status.  Usage: .steam [user] or .steam -g [user]"""
         if not self._key:
-            self.bot.privmsg(reply_to, "Steam API key not configured — see [steam] in config.ini")
+            self.bot.privmsg(reply_to, "Steam API key not configured - see [steam] in config.ini")
             return
 
         show_games = False
@@ -201,7 +201,7 @@ class SteamModule(BotModule):
                 p = self.bot.cfg["bot"]["command_prefix"]
                 self.bot.privmsg(
                     reply_to,
-                    f"{nick}: no Steam ID registered — use {p}regsteam <steamid/vanityurl>",
+                    f"{nick}: no Steam ID registered - use {p}regsteam <steamid/vanityurl>",
                 )
                 return
         else:
@@ -220,7 +220,7 @@ class SteamModule(BotModule):
                     sid = target
 
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_status_sync, sid, show_games, self._key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -232,16 +232,16 @@ class SteamModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}regsteam <steam64id or vanity URL>")
             return
         if not self._key:
-            self.bot.privmsg(reply_to, "Steam API key not configured — see [steam] in config.ini")
+            self.bot.privmsg(reply_to, "Steam API key not configured - see [steam] in config.ini")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         sid, display = await asyncio.to_thread(_register_sync, arg.strip().split()[0], self._key, self._ua)
         if sid:
             self._ids[nick.lower()] = sid
             await asyncio.to_thread(self._save_ids)
-            self.bot.notice(nick, f"Steam ID registered — current persona: {strip_ctrl(display)}")
+            self.bot.notice(nick, f"Steam ID registered - current persona: {strip_ctrl(display)}")
         else:
             self.bot.notice(nick, display)
 
@@ -253,5 +253,5 @@ class SteamModule(BotModule):
 
 
 def setup(bot: object) -> SteamModule:
-    """Module entry point — returns a SteamModule instance."""
+    """Module entry point - returns a SteamModule instance."""
     return SteamModule(bot)  # type: ignore[arg-type]

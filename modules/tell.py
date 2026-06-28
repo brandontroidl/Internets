@@ -1,4 +1,4 @@
-"""Offline ``.tell`` — leave messages for users delivered on their next PRIVMSG.
+"""Offline ``.tell`` - leave messages for users delivered on their next PRIVMSG.
 
 Commands:
     .tell <nick> <message>   Leave a message for <nick>.
@@ -53,7 +53,7 @@ def _fmt_ts(ts: int) -> str:
 
 
 class TellModule(BotModule):
-    """Offline message delivery — `.tell`, `.tell-cancel`, `.tell-list`."""
+    """Offline message delivery - `.tell`, `.tell-cancel`, `.tell-list`."""
 
     COMMANDS: dict[str, str] = {
         "tell":        "cmd_tell",
@@ -166,7 +166,7 @@ class TellModule(BotModule):
         elif target.lower() == bot_nick.lower():
             reply_target = sender
         else:
-            # Some other non-channel target (shouldn't normally happen) —
+            # Some other non-channel target (shouldn't normally happen) -
             # fall back to messaging the sender.
             reply_target = sender
 
@@ -196,18 +196,18 @@ class TellModule(BotModule):
                 loop.create_task(asyncio.to_thread(self._save_sync))
                 return
             except Exception as e:
-                # Async schedule failed — fall through to the synchronous
+                # Async schedule failed - fall through to the synchronous
                 # write path below.  Visibility helps if scheduling ever
                 # breaks systematically.
                 log.debug("tell: async save schedule failed: %s", type(e).__name__)
-        # Fallback: synchronous write (rare — only at startup/shutdown).
+        # Fallback: synchronous write (rare - only at startup/shutdown).
         try:
             self._save_sync()
         except Exception as e:
             log.debug(f"tell: sync save fallback failed: {e}")
 
     def forget(self, nick: str) -> int:
-        """Erase every tell involving ``nick`` — both messages queued FOR
+        """Erase every tell involving ``nick`` - both messages queued FOR
         them and messages they SENT to others (privacy right-to-erasure)."""
         target = nick.lower()
         removed = 0
@@ -236,7 +236,7 @@ class TellModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}tell <nick> <message>")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         parts = arg.strip().split(None, 1)
@@ -276,7 +276,7 @@ class TellModule(BotModule):
             if len(queue) >= _MAX_TELLS_PER_RECIPIENT:
                 self.bot.privmsg(
                     reply_to,
-                    f"{nick}: queue full — {target_nick} has "
+                    f"{nick}: queue full - {target_nick} has "
                     f"{_MAX_TELLS_PER_RECIPIENT} messages waiting",
                 )
                 return
@@ -291,7 +291,7 @@ class TellModule(BotModule):
                 self.bot.privmsg(
                     reply_to,
                     f"{nick}: you already have {_MAX_TELLS_PER_SENDER} pending "
-                    f"tells — use {p}tell-cancel or {p}tell-list",
+                    f"tells - use {p}tell-cancel or {p}tell-list",
                 )
                 return
 
@@ -309,7 +309,7 @@ class TellModule(BotModule):
     async def cmd_tell_cancel(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Cancel all pending tells YOU've sent."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         sender_lc = nick.lower()
@@ -338,7 +338,7 @@ class TellModule(BotModule):
     async def cmd_tell_list(self, nick: str, reply_to: str, arg: str | None) -> None:
         """List your pending tells (delivered via NOTICE)."""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         sender_lc = nick.lower()
@@ -379,5 +379,5 @@ class TellModule(BotModule):
 
 
 def setup(bot: object) -> TellModule:
-    """Module entry point — returns a TellModule instance."""
+    """Module entry point - returns a TellModule instance."""
     return TellModule(bot)  # type: ignore[arg-type]

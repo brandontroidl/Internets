@@ -1,9 +1,9 @@
-"""Pollen.com (IQVIA) provider package — US allergy index.
+"""Pollen.com (IQVIA) provider package - US allergy index.
 
 No API key.  Uses an unofficial public endpoint, and reverse-geocodes
 lat/lon → US ZIP via Nominatim first, so the factory passes the configured
 ``[secrets] weather_user_agent`` for the Nominatim request.  US coverage
-only — returns ``None`` for non-US locations so the dispatcher falls through
+only - returns ``None`` for non-US locations so the dispatcher falls through
 to another pollen provider.
 """
 from __future__ import annotations

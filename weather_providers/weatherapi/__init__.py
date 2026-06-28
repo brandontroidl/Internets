@@ -1,4 +1,4 @@
-"""WeatherAPI.com provider package — requires API key."""
+"""WeatherAPI.com provider package - requires API key."""
 from __future__ import annotations
 # fix: replaced "from ..base import *" with explicit imports for clarity
 from ..base import (

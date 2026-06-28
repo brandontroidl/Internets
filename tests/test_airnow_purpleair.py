@@ -4,7 +4,7 @@ Covers the pure AQI math (EPA 2024 PM2.5 breakpoints + humidity
 correction), the dominant-pollutant selection for AirNow, the
 nearest-sensor selection for PurpleAir, and the no-coverage → raise
 behaviour that lets the dispatcher fall back to a global provider.
-HTTP is mocked — no network, no real keys.
+HTTP is mocked - no network, no real keys.
 """
 
 from __future__ import annotations

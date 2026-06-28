@@ -11,7 +11,7 @@ _IDX_RE = re.compile(r"^(.+?)\s*/(\d+)$")
 
 
 def _lookup_sync(term: str, index: int, user_agent: str) -> str:
-    """Blocking HTTP call — run via asyncio.to_thread."""
+    """Blocking HTTP call - run via asyncio.to_thread."""
     try:
         data = fetch_json(
             "https://api.urbandictionary.com/v0/define",
@@ -38,7 +38,7 @@ class UDModule(BotModule):
     COMMANDS: dict[str, str] = {"u": "cmd_ud", "urbandictionary": "cmd_ud"}
 
     def on_load(self) -> None:
-        """Load user agent — secret_store overrides config."""
+        """Load user agent - secret_store overrides config."""
         from .base import cred
         self._ua: str = cred(self.bot.cfg, "weather_user_agent",
                              "weather", "user_agent", "Internets/1.0")
@@ -53,7 +53,7 @@ class UDModule(BotModule):
         term = m.group(1).strip() if m else arg.strip()
         idx  = int(m.group(2))    if m else 1
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_lookup_sync, term, idx, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -64,5 +64,5 @@ class UDModule(BotModule):
 
 
 def setup(bot: object) -> UDModule:
-    """Module entry point — returns a UDModule instance."""
+    """Module entry point - returns a UDModule instance."""
     return UDModule(bot)  # type: ignore[arg-type]

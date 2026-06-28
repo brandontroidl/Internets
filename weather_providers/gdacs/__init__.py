@@ -1,4 +1,4 @@
-"""GDACS provider package — Global Disaster Alert and Coordination System.
+"""GDACS provider package - Global Disaster Alert and Coordination System.
 
 https://www.gdacs.org/  (joint UN / European Commission)
 Disaster alerts only (earthquakes, tropical cyclones, floods, droughts,

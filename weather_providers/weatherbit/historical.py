@@ -1,4 +1,4 @@
-"""WeatherBit.io — historical weather (daily summary for past dates)."""
+"""WeatherBit.io - historical weather (daily summary for past dates)."""
 from __future__ import annotations
 from datetime import date, timedelta
 from .._http import get_json

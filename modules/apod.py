@@ -1,4 +1,4 @@
-"""NASA Astronomy Picture of the Day — wraps api.nasa.gov.
+"""NASA Astronomy Picture of the Day - wraps api.nasa.gov.
 
 Uses ``DEMO_KEY`` by default (rate-limited but functional).  Override
 by setting ``nasa_api_key`` in the secret store::
@@ -33,7 +33,7 @@ def _fetch_sync(key: str, ua: str) -> str:
                          headers={"User-Agent": ua},
                          timeout=10, stream=True) as r:
             if r.status_code == 429:
-                return "APOD rate-limited — set nasa_api_key in secret_store"
+                return "APOD rate-limited - set nasa_api_key in secret_store"
             r.raise_for_status()
             body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
             if len(body) > _MAX_BODY_BYTES:
@@ -46,7 +46,7 @@ def _fetch_sync(key: str, ua: str) -> str:
             if len(expl) > 220:
                 expl = expl[:217] + "..."
             return _strip_ctrl(
-                f"\x02APOD {date}\x02 — {title} | {expl} | {url}"
+                f"\x02APOD {date}\x02 - {title} | {expl} | {url}"
             )
     except requests.RequestException as e:
         log.warning(f"apod request: {e}")
@@ -57,7 +57,7 @@ def _fetch_sync(key: str, ua: str) -> str:
 
 
 class ApodModule(BotModule):
-    """`.apod` — NASA Astronomy Picture of the Day."""
+    """`.apod` - NASA Astronomy Picture of the Day."""
 
     COMMANDS: dict[str, str] = {"apod": "cmd_apod"}
 
@@ -74,7 +74,7 @@ class ApodModule(BotModule):
 
     async def cmd_apod(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._key, self._ua)
         self.bot.privmsg(reply_to, text)

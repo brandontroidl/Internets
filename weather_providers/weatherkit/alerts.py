@@ -1,8 +1,8 @@
-"""WeatherKit — weather alerts.
+"""WeatherKit - weather alerts.
 
 Apple's WeatherKit ``weatherAlerts.alerts`` list returns
 ``WeatherAlertSummary`` objects.  The descriptive long-form body of an
-alert lives behind ``detailsUrl`` — the summary itself only carries
+alert lives behind ``detailsUrl`` - the summary itself only carries
 short fields like ``description`` (a one-line headline),
 ``eventOnsetTime``, ``eventEndTime``, ``severity``, ``certainty``,
 ``responses``, and ``source`` (issuing agency).
@@ -52,7 +52,7 @@ async def fetch(url, headers, location):
         event = _pick(a, "eventEndDateName", "name", "description", default="Unknown")[:100]
         headline = _pick(a, "description", "name", "source", default="")
         # The summary lacks a long body; fetch the detail URL when
-        # present.  Skip when missing — base.AlertEntry tolerates "".
+        # present.  Skip when missing - base.AlertEntry tolerates "".
         description = await _fetch_detail(a.get("detailsUrl", ""), headers)
         if not description:
             description = (a.get("description") or "")[:300]

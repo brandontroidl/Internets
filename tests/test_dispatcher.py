@@ -82,7 +82,7 @@ class TestForceProvider:
         d.register(a, "alpha")
         d.register(b, "bravo")
 
-        # Forcing "bravo" — even if "alpha" would otherwise rank higher —
+        # Forcing "bravo" - even if "alpha" would otherwise rank higher -
         # must call only bravo.
         out = asyncio.run(d.dispatch(
             "current", 0.0, 0.0, "x", force_provider="bravo",
@@ -121,7 +121,7 @@ class TestForceProvider:
         d = Dispatcher()
         d.register(_MarineOnlyProvider(), "marine_only")
         # marine_only has get_weather, but we'll target a capability it
-        # doesn't have — actually it has get_weather... use astronomy.
+        # doesn't have - actually it has get_weather... use astronomy.
         out = asyncio.run(d.dispatch(
             "astronomy", 0, 0, "x", force_provider="marine_only",
         ))
@@ -222,11 +222,11 @@ class TestDefaultReliability:
             )
 
     def test_stormglass_ranked_for_marine(self):
-        # Stormglass was added this session — must rank #1 for marine.
+        # Stormglass was added this session - must rank #1 for marine.
         assert DEFAULT_RELIABILITY["marine"].get("stormglass") == 1
 
     def test_weatherbit_ranked_for_current_and_forecast(self):
-        # Weatherbit was added this session — must rank in both.
+        # Weatherbit was added this session - must rank in both.
         assert "weatherbit" in DEFAULT_RELIABILITY["current"]
         assert "weatherbit" in DEFAULT_RELIABILITY["forecast"]
 
@@ -278,7 +278,7 @@ class TestDefaultReliability:
             )
 
     def test_ranks_are_unique_per_capability(self):
-        # A duplicate rank would silently demote one provider — guard against it.
+        # A duplicate rank would silently demote one provider - guard against it.
         for cap, table in DEFAULT_RELIABILITY.items():
             ranks = list(table.values())
             assert len(ranks) == len(set(ranks)), (

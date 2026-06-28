@@ -26,7 +26,7 @@ from audit_log import default as _audit
 log = logging.getLogger("internets")
 
 
-# Help-menu grouping for the compact `.help` index — modules shown by
+# Help-menu grouping for the compact `.help` index - modules shown by
 # category instead of one flat wall of names.  Any loaded module not listed
 # here falls into "More", so new modules still appear without edits;
 # categorize them when convenient.
@@ -49,7 +49,7 @@ _MODULE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
 class AdminCommandsMixin:
     """All ``cmd_*`` methods for IRCBot.  Mixed in as a base class."""
 
-    # Provided by IRCBot — declared here for type checkers.
+    # Provided by IRCBot - declared here for type checkers.
     _nick: str
     _authed: dict[str, str]
     _auth_fails: dict[str, tuple[int, float]]
@@ -75,7 +75,7 @@ class AdminCommandsMixin:
 
     def _require_admin(self, nick: str, reply_to: str) -> bool:
         if not self.is_admin(nick):
-            self.preply(nick, reply_to, f"{nick}: auth first — /MSG {self._nick} AUTH <pw>")
+            self.preply(nick, reply_to, f"{nick}: auth first - /MSG {self._nick} AUTH <pw>")
             return False
         return True
 
@@ -112,7 +112,7 @@ class AdminCommandsMixin:
         """
         h = get_hash()
         if not h:
-            self.preply(nick, reply_to, f"{nick}: no password_hash configured — run hashpw.py")
+            self.preply(nick, reply_to, f"{nick}: no password_hash configured - run hashpw.py")
             return
         if not arg:
             self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
@@ -135,12 +135,12 @@ class AdminCommandsMixin:
             if fails >= self._AUTH_MAX_FAILS:
                 remaining = int(self._AUTH_LOCKOUT - (now - last_t))
                 # Refresh the timer so trickled attempts keep the lockout
-                # alive (sliding window) — prevents one-attempt-per-window
+                # alive (sliding window) - prevents one-attempt-per-window
                 # bypass of the rate limit.
                 self._auth_fails[k] = (fails, now)
                 hm = self._nick_hosts.get(k, "unknown")
                 self.preply(nick, reply_to,
-                    f"{nick}: too many failed attempts — try again in {remaining}s")
+                    f"{nick}: too many failed attempts - try again in {remaining}s")
                 log.warning(f"Auth lockout: {nick} ({hm}) {fails} failures")
                 return
 
@@ -150,9 +150,9 @@ class AdminCommandsMixin:
             # ValueError comes from hashpw for known config issues
             # ("No password hash configured" / "Unrecognised hash format"
             # / "bcrypt not installed").  These do NOT contain the
-            # password — safe to log the message text.
+            # password - safe to log the message text.
             log.error(f"Auth config error for {nick}: {e}")
-            self.preply(nick, reply_to, f"{nick}: config error — see log for details.")
+            self.preply(nick, reply_to, f"{nick}: config error - see log for details.")
             return
         except Exception as e:
             # Defence in depth: argon2/scrypt/bcrypt backends should
@@ -162,7 +162,7 @@ class AdminCommandsMixin:
             # echo partial input or hash fragments in exception text).
             log.error(f"Auth backend error for {nick}: {type(e).__name__}")
             with self._auth_lock:
-                # Re-read inside the lock — `fails` was snapshotted before the
+                # Re-read inside the lock - `fails` was snapshotted before the
                 # verify await, so a concurrent attempt could have bumped it.
                 cur, _ = self._auth_fails.get(k, (0, 0))
                 self._auth_fails[k] = (cur + 1, now)
@@ -174,10 +174,10 @@ class AdminCommandsMixin:
                 # Fail closed: never persist a binding we cannot later verify.
                 # If the hostmask is unknown at this instant (e.g. the admin
                 # quit during the verify-password await, which drops it), refuse
-                # rather than store the "unknown" sentinel — that sentinel would
+                # rather than store the "unknown" sentinel - that sentinel would
                 # grant nick-only admin that outlives the disconnect.
                 self.preply(nick, reply_to,
-                    f"{nick}: can't confirm your hostmask right now — re-send the command.")
+                    f"{nick}: can't confirm your hostmask right now - re-send the command.")
                 log.warning("Auth refused for %s: no current hostmask to bind", nick)
                 return
             with self._auth_lock:
@@ -189,7 +189,7 @@ class AdminCommandsMixin:
             self._audit(nick, "auth", None)
         else:
             with self._auth_lock:
-                # Re-read inside the lock — `fails` was snapshotted before the
+                # Re-read inside the lock - `fails` was snapshotted before the
                 # verify await; a concurrent attempt could have bumped it,
                 # which would otherwise be lost (under-counting failures).
                 cur, _ = self._auth_fails.get(k, (0, 0))
@@ -221,7 +221,7 @@ class AdminCommandsMixin:
         with self._mod_lock:
             module_items = list(self._modules.items())
 
-        # Partition modules once — used by every branch below.
+        # Partition modules once - used by every branch below.
         configured: list[str] = []
         hidden:     list[str] = []
         for name, inst in module_items:
@@ -234,7 +234,7 @@ class AdminCommandsMixin:
             if target.startswith(p):
                 target = target[len(p):]
 
-            # ── .help all — full alphabetical grid of every command ─────
+            # ── .help all - full alphabetical grid of every command ─────
             if target == "all":
                 all_cmds: list[str] = ["help", "modules", "version", "auth"]
                 for name, inst in module_items:
@@ -247,7 +247,7 @@ class AdminCommandsMixin:
                             by_method[method] = cmd
                     all_cmds.extend(by_method.values())
                 self.preply(nick, reply_to,
-                    f"── Internets v{__version__} — all commands ──")
+                    f"── Internets v{__version__} - all commands ──")
                 for row in _help_grid(sorted(set(all_cmds))):
                     self.preply(nick, reply_to, f"  {row}")
                 if admin and hidden:
@@ -255,11 +255,11 @@ class AdminCommandsMixin:
                         f"  (hidden, no key: {', '.join(sorted(hidden))})")
                 return
 
-            # ── .help admin — admin-only command grid ───────────────────
+            # ── .help admin - admin-only command grid ───────────────────
             if target == "admin":
                 if not admin:
                     self.preply(nick, reply_to,
-                        f"no command 'admin' loaded — try {p}help")
+                        f"no command 'admin' loaded - try {p}help")
                     return
                 adm = sorted([
                     "deauth", "load", "unload", "reload", "reloadall",
@@ -270,7 +270,7 @@ class AdminCommandsMixin:
                     "shadow-ban", "shadow-unban", "shadow-list",
                 ])
                 self.preply(nick, reply_to,
-                    f"── Internets v{__version__} — admin commands ──")
+                    f"── Internets v{__version__} - admin commands ──")
                 for row in _help_grid(adm):
                     self.preply(nick, reply_to, f"  {row}")
                 if hidden:
@@ -284,7 +284,7 @@ class AdminCommandsMixin:
             # the user wants just one command's help, they can use an
             # alias or a more specific name (e.g. `.help w`, `.help aqi`).
             #
-            # ── .help <module> — show that module's full help_lines ─────
+            # ── .help <module> - show that module's full help_lines ─────
             for name, inst in module_items:
                 if name.lower() == target:
                     if not inst.is_configured() and not admin:
@@ -297,7 +297,7 @@ class AdminCommandsMixin:
                         self.preply(nick, reply_to, ln)
                     return
 
-            # ── .help <cmd> — find module owning <cmd>; show its line ───
+            # ── .help <cmd> - find module owning <cmd>; show its line ───
             for name, inst in module_items:
                 if not inst.is_configured() and not admin:
                     continue
@@ -319,7 +319,7 @@ class AdminCommandsMixin:
                     return
 
             self.preply(nick, reply_to,
-                f"no command '{target}' loaded — try {p}help")
+                f"no command '{target}' loaded - try {p}help")
             return
 
         # ── Default: compact module list (progressive disclosure) ──────
@@ -327,7 +327,7 @@ class AdminCommandsMixin:
         # they know what's available to enable; non-admins don't see them.
         visible = set(configured + (hidden if admin else []))
         self.preply(nick, reply_to,
-            f"── Internets v{__version__} — {len(visible)} modules ──")
+            f"── Internets v{__version__} - {len(visible)} modules ──")
         shown: set[str] = set()
         for label, mods in _MODULE_GROUPS:
             inlist = sorted(m for m in mods if m in visible)
@@ -349,7 +349,7 @@ class AdminCommandsMixin:
     async def cmd_version(self, nick: str, reply_to: str, arg: str | None) -> None:
         """Display bot version and repository URL."""
         self.preply(nick, reply_to,
-            f"Internets {__version__} — async modular IRC bot  "
+            f"Internets {__version__} - async modular IRC bot  "
             f"https://github.com/brandontroidl/Internets")
 
     async def cmd_modules(self, nick: str, reply_to: str, arg: str | None) -> None:
@@ -425,7 +425,7 @@ class AdminCommandsMixin:
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
-        # Record before request_shutdown — once shutdown begins the
+        # Record before request_shutdown - once shutdown begins the
         # process may not get another chance to flush an audit write.
         self._audit(nick, "restart", None)
         self._restart_flag = True
@@ -442,7 +442,7 @@ class AdminCommandsMixin:
             reload_config()
         except Exception as e:
             log.error(f"Rehash config read failed: {e}")
-            self.preply(nick, reply_to, f"{nick}: failed to read config — see log for details.")
+            self.preply(nick, reply_to, f"{nick}: failed to read config - see log for details.")
             return
 
         new_level = cfg["logging"].get("level", "INFO").upper()
@@ -455,7 +455,7 @@ class AdminCommandsMixin:
 
         h = get_hash()
         if not h:
-            self.preply(nick, reply_to, "Config reloaded — no password_hash set.")
+            self.preply(nick, reply_to, "Config reloaded - no password_hash set.")
         else:
             # Tight prefix match: must be exactly one of the three known
             # algorithms followed by '$'.  Reject anything else without
@@ -463,15 +463,15 @@ class AdminCommandsMixin:
             prefix = h.split("$", 1)[0] if "$" in h else ""
             if prefix not in ("scrypt", "bcrypt", "argon2"):
                 self.preply(nick, reply_to,
-                    "Bad password_hash format — run hashpw.py.")
+                    "Bad password_hash format - run hashpw.py.")
                 log.error(f"Rehash: invalid hash prefix (len={len(prefix)})")
                 return
-            self.preply(nick, reply_to, f"Config reloaded — {prefix} hash active.")
+            self.preply(nick, reply_to, f"Config reloaded - {prefix} hash active.")
         with self._auth_lock:
             n = len(self._authed)
             self._authed.clear()
         if n:
-            self.preply(nick, reply_to, f"Cleared {n} admin session(s) — re-authenticate.")
+            self.preply(nick, reply_to, f"Cleared {n} admin session(s) - re-authenticate.")
         log.info(f"Rehash by {nick}")
         self._audit(nick, "rehash", None)
 
@@ -510,10 +510,10 @@ class AdminCommandsMixin:
             return
         line = arg.strip()
         if any(c in line for c in ("\r", "\n", "\x00")):
-            self.preply(nick, reply_to, f"{nick}: line contains CR/LF/NUL — rejected.")
+            self.preply(nick, reply_to, f"{nick}: line contains CR/LF/NUL - rejected.")
             return
         if len(line.encode("utf-8", errors="replace")) > 510:
-            self.preply(nick, reply_to, f"{nick}: line exceeds 510 bytes — rejected.")
+            self.preply(nick, reply_to, f"{nick}: line exceeds 510 bytes - rejected.")
             return
         self.send(line)
         self.preply(nick, reply_to, f">> {line}")
@@ -524,7 +524,7 @@ class AdminCommandsMixin:
 
     def _split_target_and_text(self, arg: str | None, reply_to: str
                                ) -> tuple[str | None, str | None]:
-        """Parse "[target] <text>" — if first token looks like a target use it,
+        """Parse "[target] <text>" - if first token looks like a target use it,
         else fall back to ``reply_to`` (the channel/user the command was invoked in)."""
         if not arg or not arg.strip():
             return None, None
@@ -540,7 +540,7 @@ class AdminCommandsMixin:
         return reply_to, arg.strip()
 
     async def cmd_say(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Speak as the bot.  Usage: .say [target] <text> — target defaults to current channel."""
+        """Speak as the bot.  Usage: .say [target] <text> - target defaults to current channel."""
         if not self._require_admin(nick, reply_to): return
         target, text = self._split_target_and_text(arg, reply_to)
         if not target or not text:
@@ -548,7 +548,7 @@ class AdminCommandsMixin:
                 f"usage: {CMD_PREFIX}say [target] <text>  (target defaults to current channel)")
             return
         if "," in target or " " in target:
-            self.preply(nick, reply_to, f"{nick}: invalid target — no spaces or commas allowed.")
+            self.preply(nick, reply_to, f"{nick}: invalid target - no spaces or commas allowed.")
             return
         self.privmsg(target, text)
         log.info(f".say by {nick} → {target}: {text!r}")
@@ -563,7 +563,7 @@ class AdminCommandsMixin:
                 f"usage: {CMD_PREFIX}act [target] <text>  (target defaults to current channel)")
             return
         if "," in target or " " in target:
-            self.preply(nick, reply_to, f"{nick}: invalid target — no spaces or commas allowed.")
+            self.preply(nick, reply_to, f"{nick}: invalid target - no spaces or commas allowed.")
             return
         # CTCP ACTION = wrap text in \x01ACTION ...\x01 inside a PRIVMSG.
         self.privmsg(target, f"\x01ACTION {text}\x01")
@@ -577,11 +577,11 @@ class AdminCommandsMixin:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}nick <newnick>")
             return
         new = arg.strip().split()[0]
-        # RFC 2812 — first char letter or special, then up to 29 of letter/digit/special/-.
+        # RFC 2812 - first char letter or special, then up to 29 of letter/digit/special/-.
         # Cap at 30 to be safe across networks that allow shorter.
         if not re.match(r"^[A-Za-z\[\]\\`_^{|}][A-Za-z0-9\[\]\\`_^{|}\-]{0,29}$", new):
             self.preply(nick, reply_to,
-                f"{nick}: invalid nick — must start with a letter and use IRC-legal chars only.")
+                f"{nick}: invalid nick - must start with a letter and use IRC-legal chars only.")
             return
         if new == self._nick:
             self.preply(nick, reply_to, f"{nick}: already using that nick.")
@@ -646,7 +646,7 @@ class AdminCommandsMixin:
             audit_n = "n/a"
 
         proc_age = _humanize_delta(now - boot)
-        conn_age = _humanize_delta(now - conn) if conn else "—"
+        conn_age = _humanize_delta(now - conn) if conn else "-"
 
         lines = [
             f"── \x02stats\x02 ─────────────────────────────────────────",
@@ -701,7 +701,7 @@ class AdminCommandsMixin:
                     f"usage: {CMD_PREFIX}audit [N | grep <pattern> | tail | verify]")
                 return
 
-        # Read all records (audit log files are small — append-only admin ops).
+        # Read all records (audit log files are small - append-only admin ops).
         try:
             with path.open("r", encoding="utf-8") as f:
                 entries = [_audit_parse(line) for line in f if line.strip()]
@@ -714,10 +714,10 @@ class AdminCommandsMixin:
             pat = pattern.lower()
             matched = [e for e in entries if pat in _audit_haystack(e).lower()]
             tail = matched[-n:]
-            header = f"── audit grep \x02{pattern}\x02 — {len(matched)} match(es), showing last {len(tail)} ──"
+            header = f"── audit grep \x02{pattern}\x02 - {len(matched)} match(es), showing last {len(tail)} ──"
         else:
             tail = entries[-n:]
-            header = f"── audit log — last {len(tail)} of {len(entries)} ──"
+            header = f"── audit log - last {len(tail)} of {len(entries)} ──"
 
         self.preply(nick, reply_to, header)
         if not tail:
@@ -741,7 +741,7 @@ class AdminCommandsMixin:
         lines = [f"── \x02fingerprint:\x02 {target} ──"]
 
         host = self._nick_hosts.get(tlow)
-        lines.append(f"  hostmask        {host or '(unknown — not seen this session)'}")
+        lines.append(f"  hostmask        {host or '(unknown - not seen this session)'}")
 
         # Channels currently tracked as containing this nick.  Stored as
         # part of the per-channel user tracking on self._store.
@@ -763,21 +763,21 @@ class AdminCommandsMixin:
         else:
             lines.append(f"  shadow-banned   no")
 
-        # Seen module data — read seen.json if present
+        # Seen module data - read seen.json if present
         seen_path = _state_file(self.cfg, "seen", "seen.json")
         seen_entry = _read_json_dict(seen_path).get(tlow)
         if isinstance(seen_entry, dict):
             ts  = seen_entry.get("ts", 0)
             ev  = seen_entry.get("event", "?")
-            ch  = seen_entry.get("channel") or "—"
+            ch  = seen_entry.get("channel") or "-"
             det = seen_entry.get("detail")  or ""
             age = _humanize_delta(time.time() - float(ts)) if ts else "?"
             det_s = f": {det}" if det else ""
-            lines.append(f"  last seen       {age} ago — {ev} in {ch}{det_s}")
+            lines.append(f"  last seen       {age} ago - {ev} in {ch}{det_s}")
         else:
             lines.append(f"  last seen       (no .seen data)")
 
-        # Tell module data — count pending tells TO and FROM this nick
+        # Tell module data - count pending tells TO and FROM this nick
         tell_path = _state_file(self.cfg, "tell", "tells.json")
         tells_db = _read_json_dict(tell_path)
         tells_to = len(tells_db.get(tlow, []))
@@ -788,13 +788,13 @@ class AdminCommandsMixin:
         )
         lines.append(f"  tells           {tells_to} pending to them, {tells_from} sent by them")
 
-        # Notes count (don't dump content — privacy)
+        # Notes count (don't dump content - privacy)
         notes_path = _state_file(self.cfg, "notes", "notes.json")
         notes_db = _read_json_dict(notes_path)
         notes_n = len(notes_db.get(tlow, [])) if isinstance(notes_db.get(tlow), list) else 0
         lines.append(f"  notes           {notes_n} note(s)")
 
-        # Audit log mentions — actor and "args" field
+        # Audit log mentions - actor and "args" field
         mentions = _count_audit_mentions(target)
         lines.append(f"  audit mentions  {mentions['as_actor']} as actor, "
                      f"{mentions['in_args']} in args")
@@ -803,7 +803,7 @@ class AdminCommandsMixin:
             self.preply(nick, reply_to, line)
 
     async def cmd_shadow_ban(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Silently drop ALL traffic from a nick — commands and on_raw delivery.
+        """Silently drop ALL traffic from a nick - commands and on_raw delivery.
         Usage: .shadow-ban <nick> [reason].  Audit-logged."""
         if not self._require_admin(nick, reply_to): return
         if not arg or not arg.strip():
@@ -831,7 +831,7 @@ class AdminCommandsMixin:
             self._shadow_ban_reasons[tlow] = reason
         await asyncio.to_thread(self._save_shadow_bans)
         self.preply(nick, reply_to,
-            f"\x0304shadow-banned\x03 \x02{target}\x02 — silently ignored from now on.")
+            f"\x0304shadow-banned\x03 \x02{target}\x02 - silently ignored from now on.")
         log.info(f"Shadow-ban added by {nick}: {target!r} reason={reason!r}")
         self._audit(nick, "shadow-ban", {"nick": target, "reason": reason})
 
@@ -898,7 +898,7 @@ class AdminCommandsMixin:
         reason = arg.strip() if arg else "Shutting down"
         self.preply(nick, reply_to, f"Shutting down: {reason}")
         log.info(f"Shutdown by {nick}: {reason}")
-        # Record before request_shutdown — once the shutdown begins the
+        # Record before request_shutdown - once the shutdown begins the
         # process may not get another chance to flush an audit write.
         # Log only the supplied reason (not the default placeholder).
         self._audit(nick, "shutdown", arg.strip() if arg else None)
@@ -1032,7 +1032,7 @@ def _state_file(cfg, section: str, default: str):
             return _Path(cfg[section].get("file", default))
     except Exception as e:
         # configparser raising at this layer would be unusual but not
-        # fatal — admin commands can fall back to the default path.
+        # fatal - admin commands can fall back to the default path.
         log.debug("_state_file %s lookup failed: %s", section, type(e).__name__)
     return _Path(default)
 

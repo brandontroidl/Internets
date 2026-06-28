@@ -26,7 +26,7 @@ def _timeago(ts: int) -> str:
 
 
 def _lookup_sync(username: str, key: str, ua: str) -> str:
-    """Blocking Last.fm lookup — run via asyncio.to_thread."""
+    """Blocking Last.fm lookup - run via asyncio.to_thread."""
     base = "https://ws.audioscrobbler.com/2.0/"
     try:
         # Get user info
@@ -75,10 +75,10 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
             name = strip_ctrl(t.get("name", "?"))
             now_playing = t.get("@attr", {}).get("nowplaying", "false") == "true"
             if now_playing:
-                track_str = f" | \x02Now playing\x02 {artist} — {name}"
+                track_str = f" | \x02Now playing\x02 {artist} - {name}"
             elif "date" in t:
                 ago = _timeago(int(t["date"]["uts"]))
-                track_str = f" | \x02Latest\x02 {artist} — {name} ({ago} ago)"
+                track_str = f" | \x02Latest\x02 {artist} - {name} ({ago} ago)"
 
         return (
             f"\x02{strip_ctrl(user['name'])}\x02{info_str} | "
@@ -102,7 +102,7 @@ class LastfmModule(BotModule):
                              "weather", "user_agent", "Internets/1.0")
         self._key: str = cred(self.bot.cfg, "lastfm_key", "lastfm", "lastfm_key")
         if not self._key:
-            log.warning("lastfm: lastfm_key not set — .lastfm will not work")
+            log.warning("lastfm: lastfm_key not set - .lastfm will not work")
 
     def is_configured(self) -> bool:
         return bool(self._key)
@@ -114,10 +114,10 @@ class LastfmModule(BotModule):
             self.bot.privmsg(reply_to, f"{nick}: {p}lastfm <username>  e.g. {p}lastfm RJ")
             return
         if not self._key:
-            self.bot.privmsg(reply_to, "Last.fm API key not configured — see [lastfm] in config.ini")
+            self.bot.privmsg(reply_to, "Last.fm API key not configured - see [lastfm] in config.ini")
             return
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         result = await asyncio.to_thread(_lookup_sync, arg.strip().split()[0], self._key, self._ua)
         self.bot.privmsg(reply_to, result)
@@ -127,5 +127,5 @@ class LastfmModule(BotModule):
 
 
 def setup(bot: object) -> LastfmModule:
-    """Module entry point — returns a LastfmModule instance."""
+    """Module entry point - returns a LastfmModule instance."""
     return LastfmModule(bot)  # type: ignore[arg-type]

@@ -24,18 +24,18 @@ class PrivacyModule(BotModule):
 
     Implements the minimum surface needed for a GDPR-style hygiene pass:
 
-    * ``.forgetme`` — right to erasure: purges the invoking nick from every
+    * ``.forgetme`` - right to erasure: purges the invoking nick from every
       dataset the bot owns (saved location + per-channel tracking entries).
-    * ``.privacy`` — transparency: privately lists everything the bot has
+    * ``.privacy`` - transparency: privately lists everything the bot has
       stored about the invoking nick, including their own hostmask.
-    * ``.optout`` / ``.optin`` — toggle a per-nick opt-out flag stored as
+    * ``.optout`` / ``.optin`` - toggle a per-nick opt-out flag stored as
       a real column on every user-tracking record (``store.set_opt_out``).
       Cross-user lookups in ``modules/weather.py`` (``-n <nick>``) honour
       the flag; ``modules/location.py``'s self-only commands intentionally
       do not.  Any legacy flag stored under the old ``__optout__:`` key
       scheme is migrated forward on first access.
 
-    All commands are PM-only — leaking another user's saved location or
+    All commands are PM-only - leaking another user's saved location or
     hostmask into a public channel would itself be a privacy regression.
     """
 
@@ -59,7 +59,7 @@ class PrivacyModule(BotModule):
         p = self.bot.cfg["bot"]["command_prefix"]
         self.bot.notice(
             nick,
-            f"{nick}: {p}{cmd} is PM-only — please /msg me directly so "
+            f"{nick}: {p}{cmd} is PM-only - please /msg me directly so "
             "your data isn't echoed into the channel.",
         )
         return False
@@ -85,7 +85,7 @@ class PrivacyModule(BotModule):
         Reads the canonical store column first, then falls back to the
         legacy ``__optout__:<nick>`` key.  If the legacy flag exists but
         the canonical column does not, migrate the value forward and
-        clean up the legacy entry — so the answer becomes stable on next
+        clean up the legacy entry - so the answer becomes stable on next
         access.
         """
         if self._store_is_opted_out(nick):
@@ -97,7 +97,7 @@ class PrivacyModule(BotModule):
                 self.bot.loc_del(_legacy_optout_key(nick))
                 log.info(f"opt-out migrated {nick} (legacy → store)")
                 return True
-            # Canonical store unavailable for some reason — honour legacy.
+            # Canonical store unavailable for some reason - honour legacy.
             return True
         return False
 
@@ -120,7 +120,7 @@ class PrivacyModule(BotModule):
           * the saved location (``loc_del``)
           * the opt-out flag itself (so a future ``.optin`` is honest)
         Hard-deletes (via ``store.user_purge``):
-          * per-channel user-tracking entries — erased immediately, no
+          * per-channel user-tracking entries - erased immediately, no
             wait for the 90-day prune cycle.
         """
         if not self._require_pm(nick, reply_to, "forgetme"):
@@ -132,7 +132,7 @@ class PrivacyModule(BotModule):
         if self.bot.loc_del(nick):
             deleted.append("saved location")
 
-        # 2. Opt-out flag — clear both the canonical column and any
+        # 2. Opt-out flag - clear both the canonical column and any
         #    legacy key so the opt-in/opt-out cycle stays truthful after
         #    a purge.  Not surfaced in the user confirmation: it's
         #    bookkeeping, not user data per se.
@@ -148,7 +148,7 @@ class PrivacyModule(BotModule):
                 ch_users = self.bot.channel_users(ch)
                 if nick.lower() in ch_users:
                     touched_chans.append(ch)
-        except Exception as e:  # noqa: BLE001 — never let privacy explode
+        except Exception as e:  # noqa: BLE001 - never let privacy explode
             log.warning(f"forgetme: snapshot failed for {nick!r}: {e!r}")
 
         # Hard-delete: store.user_purge erases the rows immediately
@@ -165,7 +165,7 @@ class PrivacyModule(BotModule):
         if purged_rows:
             deleted.append(f"tracking in {purged_rows} channel(s) (erased now)")
         elif touched_chans:
-            # Snapshot saw entries but purge reported zero — race / mis-key.
+            # Snapshot saw entries but purge reported zero - race / mis-key.
             deleted.append(
                 f"tracking in {len(touched_chans)} channel(s) "
                 f"(scheduled for removal on next prune cycle)"
@@ -173,7 +173,7 @@ class PrivacyModule(BotModule):
 
         # Right-to-erasure must cover EVERY module that persists user PII,
         # not just location + user-tracking.  Call the BotModule.forget()
-        # hook on each loaded module — seen / tell / notes / remind
+        # hook on each loaded module - seen / tell / notes / remind
         # override it; the rest no-op.  One module raising must not abort
         # erasure of the others.
         try:
@@ -184,7 +184,7 @@ class PrivacyModule(BotModule):
         for mod in mods:
             try:
                 count = mod.forget(nick)
-            except Exception as e:  # noqa: BLE001 — one module must not abort the rest
+            except Exception as e:  # noqa: BLE001 - one module must not abort the rest
                 log.warning(f"forgetme: {type(mod).__name__}.forget failed: {e!r}")
                 continue
             if count:
@@ -200,7 +200,7 @@ class PrivacyModule(BotModule):
 
         self.bot.privmsg(
             nick,
-            f"{nick}: deleted — {'; '.join(deleted)}. "
+            f"{nick}: deleted - {'; '.join(deleted)}. "
             f"See .privacy for what remains.",
         )
         log.info(f"forgetme {nick}: removed {deleted}")
@@ -217,7 +217,7 @@ class PrivacyModule(BotModule):
         else:
             self.bot.privmsg(nick, f"{nick}: saved location: (none)")
 
-        # Own hostmask — only ever the invoker's own, never anybody else's.
+        # Own hostmask - only ever the invoker's own, never anybody else's.
         hm = self._own_hostmask(nick)
         if hm:
             self.bot.privmsg(nick, f"{nick}: your current hostmask (as I see it): {hm}")
@@ -240,7 +240,7 @@ class PrivacyModule(BotModule):
         if rows:
             self.bot.privmsg(
                 nick,
-                f"{nick}: tracked in {len(rows)} channel(s) — "
+                f"{nick}: tracked in {len(rows)} channel(s) - "
                 "(nick + hostmask + first/last seen kept per channel; "
                 "auto-pruned after the configured retention window):",
             )
@@ -275,7 +275,7 @@ class PrivacyModule(BotModule):
             self.bot.notice(nick, f"{nick}: already opted out.")
             return
         if not self._store_set_opt_out(nick, True):
-            self.bot.notice(nick, f"{nick}: opt-out is unavailable — see admin.")
+            self.bot.notice(nick, f"{nick}: opt-out is unavailable - see admin.")
             log.warning(f"optout {nick}: store unavailable")
             return
         # Belt-and-braces: drop any stale legacy key.
@@ -308,10 +308,10 @@ class PrivacyModule(BotModule):
         ]
 
     def is_configured(self) -> bool:
-        """Privacy commands need no API key — always available."""
+        """Privacy commands need no API key - always available."""
         return True
 
 
 def setup(bot: object) -> PrivacyModule:
-    """Module entry point — returns a PrivacyModule instance."""
+    """Module entry point - returns a PrivacyModule instance."""
     return PrivacyModule(bot)  # type: ignore[arg-type]

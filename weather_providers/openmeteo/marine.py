@@ -1,4 +1,4 @@
-"""Open-Meteo — marine weather (wave, swell, ocean conditions)."""
+"""Open-Meteo - marine weather (wave, swell, ocean conditions)."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import MarineResult

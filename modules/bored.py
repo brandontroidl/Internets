@@ -1,4 +1,4 @@
-"""Bored API activity suggester — wraps bored-api.appbrewery.com.
+"""Bored API activity suggester - wraps bored-api.appbrewery.com.
 
 No API key required.  The original boredapi.com domain went offline in
 2024; appbrewery host a verbatim mirror of the same dataset.
@@ -47,7 +47,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class BoredModule(BotModule):
-    """`.bored` — random activity suggestion."""
+    """`.bored` - random activity suggestion."""
 
     COMMANDS: dict[str, str] = {"bored": "cmd_bored"}
 
@@ -61,7 +61,7 @@ class BoredModule(BotModule):
 
     async def cmd_bored(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, text)

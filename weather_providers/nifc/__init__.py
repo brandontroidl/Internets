@@ -1,4 +1,4 @@
-"""NIFC provider package — US active wildfire incidents.
+"""NIFC provider package - US active wildfire incidents.
 
 National Interagency Fire Center (WFIGS) current incident locations,
 served as a public ArcGIS FeatureServer (no API key).
@@ -8,7 +8,7 @@ Wildfire only.  US-only data; an empty result near a point is valid
 """
 from __future__ import annotations
 
-# Explicit import (no `from ..base import *`) — matches the rest of the package.
+# Explicit import (no `from ..base import *`) - matches the rest of the package.
 from ..base import WildfireResult  # noqa: F401
 from . import wildfire
 

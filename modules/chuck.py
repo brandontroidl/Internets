@@ -1,4 +1,4 @@
-"""Chuck-Norris-jokes command — wraps api.chucknorris.io.
+"""Chuck-Norris-jokes command - wraps api.chucknorris.io.
 
 No API key required.  JSON response shape:
     {"categories":[...], "id":"...", "value":"the joke text", ...}
@@ -44,7 +44,7 @@ def _fetch_sync(ua: str) -> str:
 
 
 class ChuckModule(BotModule):
-    """`.chuck` — random Chuck Norris joke."""
+    """`.chuck` - random Chuck Norris joke."""
 
     COMMANDS: dict[str, str] = {"chuck": "cmd_chuck"}
 
@@ -58,7 +58,7 @@ class ChuckModule(BotModule):
 
     async def cmd_chuck(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         joke = await asyncio.to_thread(_fetch_sync, self._ua)
         self.bot.privmsg(reply_to, joke)

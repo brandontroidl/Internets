@@ -1,4 +1,4 @@
-"""PokéAPI Pokémon lookup — wraps pokeapi.co.
+"""PokéAPI Pokémon lookup - wraps pokeapi.co.
 
 No API key required.  Free, rate-limit-friendly.  We make one call to
 ``/pokemon/<name>`` and format the highlights for IRC.
@@ -28,7 +28,7 @@ def _strip_ctrl(s: str, max_len: int = 400) -> str:
 def _fetch_sync(name: str, ua: str) -> str:
     try:
         # `with` releases the socket on every exit path (404, raise,
-        # success) — a stream=True response left open leaks the FD.
+        # success) - a stream=True response left open leaks the FD.
         with requests.get(f"{_URL}/{name.lower()}",
                           headers={"User-Agent": ua},
                           timeout=10, stream=True) as r:
@@ -68,7 +68,7 @@ def _fetch_sync(name: str, ua: str) -> str:
 
 
 class PokeModule(BotModule):
-    """`.poke <name>` — Pokémon info (types, stats, height/weight)."""
+    """`.poke <name>` - Pokémon info (types, stats, height/weight)."""
 
     COMMANDS: dict[str, str] = {"poke": "cmd_poke", "pokemon": "cmd_poke"}
 
@@ -92,7 +92,7 @@ class PokeModule(BotModule):
         if target.isdigit():
             target = str(int(target))  # PokéAPI 404s on leading zeros (e.g. "06")
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         text = await asyncio.to_thread(_fetch_sync, target, self._ua)
         self.bot.privmsg(reply_to, text)

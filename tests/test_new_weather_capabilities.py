@@ -1,7 +1,7 @@
 """Tests for the capabilities/providers added this session:
 
-new capabilities — uv, pollen, wildfire, space_weather, tides;
-new providers — sunrisesunset, currentuvindex, gdacs, eccc, metno, waqi,
+new capabilities - uv, pollen, wildfire, space_weather, tides;
+new providers - sunrisesunset, currentuvindex, gdacs, eccc, metno, waqi,
 openaq, iqair, nasapower, nifc, firms, swpc, tidecheck, noaa_coops.
 
 Covers the base helpers, capability auto-discovery for every new provider,
@@ -262,7 +262,7 @@ class TestNIFC:
 
 class TestTideCheck:
     def test_builds_frozen_result_once(self, monkeypatch):
-        # Regression: TideResult is frozen — fetch must construct it once with
+        # Regression: TideResult is frozen - fetch must construct it once with
         # locals, not assign attributes after the fact (FrozenInstanceError).
         from weather_providers.tidecheck import tides
         from weather_providers.base import TideResult
@@ -289,7 +289,7 @@ class TestTideCheck:
             asyncio.run(tides.fetch("k", 0.0, 0.0, "x"))
 
 
-# Every new provider's get_* methods must accept **kwargs — the dispatcher
+# Every new provider's get_* methods must accept **kwargs - the dispatcher
 # forwards kwargs to them. Two shipped without it (tidecheck, swpc); guard it.
 _NEW_PROVIDERS = [
     ("weather_providers.airnow", "AirNowProvider", "k"),
@@ -338,7 +338,7 @@ class TestTimezoneWindows:
     def test_openmeteo_hourly_uses_utc_offset(self, monkeypatch):
         from datetime import datetime, timedelta, timezone
         from weather_providers.openmeteo import hourly
-        off = 5 * 3600  # UTC+5 — unrelated to the test host's zone
+        off = 5 * 3600  # UTC+5 - unrelated to the test host's zone
         local_now = datetime.now(timezone.utc) + timedelta(seconds=off)
 
         def iso(dt):

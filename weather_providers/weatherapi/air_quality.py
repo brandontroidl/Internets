@@ -1,4 +1,4 @@
-"""WeatherAPI.com — air quality."""
+"""WeatherAPI.com - air quality."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import AirQualityResult, aqi_category

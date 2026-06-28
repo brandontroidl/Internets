@@ -1,4 +1,4 @@
-"""Tests for modules/devtools.py — pure dev-tool compute functions."""
+"""Tests for modules/devtools.py - pure dev-tool compute functions."""
 
 import base64
 import datetime as _dt

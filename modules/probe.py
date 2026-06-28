@@ -1,4 +1,4 @@
-"""Network probers — connect to a user-supplied host.
+"""Network probers - connect to a user-supplied host.
 
     .headers <url>          HTTP status / server / type / redirect / security headers
     .ssl <host[:port]>      TLS cert issuer, CN, days-until-expiry
@@ -78,7 +78,7 @@ def _ssl_cert(arg: str) -> str:
             with ctx.wrap_socket(s, server_hostname=host) as ss:
                 cert = ss.getpeercert()
     except ssl.SSLCertVerificationError as e:
-        return f"{strip_ctrl(host, 60)}: cert NOT valid — {strip_ctrl(getattr(e, 'verify_message', '') or 'verification failed', 60)}"
+        return f"{strip_ctrl(host, 60)}: cert NOT valid - {strip_ctrl(getattr(e, 'verify_message', '') or 'verification failed', 60)}"
     except (ssl.SSLError, socket.timeout, TimeoutError, OSError):
         return f"{strip_ctrl(host, 60)}:{port} TLS connect failed"
     if not cert:
@@ -143,7 +143,7 @@ def _down(arg: str, ua: str) -> str:
     except SSRFBlocked as e:
         return f"{strip_ctrl(host, 60)}: {e}"
     except requests.RequestException:
-        # HTTP failed — fall back to a bare TCP connect on 443/80.
+        # HTTP failed - fall back to a bare TCP connect on 443/80.
         for port in (443, 80):
             try:
                 infos = resolve_public(host, port)
@@ -158,7 +158,7 @@ def _down(arg: str, ua: str) -> str:
 
 
 class ProbeModule(BotModule):
-    """`.headers` / `.ssl` / `.tcp` / `.down` — SSRF-guarded network probers."""
+    """`.headers` / `.ssl` / `.tcp` / `.down` - SSRF-guarded network probers."""
 
     COMMANDS: dict[str, str] = {
         "headers": "cmd_headers",
@@ -176,7 +176,7 @@ class ProbeModule(BotModule):
 
     def _gate(self, nick: str) -> bool:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return False
         return True
 

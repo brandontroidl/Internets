@@ -1,4 +1,4 @@
-"""Crypto price command — wraps CoinGecko's free public API.
+"""Crypto price command - wraps CoinGecko's free public API.
 
 No API key required.  Two-call flow per lookup:
 
@@ -53,7 +53,7 @@ def _fmt_marketcap(n: float) -> str:
 
 
 def _fmt_price(p: float) -> str:
-    """Format a USD spot price — comma thousands, sane precision for tiny coins."""
+    """Format a USD spot price - comma thousands, sane precision for tiny coins."""
     if p >= 1:
         return f"${p:,.2f}"
     if p >= 0.01:
@@ -155,7 +155,7 @@ def _fetch_sync(query: str, cache: dict[str, str], ua: str) -> str:
 
 
 class CryptoModule(BotModule):
-    """`.gecko <symbol-or-name>` — spot price from CoinGecko (no key).
+    """`.gecko <symbol-or-name>` - spot price from CoinGecko (no key).
 
     The shorter aliases `.gecko` / `.cg` are used so this module can
     coexist with the keyed ``stocks.crypto`` command (which routes via
@@ -179,7 +179,7 @@ class CryptoModule(BotModule):
 
     async def cmd_crypto(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             p = self.bot.cfg["bot"]["command_prefix"]

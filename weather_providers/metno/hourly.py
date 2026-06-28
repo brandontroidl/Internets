@@ -1,4 +1,4 @@
-"""MET Norway — hourly forecast (locationforecast/2.0/compact)."""
+"""MET Norway - hourly forecast (locationforecast/2.0/compact)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

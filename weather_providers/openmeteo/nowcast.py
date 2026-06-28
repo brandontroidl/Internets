@@ -1,4 +1,4 @@
-"""Open-Meteo — precipitation nowcast (15-minutely, next ~2 h)."""
+"""Open-Meteo - precipitation nowcast (15-minutely, next ~2 h)."""
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from .._http import get_json

@@ -38,9 +38,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install "bandit[sarif]>=1.7,<2"
 
-      # Informational text run — every finding visible in CI log.
+      # Informational text run - every finding visible in CI log.
       # `-ll` filters out LOW-severity noise; `--exit-zero` so the
-      # informational pass doesn't fail the job — the HIGH gate below
+      # informational pass doesn't fail the job - the HIGH gate below
       # is where blocking happens.
       - name: Run bandit (informational, MEDIUM+ severity)
         run: |
@@ -49,7 +49,7 @@ jobs:
             -ll \
             --exit-zero
 
-      # Gating step — fail CI on any HIGH-severity finding (HIGH severity
+      # Gating step - fail CI on any HIGH-severity finding (HIGH severity
       # AND HIGH confidence).  Lower-tier findings still appear in the
       # Security tab via SARIF but don't block merges.  Adjust thresholds
       # via -i (severity) and -c (confidence) if you ever need to tighten.
@@ -59,7 +59,7 @@ jobs:
             --exclude ./tests,./.venv,./build,./dist,./.git,./__pycache__ \
             -iii -ll
 
-      # SARIF upload — always run, even if the HIGH gate above failed
+      # SARIF upload - always run, even if the HIGH gate above failed
       # (we still want the findings in the Security tab so they can be
       # triaged / acknowledged).  `|| true` so the SARIF generation
       # itself never blocks the upload.
@@ -103,13 +103,13 @@ jobs:
       # lockfile in near-real-time without needing CI to upload SARIF.
       # --strict fails the job on any CVE so triage is forced.
       # `-r requirements.lock` scans only the hash-pinned third-party
-      # deps — NOT the local editable install (`pip install -e .` adds
+      # deps - NOT the local editable install (`pip install -e .` adds
       # internets-irc to the env, which has no PyPI entry and makes a
       # default `pip-audit` invocation fail with "Dependency not found
       # on PyPI").
       #
       # --ignore-vuln PYSEC-2025-183 (pyjwt 2.10.1+):
-      #   The CVE is DISPUTED by the pyjwt maintainers — the alleged
+      #   The CVE is DISPUTED by the pyjwt maintainers - the alleged
       #   "weak encryption" concerns the key length chosen by the
       #   application that *uses* pyjwt, not the library itself.  In
       #   this bot pyjwt is used only for Apple WeatherKit JWT signing

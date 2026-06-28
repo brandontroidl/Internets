@@ -1,4 +1,4 @@
-"""currentuvindex — UV index (current + today's max).
+"""currentuvindex - UV index (current + today's max).
 
 Data from currentuvindex.com (CC-BY).  Keyless, global coverage.
 """

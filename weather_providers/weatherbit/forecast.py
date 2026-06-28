@@ -1,4 +1,4 @@
-"""WeatherBit.io — daily forecast (up to 16 days)."""
+"""WeatherBit.io - daily forecast (up to 16 days)."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

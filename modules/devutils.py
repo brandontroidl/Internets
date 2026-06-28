@@ -1,15 +1,15 @@
-"""Developer utilities — pure local text codecs and time helpers.
+"""Developer utilities - pure local text codecs and time helpers.
 
 No network.  Commands (all rate-limited):
-    .b64 <text>       — base64 encode UTF-8 input
-    .unb64 <text>     — base64 decode (replies "binary or invalid utf-8"
+    .b64 <text>       - base64 encode UTF-8 input
+    .unb64 <text>     - base64 decode (replies "binary or invalid utf-8"
                         if the result isn't decodable text)
-    .hex <text>       — auto-detect: hex-only input decodes, otherwise encodes
-    .morse <text>     — auto-detect: encode plain text, or decode if input
+    .hex <text>       - auto-detect: hex-only input decodes, otherwise encodes
+    .morse <text>     - auto-detect: encode plain text, or decode if input
                         is only ``.``, ``-``, ``/``, and spaces
                         (``/`` is the word separator)
-    .uuid             — emit a random UUIDv4
-    .epoch [arg]      — no arg = current epoch; numeric arg = epoch -> ISO 8601
+    .uuid             - emit a random UUIDv4
+    .epoch [arg]      - no arg = current epoch; numeric arg = epoch -> ISO 8601
                         UTC; ISO 8601 datetime string = parsed -> epoch
 """
 
@@ -70,7 +70,7 @@ def _morse_decode(text: str) -> str:
 
 
 class DevutilsModule(BotModule):
-    """`.b64` / `.unb64` / `.hex` / `.morse` / `.uuid` / `.epoch` — local dev utils."""
+    """`.b64` / `.unb64` / `.hex` / `.morse` / `.uuid` / `.epoch` - local dev utils."""
 
     COMMANDS: dict[str, str] = {
         "b64": "cmd_b64",
@@ -86,7 +86,7 @@ class DevutilsModule(BotModule):
 
     async def cmd_b64(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -98,7 +98,7 @@ class DevutilsModule(BotModule):
 
     async def cmd_unb64(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -119,7 +119,7 @@ class DevutilsModule(BotModule):
 
     async def cmd_hex(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -140,7 +140,7 @@ class DevutilsModule(BotModule):
 
     async def cmd_morse(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg:
             p = self.bot.cfg["bot"]["command_prefix"]
@@ -155,13 +155,13 @@ class DevutilsModule(BotModule):
 
     async def cmd_uuid(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         self.bot.privmsg(reply_to, str(uuid.uuid4()))
 
     async def cmd_epoch(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         if not arg or not arg.strip():
             self.bot.privmsg(reply_to, str(int(time.time())))
@@ -183,7 +183,7 @@ class DevutilsModule(BotModule):
                 dt = dt.replace(tzinfo=_dt.timezone.utc)
             self.bot.privmsg(reply_to, str(int(dt.timestamp())))
         except ValueError:
-            self.bot.privmsg(reply_to, "invalid datetime — try ISO 8601 or epoch seconds")
+            self.bot.privmsg(reply_to, "invalid datetime - try ISO 8601 or epoch seconds")
 
     def help_lines(self, prefix: str) -> list[str]:
         return [

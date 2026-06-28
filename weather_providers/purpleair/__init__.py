@@ -1,8 +1,8 @@
-"""PurpleAir provider package — crowdsourced real-time PM2.5 sensors.
+"""PurpleAir provider package - crowdsourced real-time PM2.5 sensors.
 
 https://api.purpleair.com/
 Air-quality only.  Global coverage from low-cost community sensors.
-Requires a free READ key — request at https://develop.purpleair.com/.
+Requires a free READ key - request at https://develop.purpleair.com/.
 Crowdsourced readings are noisier than regulatory monitors, so PurpleAir
 is ranked below the model/observation-based providers in the air_quality
 chain and its readings carry an EPA humidity correction.

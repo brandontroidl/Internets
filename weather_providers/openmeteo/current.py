@@ -1,4 +1,4 @@
-"""Open-Meteo — current conditions endpoint."""
+"""Open-Meteo - current conditions endpoint."""
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult

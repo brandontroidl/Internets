@@ -1,4 +1,4 @@
-"""Tests for modules/ghinfo.py — _fetch_sync formatting.
+"""Tests for modules/ghinfo.py - _fetch_sync formatting.
 
 The module's only network call goes through modules.base.fetch_json; we
 monkeypatch the name imported into modules.ghinfo with canned responses

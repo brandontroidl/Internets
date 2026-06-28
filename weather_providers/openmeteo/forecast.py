@@ -1,4 +1,4 @@
-"""Open-Meteo — daily forecast endpoint."""
+"""Open-Meteo - daily forecast endpoint."""
 from __future__ import annotations
 from datetime import datetime
 from .._http import get_json

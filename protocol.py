@@ -1,5 +1,5 @@
 """
-Pure IRC protocol helpers — no bot state, no I/O.
+Pure IRC protocol helpers - no bot state, no I/O.
 
 Extracted from internets.py to keep the main bot class focused on
 orchestration and state management.
@@ -22,10 +22,10 @@ def parse_isupport_chanmodes(token: str) -> dict[str, str]:
     """Parse a ``CHANMODES=A,B,C,D`` token from 005 into {mode: type}.
 
     Types:
-        A — list mode, always takes a parameter (e.g. b, e, I)
-        B — always takes a parameter (e.g. k, L)
-        C — parameter only when setting (e.g. l, H)
-        D — never takes a parameter (e.g. i, m, n)
+        A - list mode, always takes a parameter (e.g. b, e, I)
+        B - always takes a parameter (e.g. k, L)
+        C - parameter only when setting (e.g. l, H)
+        D - never takes a parameter (e.g. i, m, n)
     """
     groups = token.split(",")
     types: dict[str, str] = {}

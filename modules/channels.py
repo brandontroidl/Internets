@@ -83,7 +83,7 @@ class ChannelsModule(BotModule):
                             self.bot.privmsg(
                                 p.reply_to,
                                 f"{p.nick}: ownership verification timed out for {p.channel} "
-                                f"— try /INVITE or ask a bot admin.")
+                                f"- try /INVITE or ask a bot admin.")
                             log.info(f"Verify timeout: {p.nick} -> {p.channel}")
                         self._svc_ctx = {k: v for k, v in self._svc_ctx.items()
                                          if now - v < _VERIFY_TIMEOUT}
@@ -268,13 +268,13 @@ class ChannelsModule(BotModule):
         if p.info_failed:
             self._resolve(p, False,
                 f"{p.channel} is not registered with {self._services} "
-                f"— cannot verify ownership. Try /INVITE or ask a bot admin.")
+                f"- cannot verify ownership. Try /INVITE or ask a bot admin.")
             return
 
         if p.whois_done and p.account is None:
             self._resolve(p, False,
                 "you must be identified with NickServ to use this command "
-                "— try /INVITE or ask a bot admin.")
+                "- try /INVITE or ask a bot admin.")
             return
 
         if p.account is not None and p.founder is not None:
@@ -294,13 +294,13 @@ class ChannelsModule(BotModule):
             if p.action == "part":
                 self.bot.send(f"PART {p.channel} :Parting on request from {p.nick}")
                 self.bot.privmsg(p.reply_to,
-                    f"{p.nick}: ownership verified — leaving {p.channel}")
+                    f"{p.nick}: ownership verified - leaving {p.channel}")
                 log.info(f"Part approved (founder): "
                          f"{p.nick} ({p.account}) -> {p.channel}")
             else:
                 self.bot.send(f"JOIN {p.channel}")
                 self.bot.privmsg(p.reply_to,
-                    f"{p.nick}: ownership verified — joining {p.channel}")
+                    f"{p.nick}: ownership verified - joining {p.channel}")
                 log.info(f"Join approved (founder): "
                          f"{p.nick} ({p.account}) -> {p.channel}")
         else:
@@ -317,5 +317,5 @@ class ChannelsModule(BotModule):
 
 
 def setup(bot: object) -> ChannelsModule:
-    """Module entry point — returns a ChannelsModule instance."""
+    """Module entry point - returns a ChannelsModule instance."""
     return ChannelsModule(bot)  # type: ignore[arg-type]

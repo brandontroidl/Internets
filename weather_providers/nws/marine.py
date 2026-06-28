@@ -1,4 +1,4 @@
-"""NWS — marine forecast (coastal and offshore zones).
+"""NWS - marine forecast (coastal and offshore zones).
 
 Uses the NWS marine forecast zones API for wave/wind data.
 Only works for US coastal locations.
@@ -18,7 +18,7 @@ async def fetch(lat: float, lon: float, location: str) -> MarineResult:
         raise ValueError("NWS: location is not in a marine zone")
     data = await get_json(f"{zone_url}/forecast", headers=_HEADERS)
     periods = data.get("properties", {}).get("periods", [])
-    # NWS marine forecasts are textual — extract what we can.
+    # NWS marine forecasts are textual - extract what we can.
     # Return a minimal result; the text is in the first period's detailedForecast.
     if not periods:
         raise ValueError("NWS: no marine forecast data")

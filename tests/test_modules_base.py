@@ -1,4 +1,4 @@
-"""Tests for modules/base.py — cred() placeholder filter + is_configured()."""
+"""Tests for modules/base.py - cred() placeholder filter + is_configured()."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class TestStripCtrl:
             assert ch not in out
 
     def test_keeps_printable_and_unicode(self):
-        assert strip_ctrl("Café — 北京 90%") == "Café — 北京 90%"
+        assert strip_ctrl("Café - 北京 90%") == "Café - 北京 90%"
 
     def test_coerces_non_str(self):
         assert strip_ctrl(None) == ""
@@ -212,7 +212,7 @@ class TestCommandsContractValidation:
             class _Bad(BotModule):
                 COMMANDS = {"foo": "cmd_foo"}
 
-                def cmd_foo(self, nick, reply_to, arg):  # sync — invalid
+                def cmd_foo(self, nick, reply_to, arg):  # sync - invalid
                     pass
 
     def test_empty_commands_is_fine(self):

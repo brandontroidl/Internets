@@ -1,4 +1,4 @@
-"""Stormglass.io — hourly weather forecast."""
+"""Stormglass.io - hourly weather forecast."""
 from __future__ import annotations
 from datetime import datetime, timezone
 from .._http import get_json

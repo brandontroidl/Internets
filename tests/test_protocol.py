@@ -1,4 +1,4 @@
-"""Tests for protocol.py — pure IRC protocol helpers."""
+"""Tests for protocol.py - pure IRC protocol helpers."""
 
 import pytest
 from protocol import (

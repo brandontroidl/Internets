@@ -3,7 +3,7 @@
 ## Summary
 
 A short description of what this PR changes and why. Focus on the
-motivation — reviewers can read the diff for the mechanics.
+motivation - reviewers can read the diff for the mechanics.
 
 ## Linked issue
 
@@ -27,7 +27,7 @@ this section if there is no linked issue.)
       `python tests/run_tests.py` pass locally.
 - [ ] Documentation updated where relevant (`README.md`,
       `CHANGELOG.md`, or inline docstrings).
-- [ ] No credentials committed to `config.ini` — the shipped template
+- [ ] No credentials committed to `config.ini` - the shipped template
       stays credential-free.
 - [ ] Any new module that depends on an API key overrides
       `is_configured()` so it is skipped cleanly when the key is absent.
@@ -42,6 +42,6 @@ this section if there is no linked issue.)
 
 ## Screenshots or IRC transcript (optional)
 
-If the change is user-visible — new command output, formatting, etc. —
+If the change is user-visible - new command output, formatting, etc. -
 paste a short transcript or screenshot here. Scrub nicks, hostmasks, and
 channel names you do not want public.

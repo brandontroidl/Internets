@@ -1,7 +1,7 @@
-"""ECCC provider package — Environment and Climate Change Canada alerts.
+"""ECCC provider package - Environment and Climate Change Canada alerts.
 
 https://api.weather.gc.ca/  (OGC API Features, GeoJSON; no key required).
-Alerts only.  Canada-only coverage — outside Canada the bbox query simply
+Alerts only.  Canada-only coverage - outside Canada the bbox query simply
 returns zero features, which is valid "no active alerts" data (we do NOT
 raise; the dispatcher only falls through on real errors).
 """

@@ -12,7 +12,7 @@ ICONS = {
 def icon_to_desc(icon): return ICONS.get(icon, icon or "Unknown")
 
 
-# fix: Pirate Weather is a Dark Sky clone — the API key is part of the
+# fix: Pirate Weather is a Dark Sky clone - the API key is part of the
 # URL path (``/forecast/{KEY}/{lat,lon}``) and there is no header-based
 # auth option. That key lands inside HTTPError messages whenever
 # upstream returns 4xx/5xx, and from there into any caller log line.

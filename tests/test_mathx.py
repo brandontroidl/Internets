@@ -1,4 +1,4 @@
-"""Tests for modules/mathx.py — pure-compute math toolbox."""
+"""Tests for modules/mathx.py - pure-compute math toolbox."""
 
 import sys
 sys.path.insert(0, ".")

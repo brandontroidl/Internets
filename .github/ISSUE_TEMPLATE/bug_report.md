@@ -8,7 +8,7 @@ assignees: ""
 
 **Do NOT paste the contents of `config.ini` (especially the `[secrets]`
 section) or `config.local.ini` into this issue.** If you are not sure
-whether a value is sensitive, leave it out — a maintainer will ask if
+whether a value is sensitive, leave it out - a maintainer will ask if
 it is needed.
 
 If you believe the bug has security impact, stop here and follow
@@ -43,7 +43,7 @@ What actually happened, including any error messages.
 ## Logs
 
 The bot scrubs credentials from its **outbound IRC** logging automatically,
-but please double-check before pasting — local logs, tracebacks, and
+but please double-check before pasting - local logs, tracebacks, and
 manual copy/paste can still contain tokens, passwords, hostmasks, or
 private channel content. Trim what you do not need.
 
@@ -58,5 +58,5 @@ paste scrubbed log lines here
 
 ## Additional context
 
-Anything else you think a maintainer should know — recent config
+Anything else you think a maintainer should know - recent config
 changes, modules enabled, related issues, etc.

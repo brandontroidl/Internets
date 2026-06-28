@@ -1,7 +1,7 @@
-"""Pirate Weather — current conditions."""
+"""Pirate Weather - current conditions."""
 from __future__ import annotations
 from ..base import WeatherResult
-# fix: key embedded in URL path leaks into HTTPError messages — use
+# fix: key embedded in URL path leaks into HTTPError messages - use
 # safe_get_json wrapper which redacts the key before re-raising.
 from ._codes import deg_to_card, icon_to_desc, ms_to_kph, safe_get_json
 

@@ -1,4 +1,4 @@
-"""`.health` and `.uptime` — operator introspection for the bot.
+"""`.health` and `.uptime` - operator introspection for the bot.
 
 `.health` is admin-only and surfaces every subsystem we can cheaply
 reach from a module: load list, weather provider states, sender queue
@@ -56,7 +56,7 @@ class HealthModule(BotModule):
 
     def on_load(self) -> None:
         # We record our own start time rather than rely on the bot
-        # exposing one — health may be loaded mid-run via `.load health`.
+        # exposing one - health may be loaded mid-run via `.load health`.
         self._started_at: float = time.time()
 
     def is_configured(self) -> bool:
@@ -77,7 +77,7 @@ class HealthModule(BotModule):
         """Admin: per-subsystem state snapshot, one privmsg per line."""
         if not self.bot.is_admin(nick):
             self.bot.privmsg(reply_to,
-                f"{nick}: .health is admin-only — try .uptime instead.")
+                f"{nick}: .health is admin-only - try .uptime instead.")
             return
 
         # Admin diagnostics are private: preply() routes them as a NOTICE to
@@ -169,7 +169,7 @@ class HealthModule(BotModule):
     # ── helpers ────────────────────────────────────────────────────
 
     def _get_provider_status(self) -> list[dict[str, Any]]:
-        """Pull provider_status() lazily — weather_providers is optional."""
+        """Pull provider_status() lazily - weather_providers is optional."""
         from weather_providers import provider_status  # noqa: PLC0415
         return provider_status()
 

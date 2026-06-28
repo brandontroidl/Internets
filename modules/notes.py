@@ -1,4 +1,4 @@
-"""Personal sticky-notes — per-nick note storage.
+"""Personal sticky-notes - per-nick note storage.
 
 `.notes` subcommands:
     list            list your notes, numbered
@@ -89,7 +89,7 @@ class NotesModule(BotModule):
             removed = self._notes.pop(nick.lower(), None)
         if removed is None:
             return 0
-        self._save_notes()   # re-acquires self._lock — must not hold it here
+        self._save_notes()   # re-acquires self._lock - must not hold it here
         return len(removed)
 
     def _save_notes(self) -> None:
@@ -118,7 +118,7 @@ class NotesModule(BotModule):
     async def cmd_notes(self, nick: str, reply_to: str, arg: str | None) -> None:
         """`.notes [list|add|del|show|clear] [args]`"""
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
 
         prefix = self.bot.cfg["bot"]["command_prefix"]
@@ -153,7 +153,7 @@ class NotesModule(BotModule):
         else:
             self.bot.privmsg(
                 reply_to,
-                f"{nick}: unknown subcommand '{sub}' — "
+                f"{nick}: unknown subcommand '{sub}' - "
                 f"try {prefix}notes <list|add|del|show|clear>",
             )
 
@@ -180,7 +180,7 @@ class NotesModule(BotModule):
         if len(notes) >= _MAX_NOTES:
             self.bot.privmsg(
                 reply_to,
-                f"{nick}: you have {_MAX_NOTES} notes already — delete some first",
+                f"{nick}: you have {_MAX_NOTES} notes already - delete some first",
             )
             return
         clean = _strip_ctrl(rest, _MAX_LEN)
@@ -280,5 +280,5 @@ class NotesModule(BotModule):
 
 
 def setup(bot: object) -> NotesModule:
-    """Module entry point — returns a NotesModule instance."""
+    """Module entry point - returns a NotesModule instance."""
     return NotesModule(bot)  # type: ignore[arg-type]

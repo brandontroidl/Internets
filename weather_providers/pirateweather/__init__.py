@@ -1,4 +1,4 @@
-"""Pirate Weather provider package — Dark Sky API replacement.
+"""Pirate Weather provider package - Dark Sky API replacement.
 
 https://pirateweather.net/
 Free tier: 20,000 calls/month.  Current, forecast, hourly, alerts, minutely nowcast.

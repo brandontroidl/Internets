@@ -1,4 +1,4 @@
-"""xkcd lookup — wraps xkcd.com's official JSON endpoint.
+"""xkcd lookup - wraps xkcd.com's official JSON endpoint.
 
 No API key required.  Endpoints:
   - https://xkcd.com/info.0.json         → latest comic
@@ -17,7 +17,7 @@ from .base import BotModule, help_row, strip_ctrl
 
 log = logging.getLogger("internets.xkcd")
 
-# Bandit B311 false-positive — picking which xkcd to show isn't a security
+# Bandit B311 false-positive - picking which xkcd to show isn't a security
 # decision, but SystemRandom keeps the scan clean without per-line nosec.
 _rng = random.SystemRandom()
 
@@ -52,7 +52,7 @@ def _fetch_sync(num: int | None, ua: str) -> str:
         if not latest:
             return "xkcd unavailable"
         max_n = int(latest.get("num", 1))
-        # xkcd 404 doesn't exist as a comic — skip it.
+        # xkcd 404 doesn't exist as a comic - skip it.
         choice = _rng.randint(1, max_n)
         if choice == 404:
             choice = 405
@@ -69,12 +69,12 @@ def _fetch_sync(num: int | None, ua: str) -> str:
     alt   = d.get("alt", "")
     n     = d.get("num", "?")
     return _strip_ctrl(
-        f"\x02xkcd #{n}\x02 — {title} | alt: {alt} | https://xkcd.com/{n}/"
+        f"\x02xkcd #{n}\x02 - {title} | alt: {alt} | https://xkcd.com/{n}/"
     )
 
 
 class XkcdModule(BotModule):
-    """`.xkcd [num]` — xkcd comic title + alt text + link."""
+    """`.xkcd [num]` - xkcd comic title + alt text + link."""
 
     COMMANDS: dict[str, str] = {"xkcd": "cmd_xkcd"}
 
@@ -88,7 +88,7 @@ class XkcdModule(BotModule):
 
     async def cmd_xkcd(self, nick: str, reply_to: str, arg: str | None) -> None:
         if self.bot.rate_limited(nick):
-            self.bot.notice(nick, f"{nick}: slow down — try again in a few seconds")
+            self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
             return
         num: int | None = None
         if arg and arg.strip():
@@ -104,7 +104,7 @@ class XkcdModule(BotModule):
         self.bot.privmsg(reply_to, text)
 
     def help_lines(self, prefix: str) -> list[str]:
-        return [help_row(prefix, "xkcd [num]", "xkcd comic — random or specific")]
+        return [help_row(prefix, "xkcd [num]", "xkcd comic - random or specific")]
 
 
 def setup(bot: object) -> XkcdModule:
