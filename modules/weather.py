@@ -17,18 +17,20 @@ import re
 import logging
 from typing import Any
 
-from .base    import BotModule
+from .base    import BotModule, strip_ctrl
 from .geocode import geocode
 from .units   import cf, kph, km_mi, mb, aqi_fmt, wave_fmt, swell_fmt
 
 log = logging.getLogger("internets.weather")
 
-_IRC_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 
 def _sanitize(s: str, max_len: int = 200) -> str:
-    """Strip IRC control chars and truncate untrusted API strings."""
-    return _IRC_CTRL_RE.sub("", s)[:max_len]
+    """Strip IRC control chars and truncate untrusted API strings.
+
+    Thin alias over the canonical base.strip_ctrl (same C0/DEL regex) keeping
+    the 200-char default, so there's no second control-byte set to drift.
+    """
+    return strip_ctrl(s, max_len)
 
 
 # ── Formatters ────────────────────────────────────────────────────────

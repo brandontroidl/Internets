@@ -157,12 +157,10 @@ class PrivacyModule(BotModule):
         try:
             purged_rows = self.bot._store.user_purge(nick)  # type: ignore[attr-defined]
         except AttributeError:
-            # Defensive: if some future refactor renames _store/user_purge,
-            # fall back to user_quit so .forgetme still degrades gracefully.
-            try:
-                self.bot._store.user_quit(nick)  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
+            # user_purge is the ONLY correct erasure path.  Do NOT fall back to
+            # user_quit: it RECORDS a quit (refreshes last_seen), the opposite
+            # of right-to-erasure.  Fail loud and report nothing erased.
+            log.error("forgetme: store.user_purge unavailable - tracking NOT erased for %r", nick)
 
         if purged_rows:
             deleted.append(f"tracking in {purged_rows} channel(s) (erased now)")

@@ -94,6 +94,9 @@ OPER_SNOMASK = cfg["irc"].get("oper_snomask",   "").strip()
 # ── Bot settings ─────────────────────────────────────────────────────
 
 CMD_PREFIX  = cfg["bot"]["command_prefix"]
+if not CMD_PREFIX:
+    raise SystemExit("config.ini [bot] command_prefix must be non-empty "
+                     "(an empty prefix would make every message a command)")
 # Floor cooldowns at 1s so a 0/negative value can't silently disable the
 # per-nick rate limiter (RateLimiter also clamps, defence in depth).
 API_CD      = max(1, int(cfg["bot"]["api_cooldown"]))

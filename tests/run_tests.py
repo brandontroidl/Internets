@@ -265,6 +265,25 @@ def _():
         assert raised                        # fail-closed; did NOT regenerate
         assert kp.read_bytes() == original   # the real key was not truncated
 
+@test("secret_store: env-var tier filters blank/placeholder values like the file tier")
+def _():
+    import os
+    from secret_store import get, ENV_PREFIX
+    key = ENV_PREFIX + "DUMMY_SECRET_XYZ"
+    old = os.environ.get(key)
+    try:
+        os.environ[key] = "   "                          # whitespace only
+        assert get("dummy_secret_xyz", "DEF") == "DEF"   # filtered, not returned
+        os.environ[key] = "changeme"                     # placeholder
+        assert get("dummy_secret_xyz", "DEF") == "DEF"   # filtered
+        os.environ[key] = "realvalue123"
+        assert get("dummy_secret_xyz", "DEF") == "realvalue123"   # real value passes
+    finally:
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
+
 @test("Store: channels_save / channels_load")
 def _():
     with tempfile.TemporaryDirectory() as tmp:

@@ -23,6 +23,7 @@ Design choices:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import threading
@@ -266,9 +267,20 @@ class MetricsRegistry:
         # Defensive REFUSAL of all-interfaces binds — these literals appear
         # as a guard, never as a target.  Bandit B104 grep-matches the
         # strings regardless of context (false positive); suppress it here.
-        if host in ("0.0.0.0", "::", ""):  # nosec B104
+        # Reject any all-interfaces bind, including the IPv6 / whitespace forms
+        # the old literal denylist missed (::0, ::ffff:0.0.0.0, "0.0.0.0 ").
+        # Only is_unspecified is rejected; loopback is allowed for the
+        # documented reverse-proxy front-end.
+        _h = host.strip()
+        try:
+            _a = ipaddress.ip_address(_h)
+            if isinstance(_a, ipaddress.IPv6Address) and _a.ipv4_mapped is not None:
+                _a = _a.ipv4_mapped
+        except ValueError:
+            _a = None
+        if _h == "" or (_a is not None and _a.is_unspecified):  # nosec B104
             raise ValueError(
-                f"refusing to bind metrics endpoint to {host!r} — "
+                f"refusing to bind metrics endpoint to {host!r} - "
                 "this endpoint must remain loopback-only")
         with self._lock:
             if self._server is not None:

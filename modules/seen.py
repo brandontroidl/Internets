@@ -269,18 +269,12 @@ class SeenModule(BotModule):
             except OSError:
                 pass
             log.warning(f"seen: flush failed: {e!r}")
-            # Re-mark dirty so we retry next interval
+            # Re-mark dirty so we retry next interval.  (The temp file is
+            # already removed by the os.unlink(tmp) above; tmp is a str, so the
+            # old `tmp.exists()` second cleanup was dead code that only ever
+            # raised AttributeError.)
             with self._lock:
                 self._dirty = True
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception as e:
-                # Cleanup-of-cleanup — the outer flush already failed and
-                # we just want to leave no orphan .tmp around.  If even
-                # the unlink fails, log and move on; the next flush will
-                # overwrite it.
-                log.debug("seen: temp cleanup failed: %s", type(e).__name__)
 
     async def _periodic_flush(self) -> None:
         try:
