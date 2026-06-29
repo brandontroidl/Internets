@@ -556,3 +556,42 @@ class TestGapFill:
         d.register(nws, "nws"); d.register(om, "openmeteo")
         out = asyncio.run(d.dispatch("current", 0, 0, "x"))
         assert out is full and nws.calls == 1 and om.calls == 0
+
+    def test_empty_primary_description_filled_from_next(self):
+        """An EMPTY primary description (NWS obs often null textDescription) is
+        gap-filled from the next provider - the blank-Conditions bug."""
+        primary = _wr("NWS", 16.7, desc="")                  # blank conditions
+        other = _wr("Open-Meteo", 17.3, desc="Partly Cloudy", humidity=74.0)
+        merged = primary.fill_gaps(other)
+        assert merged.description == "Partly Cloudy"
+
+    def test_present_primary_description_not_overwritten(self):
+        """A PRESENT primary description is never overwritten by the filler."""
+        primary = _wr("NWS", 16.7, desc="Sunny")
+        other = _wr("Open-Meteo", 17.3, desc="Partly Cloudy")
+        assert primary.fill_gaps(other).description == "Sunny"
+
+    def test_has_gaps_true_when_only_description_empty(self):
+        """Empty description counts as a gap so the dispatcher keeps walking the
+        chain to fill it, even when every numeric field is already present."""
+        r = _wr("NWS", 16.7, desc="", humidity=74.0, wind_kph=5.4, wind_dir="W",
+                pressure_mb=976.0, visibility_m=17000.0, dewpoint_c=12.6,
+                feels_like_c=17.0)
+        assert r.has_gaps() is True
+
+
+def test_nws_absent_textdescription_reads_empty(monkeypatch):
+    """NWS with no textDescription yields '' (missing), so the gap-fill can
+    supply a real description from a fallback, instead of 'Unknown' blocking it."""
+    from weather_providers.nws import current as nws_current
+
+    async def fake_get_json(url, headers=None):
+        if "/points/" in url:
+            return {"properties": {"observationStations": "https://api.weather.gov/st"}}
+        if url.endswith("/st"):
+            return {"features": [{"id": "https://api.weather.gov/st/KCNO"}]}
+        return {"properties": {"temperature": {"value": 16.7}}}  # no textDescription
+
+    monkeypatch.setattr(nws_current, "get_json", fake_get_json)
+    r = asyncio.run(nws_current.fetch(34.10, -117.80, "San Dimas, CA"))
+    assert r.description == ""

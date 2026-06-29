@@ -33,7 +33,7 @@ async def fetch(lat: float, lon: float, location: str) -> WeatherResult:
     wind_speed = _val("windSpeed")
     return WeatherResult(
         source="NWS", temperature=temp,
-        description=p.get("textDescription", "Unknown"),
+        description=(p.get("textDescription") or ""),
         location=location,
         humidity=_val("relativeHumidity"),
         wind_kph=wind_speed,

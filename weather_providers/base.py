@@ -59,7 +59,7 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 # gap-filling (temperature/description are the core, never gap-filled).
 _CURRENT_GAP_FIELDS = (
     "feels_like_c", "humidity", "wind_kph", "wind_dir",
-    "pressure_mb", "visibility_m", "dewpoint_c",
+    "pressure_mb", "visibility_m", "dewpoint_c", "description",
 )
 
 
@@ -107,15 +107,17 @@ class WeatherResult:
     def has_gaps(self) -> bool:
         """True if any secondary current-conditions field is missing.  The
         dispatcher uses this to keep walking the provider chain and fill the
-        gaps (e.g. NWS station obs often null dewpoint/pressure/visibility)."""
+        gaps (e.g. NWS station obs often null dewpoint/pressure/visibility, or
+        leave textDescription empty -> a blank Conditions field)."""
         return any(_missing(getattr(self, f)) for f in _CURRENT_GAP_FIELDS)
 
     def fill_gaps(self, other: "WeatherResult") -> "WeatherResult":
         """Return a copy with this result's MISSING secondary fields filled from
-        ``other``, crediting both sources.  Temperature, description, and
-        forecast are never overwritten - only the fields the formatter would
-        otherwise show as N/A.  Returns self unchanged if ``other`` adds
-        nothing."""
+        ``other``, crediting both sources.  Temperature and forecast are never
+        touched; description is filled ONLY when this result's is empty (NWS obs
+        often null textDescription) and is never overwritten when present - the
+        ``_missing(self)`` guard below guarantees that.  Returns self unchanged
+        if ``other`` adds nothing."""
         upd = {f: getattr(other, f) for f in _CURRENT_GAP_FIELDS
                if _missing(getattr(self, f)) and not _missing(getattr(other, f))}
         if not upd:
