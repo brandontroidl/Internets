@@ -144,6 +144,7 @@ Setting a base level via `.loglevel LEVEL` also forces `global_debug` off
 (`botlog.py:278`). `.rehash` resets the base level from `[logging] level` and clears all
 debug subsystems (`admin_cmds.py:451`).
 
+(startup-validation)=
 ### Startup validation (can refuse to boot)
 
 `botlog.py` runs these at import, before the loop:

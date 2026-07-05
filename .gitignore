@@ -26,6 +26,12 @@ htmlcov/
 sbom.cdx.json
 sbom.spdx.json
 
+# ── Generated documentation (Sphinx) ─────────────────────────────────
+# HTML + LaTeX/PDF output and the autoapi-generated API stubs.  Built on
+# demand with scripts/build-docs.sh; regenerate, do not commit.
+docs/_build/
+docs/autoapi/
+
 # ── IDE ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
