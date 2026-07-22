@@ -15,9 +15,14 @@ _RADIUS_MI = 80  # search radius
 
 
 async def fetch(lat, lon, location):
-    # Note: this layer has no `DailyAcres` field (it 400s if requested);
-    # `DiscoveryAcres` is the populated current-size field for active
-    # incidents, so we use it for max_acres.
+    # Acreage: the layer has no `DailyAcres` (it 400s if requested), but it
+    # does carry `IncidentSize` - the CURRENT size - alongside
+    # `DiscoveryAcres`, which is the size at initial report and sits at a
+    # dispatch default of 0.01 on nearly every record.  Reading
+    # `DiscoveryAcres` reported the 2690-acre SUMMIT fire as "Largest 0
+    # acres".  `IncidentSize` is null on most records (small incidents nobody
+    # sized), so we also count how many carry one rather than implying the
+    # whole set is measured.
     data = await get_json(_BASE, params={
         "where": "1=1",
         "geometry": f"{lon},{lat}",
@@ -26,7 +31,7 @@ async def fetch(lat, lon, location):
         "spatialRel": "esriSpatialRelIntersects",
         "distance": _RADIUS_MI,
         "units": "esriSRUnit_StatuteMile",
-        "outFields": "IncidentName,DiscoveryAcres,IncidentTypeCategory,POOState",
+        "outFields": "IncidentName,IncidentSize,IncidentTypeCategory,POOState",
         "returnGeometry": "true",
         "f": "json",
     })
@@ -41,6 +46,7 @@ async def fetch(lat, lon, location):
     nearest_km: float | None = None
     nearest_name = ""
     max_acres: float | None = None
+    sized_count = 0
     try:
         lat_f, lon_f = float(lat), float(lon)
     except (TypeError, ValueError):
@@ -60,14 +66,16 @@ async def fetch(lat, lon, location):
             if d is not None and (nearest_km is None or d < nearest_km):
                 nearest_km = d
                 nearest_name = (attrs.get("IncidentName") or "").strip()
-        acres = attrs.get("DiscoveryAcres")
+        acres = attrs.get("IncidentSize")
         if acres is not None:
             try:
                 af = float(acres)
             except (TypeError, ValueError):
                 af = None
-            if af is not None and (max_acres is None or af > max_acres):
-                max_acres = af
+            if af is not None:
+                sized_count += 1
+                if max_acres is None or af > max_acres:
+                    max_acres = af
 
     return WildfireResult(
         source="NIFC",
@@ -76,4 +84,5 @@ async def fetch(lat, lon, location):
         nearest_km=round(nearest_km, 1) if nearest_km is not None else None,
         nearest_name=nearest_name,
         max_acres=max_acres,
+        sized_count=sized_count,
     )

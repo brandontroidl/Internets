@@ -247,9 +247,9 @@ class TestNIFC:
         from weather_providers.nifc import wildfire
         async def stub(url, **kw):
             return {"features": [
-                {"attributes": {"IncidentName": "Big Fire", "DiscoveryAcres": 750},
+                {"attributes": {"IncidentName": "Big Fire", "IncidentSize": 750},
                  "geometry": {"x": -80.0, "y": 40.1}},
-                {"attributes": {"IncidentName": "Small Fire", "DiscoveryAcres": 10},
+                {"attributes": {"IncidentName": "Small Fire", "IncidentSize": 10},
                  "geometry": {"x": -81.0, "y": 41.0}},
             ]}
         _patch(monkeypatch, wildfire, stub)
@@ -258,6 +258,43 @@ class TestNIFC:
         assert r.nearest_name == "Big Fire"
         assert r.max_acres == 750
         assert r.nearest_km is not None and r.nearest_km < 20
+
+    def test_max_acres_reads_incident_size_not_discovery_acres(self, monkeypatch):
+        # WFIGS `DiscoveryAcres` is the size at INITIAL REPORT and sits at a
+        # dispatch default of 0.01 on nearly every record; `IncidentSize` is
+        # the current size.  Reading the wrong one reported the 2690-acre
+        # SUMMIT fire as "Largest 0 acres" next to 46 incidents.
+        from weather_providers.nifc import wildfire
+        async def stub(url, **kw):
+            return {"features": [
+                {"attributes": {"IncidentName": "SUMMIT",
+                                "DiscoveryAcres": 0.01, "IncidentSize": 2690},
+                 "geometry": {"x": -117.8, "y": 34.2}},
+                {"attributes": {"IncidentName": "LAC-253228",
+                                "DiscoveryAcres": 0.01, "IncidentSize": None},
+                 "geometry": {"x": -117.85, "y": 34.11}},
+            ]}
+        _patch(monkeypatch, wildfire, stub)
+        r = asyncio.run(wildfire.fetch(34.1067, -117.8067, "San Dimas, CA"))
+        assert r.max_acres == 2690
+        assert r.fire_count == 2
+        assert r.sized_count == 1     # only SUMMIT carries a current size
+
+    def test_max_acres_none_when_no_incident_is_sized(self, monkeypatch):
+        # The common case near a metro area: dozens of 0.01-acre dispatch
+        # stubs, none of them sized.  Report no acreage rather than a "0".
+        from weather_providers.nifc import wildfire
+        async def stub(url, **kw):
+            return {"features": [
+                {"attributes": {"IncidentName": f"LAC-{n}", "DiscoveryAcres": 0.01},
+                 "geometry": {"x": -117.85, "y": 34.11}}
+                for n in range(5)
+            ]}
+        _patch(monkeypatch, wildfire, stub)
+        r = asyncio.run(wildfire.fetch(34.1067, -117.8067, "San Dimas, CA"))
+        assert r.fire_count == 5
+        assert r.sized_count == 0
+        assert r.max_acres is None
 
 
 class TestTideCheck:

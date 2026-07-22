@@ -338,7 +338,12 @@ class WildfireResult:
     fire_count: int            = 0      # fires within the search radius
     nearest_km: float | None   = None   # distance to nearest fire
     nearest_name: str          = ""     # named incident (if known)
-    max_acres: float | None    = None   # largest nearby fire's size
+    max_acres: float | None    = None   # largest nearby fire's current size
+    # How many of ``fire_count`` incidents report a size at all.  NIFC's
+    # current-incident layer is mostly small dispatch records with no size,
+    # so "46 nearby" and "1 sized" are both true and both worth saying.
+    # Detection-only sources (FIRMS) leave this 0 and carry no acreage.
+    sized_count: int           = 0
 
 
 # ── Space weather / aurora ───────────────────────────────────────────

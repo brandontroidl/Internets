@@ -733,6 +733,37 @@ def _():
     )
     assert "Feels like" in _format_current(r_far)
 
+@test("weather _format_wildfire: sub-acre sizes never render as '0 acres'")
+def _():
+    from modules.weather import _format_wildfire
+    from weather_providers.base import WildfireResult
+    # 0.1 acres through ',.0f' printed "Largest 0 acres" next to 46 fires.
+    body = _format_wildfire(WildfireResult(
+        source="NIFC", location="San Dimas, CA", fire_count=46,
+        sized_count=1, max_acres=0.1))
+    assert "Largest 0 acres" not in body, body
+    assert "0.1" in body, body
+    # Whole-acre sizes stay thousands-separated and undecorated.
+    big = _format_wildfire(WildfireResult(
+        source="NIFC", location="San Dimas, CA", fire_count=46,
+        sized_count=8, max_acres=2690.0))
+    assert "Largest 2,690 acres" in big, big
+
+@test("weather _format_wildfire: reports how many incidents actually carry a size")
+def _():
+    from modules.weather import _format_wildfire
+    from weather_providers.base import WildfireResult
+    body = _format_wildfire(WildfireResult(
+        source="NIFC", location="San Dimas, CA", fire_count=46,
+        sized_count=8, max_acres=2690.0))
+    assert "46" in body and "8 sized" in body, body
+    # A detection-only source (FIRMS) has no sizes at all - say nothing rather
+    # than claim "0 sized".
+    firms = _format_wildfire(WildfireResult(
+        source="NASA FIRMS", location="x", fire_count=3))
+    assert "sized" not in firms, firms
+    assert "acres" not in firms, firms
+
 @test("weather _format_forecast: produces valid output from WeatherResult")
 def _():
     from weather_providers.base import WeatherResult, ForecastDay

@@ -280,12 +280,22 @@ def _format_wildfire(r: object) -> str:
     source = _sanitize(r.source, 30)
     if not r.fire_count:
         return f"No active fires detected nearby. [{source}]"
-    parts: list[str] = [f"{r.fire_count} active fire(s) nearby"]
+    count = f"{r.fire_count} active fire(s) nearby"
+    # NIFC's current-incident layer is mostly small dispatch records carrying
+    # no size, so a bare count implies more measurement than exists.  Say how
+    # many are actually sized.  Detection-only sources report no sizes at all
+    # and get the plain count.
+    if r.sized_count:
+        count += f" ({r.sized_count} sized)"
+    parts: list[str] = [count]
     if r.nearest_km is not None:
         nm = f" {_sanitize(r.nearest_name, 40)}" if r.nearest_name else ""
         parts.append(f"Nearest{nm} {r.nearest_km:.0f}km")
     if r.max_acres is not None:
-        parts.append(f"Largest {r.max_acres:,.0f} acres")
+        # A sub-acre fire is real; ',.0f' rounded it to a bare "0 acres".
+        acres = (f"{r.max_acres:,.0f}" if r.max_acres >= 1
+                 else f"{r.max_acres:.2f}".rstrip("0").rstrip("."))
+        parts.append(f"Largest {acres} acres")
     parts.append(f"[{source}]")
     return " :: ".join(parts)
 
