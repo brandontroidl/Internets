@@ -144,6 +144,19 @@ def _backoff_jittered(attempt: int, base: float = 15.0, cap: float = 300.0,
 # IRCBot
 # ═════════════════════════════════════════════════════════════════════
 
+# ISUPPORT-derived mode tables start from these RFC-safe defaults.  Defined
+# once because they are needed in TWO places - the constructor and _connect -
+# and a second hand-written copy would drift.  _connect must re-seed them:
+# they are per-CONNECTION facts, and a reconnect can land on a different
+# server (DNS round-robin, failover, an ircd upgrade), after which the
+# previous server's tables would silently govern parameter alignment.
+_DEFAULT_CHANMODE_TYPES: dict[str, str] = {
+    "b": "A", "e": "A", "I": "A", "k": "B", "l": "C",
+    "i": "D", "m": "D", "n": "D", "p": "D", "s": "D", "t": "D",
+}
+_DEFAULT_PREFIX_MODES: frozenset[str] = frozenset("qaohv")
+
+
 class IRCBot(AdminCommandsMixin):
     """Async IRC bot core - event loop, state machine, command dispatch.
 
@@ -234,11 +247,8 @@ class IRCBot(AdminCommandsMixin):
         self._cap_busy = False
         self._caps: set[str] = set()
         self._services_nick = cfg["bot"].get("services_nick", "ChanServ").strip()
-        self._chanmode_types: dict[str, str] = {
-            "b": "A", "e": "A", "I": "A", "k": "B", "l": "C",
-            "i": "D", "m": "D", "n": "D", "p": "D", "s": "D", "t": "D",
-        }
-        self._prefix_modes: set[str] = set("qaohv")
+        self._chanmode_types: dict[str, str] = dict(_DEFAULT_CHANMODE_TYPES)
+        self._prefix_modes: set[str] = set(_DEFAULT_PREFIX_MODES)
         self._store = Store(
             cfg["bot"].get("locations_file", "locations.json"),
             cfg["bot"].get("channels_file",  "channels.json"),
@@ -752,6 +762,11 @@ class IRCBot(AdminCommandsMixin):
         self._last_pong = time.monotonic()
         with self._chanops_lock:
             self._chanops = {}
+        # ISUPPORT tables are per-connection: a reconnect can land on a
+        # different server, and keeping the previous one's CHANMODES/PREFIX
+        # would misalign MODE parameters until a new 005 arrives.
+        self._chanmode_types = dict(_DEFAULT_CHANMODE_TYPES)
+        self._prefix_modes = set(_DEFAULT_PREFIX_MODES)
         if self._sender: await self._sender.stop()
         self._sender = Sender(self._loop, on_drop=self._bump_dropped_metric)
         self._sender.start(self._writer)
@@ -931,10 +946,27 @@ class IRCBot(AdminCommandsMixin):
             self._nick = (self._nick + "_") if len(self._nick) < len(base) + 3 else base + str(secrets.randbelow(90) + 10)
             self.send(f"NICK {self._nick}", priority=0); log.warning(f"Nick in use - trying {self._nick!r}"); return True
         if self._RE_005.match(line):
+            # Replace a table only on a well-formed token.  A malformed one
+            # must not wipe the current table: an empty _prefix_modes makes
+            # op_modes empty below, silently ending all MODE-driven chanop
+            # tracking, and a truncated CHANMODES leaves k/l untyped, which
+            # shifts every MODE parameter after them.
             cm = self._RE_CHANMODES.search(line)
-            if cm: self._chanmode_types = parse_isupport_chanmodes(cm.group(1))
+            if cm:
+                types = parse_isupport_chanmodes(cm.group(1))
+                if types is None:
+                    log.warning("event=isupport_malformed token=CHANMODES "
+                                "value=%r - keeping current table", cm.group(1))
+                else:
+                    self._chanmode_types = types
             pm = self._RE_PREFIX.search(line)
-            if pm: self._prefix_modes, _ = parse_isupport_prefix(pm.group(1))
+            if pm:
+                parsed = parse_isupport_prefix(pm.group(1))
+                if parsed is None:
+                    log.warning("event=isupport_malformed token=PREFIX "
+                                "value=%r - keeping current table", pm.group(1))
+                else:
+                    self._prefix_modes, _ = parsed
         m = self._RE_473.match(line)
         if m:
             log.info(f"Cannot join {m.group(1)} (invite-only) - asking {self._services_nick} for INVITE")

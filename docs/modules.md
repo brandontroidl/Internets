@@ -15,8 +15,8 @@ A module is a single `.py` file in `modules/` that exposes a top-level
 `setup(bot) -> BotModule` factory. The bot loads it by file path, calls
 `setup(self)`, and registers the returned instance's commands. There is no
 class auto-discovery: `setup()` is the only required entry point
-(`internets.py:469`). A file with no `setup` is rejected at load
-(`internets.py:470`).
+(`internets.py:479`). A file with no `setup` is rejected at load
+(`internets.py:480`).
 
 ```python
 from __future__ import annotations
@@ -83,11 +83,11 @@ Every module subclasses `BotModule`. Surface:
 
 There is no directory scan at startup. The bot loads exactly the modules named
 in `config.ini [bot] autoload` (comma-separated), in list order
-(`config.py:105`, `internets.py:508`). `modules_dir` (default `modules`)
+(`config.py:105`, `internets.py:518`). `modules_dir` (default `modules`)
 sets the directory (`config.py:104`). `.modules` lists loaded modules plus any
 other `*.py` on disk that could be loaded.
 
-### Load path and guards (`internets.py:452`)
+### Load path and guards (`internets.py:462`)
 
 `load_module(name)` holds `self._mod_lock` and:
 
@@ -96,13 +96,13 @@ other `*.py` on disk that could be loaded.
 3. Requires `modules/<name>.py` to exist.
 4. **Symlink/traversal guard**: `path.resolve().relative_to(MODULES_DIR.
    resolve())` - a file whose real path escapes `modules/` is blocked
-   (`internets.py:462`).
+   (`internets.py:472`).
 5. `importlib.util.spec_from_file_location("modules.<name>", path)` +
    `exec_module` - the file is executed fresh on every load.
 6. Requires `setup`, calls `inst = mod.setup(self)`.
 7. **Conflict check**: any command word already owned by a *different* module
    aborts the load with a conflict message - first loader wins, second is
-   rejected (`internets.py:472`). (A reload of the same module is fine because
+   rejected (`internets.py:482`). (A reload of the same module is fine because
    `unload` removes its words first.)
 8. `inst.on_load()`, then registers each `COMMANDS` word into
    `self._commands[word] = (name, method)`.
@@ -112,7 +112,7 @@ no traceback reaches IRC.
 
 ### Hot-reload semantics and the helper-caching caveat
 
-`reload_module` is `unload` then `load` (`internets.py:504`). Because step 5
+`reload_module` is `unload` then `load` (`internets.py:514`). Because step 5
 re-executes the target file from source, edits to the command file itself take
 effect on `.reload <module>`. **But** modules import shared helpers
 (`from .base import ...`, `from .geocode import ...`, `from ._netsafe import

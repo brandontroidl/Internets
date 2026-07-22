@@ -18,15 +18,28 @@ def strip_tags(line: str) -> str:
     return line
 
 
-def parse_isupport_chanmodes(token: str) -> dict[str, str]:
+def parse_isupport_chanmodes(token: str) -> dict[str, str] | None:
     """Parse a ``CHANMODES=A,B,C,D`` token from 005 into {mode: type}.
+
+    Returns None if the token is structurally invalid, so the caller can keep
+    its current table instead of replacing it with a partial one.
 
     Types:
         A - list mode, always takes a parameter (e.g. b, e, I)
         B - always takes a parameter (e.g. k, L)
         C - parameter only when setting (e.g. l, H)
         D - never takes a parameter (e.g. i, m, n)
+
+    Structural validity is "at least four comma-separated groups", not "parsed
+    to something non-empty".  A truncated token like ``beI`` yields a
+    perfectly non-empty ``{b:A, e:A, I:A}`` that would silently drop the
+    ``k -> B`` and ``l -> C`` entries.  With ``k`` untyped, parse_mode_changes
+    consumes NO parameter for it, so ``MODE #c +ko sekrit nick`` shifts every
+    following parameter and the channel key lands where the operator nick
+    should be.  Individual empty groups stay legal (``,k,,imnpst``).
     """
+    if token.count(",") < 3:
+        return None
     groups = token.split(",")
     types: dict[str, str] = {}
     for idx, label in enumerate(("A", "B", "C", "D")):
@@ -36,15 +49,19 @@ def parse_isupport_chanmodes(token: str) -> dict[str, str]:
     return types
 
 
-def parse_isupport_prefix(token: str) -> tuple[set[str], dict[str, str]]:
+def parse_isupport_prefix(token: str) -> tuple[set[str], dict[str, str]] | None:
     """Parse a ``PREFIX=(modes)symbols`` token from 005.
 
-    Returns (mode_set, {symbol: mode}).
-    Example: ``(qaohv)~&@%+`` → ({q,a,o,h,v}, {'~':'q', '&':'a', ...})
+    Returns (mode_set, {symbol: mode}), or None if the token is malformed.
+
+    None rather than an empty result, because ``(set(), {})`` is also what a
+    well-formed ``PREFIX=()`` means - a server advertising no membership
+    prefixes at all.  The caller has to tell those apart: one should keep the
+    current table, the other should replace it.
     """
     m = re.match(r"\(([^)]*)\)(.*)", token)
     if not m:
-        return set(), {}
+        return None
     modes, symbols = m.group(1), m.group(2)
     mode_set = set(modes)
     sym_map = {symbols[i]: modes[i] for i in range(min(len(modes), len(symbols)))}

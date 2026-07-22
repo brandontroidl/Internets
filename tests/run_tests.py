@@ -2472,9 +2472,36 @@ def _():
 @test("protocol: parse_isupport_prefix handles malformed input")
 def _():
     from protocol import parse_isupport_prefix
-    modes, sym_map = parse_isupport_prefix("garbled")
-    assert modes == set()
-    assert sym_map == {}
+    # None (not an empty result) so the caller can tell a malformed token
+    # apart from a valid "no prefixes" advertisement and keep its table.
+    assert parse_isupport_prefix("garbled") is None
+    assert parse_isupport_prefix("()") == (set(), {})
+
+@test("protocol: a truncated CHANMODES token is rejected, not partially applied")
+def _():
+    from protocol import parse_isupport_chanmodes
+    assert parse_isupport_chanmodes("beI") is None      # would drop k->B, l->C
+    assert parse_isupport_chanmodes("") is None
+    ok = parse_isupport_chanmodes(",k,,imnpst")
+    assert ok is not None and ok["k"] == "B"
+
+@test("internets: a malformed ISUPPORT token never wipes the mode tables")
+def _():
+    from internets import IRCBot, _DEFAULT_PREFIX_MODES
+    bot = IRCBot()
+    bot._handle_numeric(":srv 005 bot PREFIX=garbage CHANMODES=beI :are supported")
+    # Both tokens are malformed; the RFC-safe defaults must survive, because
+    # an empty _prefix_modes silently ends all MODE-driven chanop tracking.
+    assert bot._prefix_modes == set(_DEFAULT_PREFIX_MODES)
+    assert bot._chanmode_types["k"] == "B"
+
+@test("internets: a well-formed ISUPPORT token still replaces the tables")
+def _():
+    from internets import IRCBot
+    bot = IRCBot()
+    bot._handle_numeric(":srv 005 bot PREFIX=(ov)@+ CHANMODES=beI,k,l,imnpst :are supported")
+    assert bot._prefix_modes == {"o", "v"}
+    assert bot._chanmode_types["l"] == "C"
 
 @test("VERSION: __version__ matches pyproject.toml")
 def _():

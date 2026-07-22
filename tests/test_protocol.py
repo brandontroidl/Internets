@@ -41,9 +41,21 @@ class TestParseIsupportChanmodes:
         assert types["H"] == "C"
         assert types["b"] == "A"
 
-    def test_empty(self):
-        types = parse_isupport_chanmodes("")
-        assert types == {}
+    def test_empty_token_is_structurally_invalid(self):
+        # Not four groups -> None, so the caller keeps its current table.
+        assert parse_isupport_chanmodes("") is None
+
+    def test_truncated_token_rejected(self):
+        # The dangerous case: "beI" parses to a NON-empty dict, so an
+        # emptiness check would accept it and silently drop k->B and l->C.
+        # With k untyped, MODE "+ko sekrit nick" consumes no parameter for k
+        # and the channel key lands where the operator nick belongs.
+        assert parse_isupport_chanmodes("beI") is None
+
+    def test_empty_groups_are_legal(self):
+        types = parse_isupport_chanmodes(",k,,imnpst")
+        assert types["k"] == "B"
+        assert types["i"] == "D"
 
 
 class TestParseIsupportPrefix:
@@ -58,10 +70,13 @@ class TestParseIsupportPrefix:
         modes, sym_map = parse_isupport_prefix("(ov)@+")
         assert modes == {"o", "v"}
 
-    def test_invalid(self):
-        modes, sym_map = parse_isupport_prefix("garbage")
-        assert modes == set()
-        assert sym_map == {}
+    def test_invalid_returns_none(self):
+        assert parse_isupport_prefix("garbage") is None
+
+    def test_empty_advertisement_is_valid_not_malformed(self):
+        # "()" means "this server has no membership prefixes" and must be
+        # distinguishable from a parse failure - hence None vs (set(), {}).
+        assert parse_isupport_prefix("()") == (set(), {})
 
 
 class TestParseModeChanges:
