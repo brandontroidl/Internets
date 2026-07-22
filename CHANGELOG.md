@@ -8,6 +8,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Documentation
 
+- **Documented the four subsystems that had no dedicated section anywhere**:
+  `protocol.py` and `console.py` (`docs/architecture.md` 9-10), `hashpw.py` and
+  `admin_cmds.py` (`docs/security-model.md` 10-11). Every top-level module now
+  has one.
+- **Corrected a factual error that appeared in four places** - both
+  `docs/architecture.md` sites, `internets.py` and `console.py`'s own docstring -
+  describing the console as an `asyncio.to_thread` worker. It is a raw
+  `threading.Thread(daemon=True)`, and the distinction is load-bearing: a
+  to_thread worker is non-daemon on the default executor, so
+  `shutdown_default_executor()` waits forever for a thread parked in `input()`.
+  The stale text would have led a maintainer to reintroduce that hang. Also
+  dropped the "prevents the console from looping on EOF" rationale (three sites);
+  the dispatch loop returns on the first `EOFError`, so the only real reason to
+  skip on a non-TTY is that the console is an unauthenticated admin surface.
 - **Documented the cross-provider gap-fill**, which was entirely absent from the
   docs despite being load-bearing: how a sparse `current` result is merged from
   the chain, the 3-contributor bound, and the derived-field invariant that keeps
