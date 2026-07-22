@@ -110,6 +110,65 @@ def _argon2_params() -> tuple[int, int, int]:
     return mem_mib * 1024, t_cost, _ARGON2_PARALLELISM
 
 
+# ── Password policy (shared by the CLI and the live auth path) ────────
+#
+# Denominated in UTF-8 BYTES, not characters.  Every downstream bound is a
+# byte bound - the 512-byte IRC frame (sender.py), the bot's _MAX_ARG_LEN
+# command-argument cap, and the .encode() every hash function performs - so a
+# len() check in code points silently admits a 128-character non-ASCII
+# passphrase that is 384 bytes on the wire and cannot be transmitted.
+
+MIN_PASSWORD_LEN = 8
+
+# Must stay <= internets.IRCBot._MAX_ARG_LEN, which the dispatcher enforces
+# before the auth handler ever runs; a larger value here would make the
+# auth-side guard unreachable dead code.  Pinned by a test.
+MAX_PASSWORD_BYTES = 128
+
+# bcrypt ignores every byte past 72.  This is not a tunable cost parameter,
+# it is the algorithm's hard input limit, and both ways of hitting it are
+# unacceptable:
+#   * bcrypt < 5.0 silently TRUNCATES, so any password sharing the stored
+#     one's first 72 bytes authenticates.  That is an auth bypass, and it is
+#     silent - the operator believes a 100-character passphrase is in force
+#     when only its first 72 bytes are.
+#   * bcrypt >= 5.0 raises ValueError, which without this guard escapes
+#     hash_bcrypt as an uncaught traceback.
+# We refuse at hash time instead, so an over-long password can never be
+# turned into a hash that under-protects the account.
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def check_password(pw: str, algo: str = "") -> str | None:
+    """Validate a candidate password.  Returns an error string, or None if OK.
+
+    One implementation shared by ``main`` (hash time) and the bot's auth
+    handler (verify time) so the two can never drift apart - they previously
+    disagreed by 8x, which let an operator create a password that hashed
+    successfully and could then never authenticate.
+
+    *algo* enables the algorithm-specific limit; pass the algorithm name when
+    it is known, omit it for a generic check.
+    """
+    if len(pw) < MIN_PASSWORD_LEN:
+        return f"Password must be at least {MIN_PASSWORD_LEN} characters."
+    nbytes = len(pw.encode("utf-8"))
+    if nbytes > MAX_PASSWORD_BYTES:
+        return (f"Password too long ({nbytes} bytes, max "
+                f"{MAX_PASSWORD_BYTES}).")
+    if algo == "bcrypt" and nbytes > BCRYPT_MAX_PASSWORD_BYTES:
+        return (f"Password too long for bcrypt ({nbytes} bytes, max "
+                f"{BCRYPT_MAX_PASSWORD_BYTES} - bcrypt ignores the rest). "
+                f"Use --algo argon2 for a longer passphrase.")
+    if pw != pw.strip():
+        # The bot strips a command argument before dispatch, so a password
+        # with leading or trailing whitespace hashes fine here and then can
+        # never be sent over IRC.  Reject it at creation rather than let the
+        # operator discover it while locked out.
+        return "Password must not start or end with whitespace."
+    return None
+
+
 # ── scrypt ────────────────────────────────────────────────────────────
 
 # OWASP 2024: scrypt N ≥ 2**17 (131 072), r=8, p=1.  We probe downward
@@ -181,8 +240,17 @@ def hash_bcrypt(password: str) -> str:
         import bcrypt
     except ImportError:
         sys.exit("bcrypt not installed - run: pip install bcrypt")
+    raw = password.encode()
+    if len(raw) > BCRYPT_MAX_PASSWORD_BYTES:
+        # Defence in depth: main() screens this via check_password, but
+        # hash_bcrypt is also called directly (tests, any future caller) and
+        # must never silently produce a truncated hash.  See the constant.
+        raise ValueError(
+            f"bcrypt ignores input past {BCRYPT_MAX_PASSWORD_BYTES} bytes; "
+            f"got {len(raw)}. Hashing this would silently protect only the "
+            f"first {BCRYPT_MAX_PASSWORD_BYTES} bytes.")
     rounds = _bcrypt_rounds()
-    return f"bcrypt${bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=rounds)).decode()}"
+    return f"bcrypt${bcrypt.hashpw(raw, bcrypt.gensalt(rounds=rounds)).decode()}"
 
 
 # ── argon2id ──────────────────────────────────────────────────────────
@@ -309,10 +377,8 @@ def main() -> None:
     pw2 = getpass.getpass("Confirm   : ")
     if pw != pw2:
         sys.exit("Passwords do not match.")
-    if len(pw) < 8:
-        sys.exit("Password must be at least 8 characters.")
-    if len(pw) > 1024:
-        sys.exit("Password too long (max 1024 characters).")
+    if err := check_password(pw, args.algo):
+        sys.exit(err)
 
     print("Hashing ...", end=" ", flush=True)
     t0 = time.monotonic()

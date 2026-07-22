@@ -9,6 +9,9 @@ minimums via env so the real hash calls stay fast.
 
 from __future__ import annotations
 
+import pathlib
+import re
+
 import pytest
 
 import hashpw
@@ -303,3 +306,82 @@ class TestMainCLI:
         hashpw.main()
         out = capsys.readouterr().out
         assert "too slow for login UX" in out
+
+
+# ── password policy: byte-denominated limits and the bcrypt 72-byte wall ──
+
+class TestPasswordPolicy:
+    """bcrypt ignores everything past 72 bytes.
+
+    Installed bcrypt 4.x silently TRUNCATES, so a password sharing the stored
+    one's first 72 bytes authenticates - an auth bypass, not a cosmetic limit.
+    bcrypt 5.x raises instead, which surfaces as an uncaught traceback out of
+    hash_bcrypt. Neither is acceptable, so the limit is enforced here.
+    """
+
+    def test_bcrypt_refuses_past_its_72_byte_wall(self, fast_costs):
+        with pytest.raises(ValueError, match="72"):
+            hashpw.hash_bcrypt("a" * 73)
+
+    def test_bcrypt_accepts_exactly_72_bytes(self, fast_costs):
+        # The allow branch: a guard verified only on deny is half-verified.
+        h = hashpw.hash_bcrypt("a" * 72)
+        assert hashpw.verify_password("a" * 72, h) is True
+
+    def test_over_long_bcrypt_password_can_never_be_hashed(self, fast_costs):
+        """The bypass, closed at its only closable point.
+
+        Two passwords differing only after byte 72 hash identically. The guard
+        refuses to create such a hash at all, so the operator never ends up
+        with an account protected by fewer bytes than they chose.
+
+        DOCUMENTED RESIDUAL: this cannot close the VERIFY side. bcrypt
+        truncates the candidate too, so for an already-stored bcrypt hash any
+        longer string sharing its first 72 bytes still authenticates. Fixing
+        that requires rejecting over-long candidates in verify_password, which
+        would lock out an operator whose existing password is over-long - an
+        auth-posture change, deliberately not made here.
+        """
+        base = "a" * 72
+        with pytest.raises(ValueError, match="72"):
+            hashpw.hash_bcrypt(base + "CORRECT-TAIL")
+        with pytest.raises(ValueError, match="72"):
+            hashpw.hash_bcrypt(base + "DIFFERENT-TAIL")
+
+    def test_check_password_limits_are_byte_denominated(self):
+        # 128 CJK characters is 384 UTF-8 bytes - over the limit even though
+        # len() says 128. Every downstream bound (IRC framing, _MAX_ARG_LEN)
+        # is in bytes, so the check must be too.
+        assert hashpw.check_password("\u6f22" * 128) is not None
+        assert hashpw.check_password("a" * hashpw.MAX_PASSWORD_BYTES) is None
+
+    def test_check_password_rejects_untypeable_whitespace(self):
+        # internets.py strips the command argument before dispatch, so a
+        # password with edge whitespace can never be transmitted over IRC.
+        assert hashpw.check_password(" leading-space-pw") is not None
+        assert hashpw.check_password("trailing-space-pw ") is not None
+
+    def test_check_password_enforces_the_bcrypt_wall_per_algo(self):
+        long_pw = "a" * 100
+        assert hashpw.check_password(long_pw, "bcrypt") is not None
+        assert hashpw.check_password(long_pw, "argon2") is None
+
+    def test_check_password_rejects_too_short(self):
+        assert hashpw.check_password("short") is not None
+
+    def test_cap_cannot_be_shadowed_by_the_dispatch_guard(self):
+        """Ordering property, not a tautology.
+
+        internets.py rejects any command argument over _MAX_ARG_LEN before the
+        handler runs. If the password cap ever exceeded that, the auth-side
+        guard would become unreachable dead code.
+        """
+        # Read the constant from source rather than importing internets:
+        # config.py parses argv at import time and would consume pytest's.
+        # This mirrors the repo's existing source-inspection guards.
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "internets.py").read_text()
+        m = re.search(r"^\s*_MAX_ARG_LEN\s*=\s*(\d+)", src, re.M)
+        assert m, "internets.py no longer defines _MAX_ARG_LEN"
+        assert hashpw.MAX_PASSWORD_BYTES <= int(m.group(1))
+

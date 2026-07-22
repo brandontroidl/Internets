@@ -20,7 +20,7 @@ from config import (
 from botlog import (
     log_filter, get_hash, apply_debug, apply_loglevel,
 )
-from hashpw import verify_password
+from hashpw import MAX_PASSWORD_BYTES, verify_password
 from audit_log import default as _audit
 
 log = logging.getLogger("internets")
@@ -117,8 +117,15 @@ class AdminCommandsMixin:
         if not arg:
             self.preply(nick, reply_to, f"{nick}: /MSG {self._nick} AUTH <password>")
             return
-        if len(arg) > 128:
-            self.preply(nick, reply_to, f"{nick}: password too long.")
+        # Same constant hashpw enforces at creation time, and denominated in
+        # the same unit (UTF-8 bytes).  These previously disagreed 8x - hashpw
+        # accepted 1024 characters while this rejected 128 - so an operator
+        # could create a password that hashed cleanly and could then never
+        # authenticate, with no message pointing at length as the cause.
+        if len(arg.encode("utf-8")) > MAX_PASSWORD_BYTES:
+            self.preply(nick, reply_to,
+                f"{nick}: password too long (max {MAX_PASSWORD_BYTES} bytes) - "
+                f"re-generate with hashpw.py.")
             return
 
         k = nick.lower()
