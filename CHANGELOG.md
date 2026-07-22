@@ -19,6 +19,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Feels-like no longer contradicts the temperature beside it.** `.w yosemite
+  national park` reported `Temperature 24.2C :: Feels like 11.3C` at 44%
+  humidity and 6.6mph wind - a figure no apparent-temperature formula produces.
+  `feels_like_c` and `dewpoint_c` are *derived* from an observation's own
+  temperature, but the cross-provider gap-fill imported them from whichever
+  provider had them: NWS reported 24.2C from the nearest station (2900m
+  elevation) with no feels-like, and Open-Meteo's model grid contributed a
+  feels-like of 11.9C computed against its own 13.8C. The same query for San
+  Dimas erred the other way (24.4C shown against a borrowed 28.8C). Both
+  derived fields are now excluded from gap-filling, and NWS populates
+  feels-like from its own observation's `heatIndex`/`windChill`. Feels-like is
+  also shown whenever it is known - the old rule hid it unless it differed by
+  2 degrees, which made "unknown" and "same as the temperature" look identical.
+
+- **Geocode: parks and landmarks are named, not reduced to their state.**
+  `.w yosemite national park` announced itself as `:: CA ::` because Nominatim
+  returns no city/town/village/county for such features and the display
+  collapsed to a bare state. It now reads `Yosemite National Park, CA`, while
+  the reverse-geocode path's bare `lat,lon` fallback is left intact.
+
 - **NWS: a location it doesn't cover is no longer counted as a provider
   failure.** api.weather.gov serves US points only and says so three ways -
   HTTP 400 (`out of bounds`) from `/alerts/active?point=`, HTTP 404 (`Data

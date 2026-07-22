@@ -53,8 +53,13 @@ def _format_current(r: object) -> str:
 
     parts: list[str] = [f"Conditions {desc}", f"Temperature {cf(r.temperature)}"]
 
-    if (r.feels_like_c is not None and r.temperature is not None
-            and abs(r.feels_like_c - r.temperature) >= 2):
+    # Always shown when known.  It used to be suppressed unless it differed
+    # from the actual temperature by 2 degrees, which made "no feels-like" and
+    # "feels-like matches the temperature" indistinguishable - and once
+    # feels-like started coming from the same observation as the temperature
+    # (rather than being borrowed from a provider that measured something
+    # else) the honest answer is usually a close one, not a missing one.
+    if r.feels_like_c is not None:
         parts.append(f"Feels like {cf(r.feels_like_c)}")
 
     parts += [

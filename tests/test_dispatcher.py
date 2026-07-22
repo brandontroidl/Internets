@@ -543,7 +543,11 @@ class TestGapFill:
         out = asyncio.run(d.dispatch("current", 0, 0, "x"))
         assert out.temperature == 24.0 and out.description == "Clear"   # NWS core kept
         assert out.humidity == 48.0 and out.pressure_mb == 1013.0       # filled
-        assert out.dewpoint_c == 12.0 and out.wind_kph == 11.0          # filled
+        assert out.wind_kph == 11.0 and out.visibility_m == 16000.0     # filled
+        # Derived-from-temperature fields are NOT filled across providers: the
+        # donor measured 22.0C, so its dewpoint/feels-like describe a different
+        # observation than the 24.0C shown on the line.
+        assert out.dewpoint_c is None and out.feels_like_c is None
         assert "NWS" in out.source and "Open-Meteo" in out.source       # both credited
         assert nws.calls == 1 and om.calls == 1                         # one extra call
 
@@ -570,6 +574,36 @@ class TestGapFill:
         primary = _wr("NWS", 16.7, desc="Sunny")
         other = _wr("Open-Meteo", 17.3, desc="Partly Cloudy")
         assert primary.fill_gaps(other).description == "Sunny"
+
+    def test_derived_fields_are_never_imported_from_another_observation(self):
+        """feels-like and dewpoint are DERIVED from temperature, so importing
+        them from a provider that reports a different temperature produces a
+        line that contradicts itself.
+
+        Observed live at Yosemite: NWS (nearest station, 2900m) reported
+        24.22C with no feels-like; Open-Meteo (model grid) reported 13.8C and
+        a feels-like of 11.9C computed against ITS temperature. Gap-filling
+        printed 'Temperature 24.2C :: Feels like 11.3C' at 44% humidity and
+        6.6mph wind - no apparent-temperature formula yields that.
+        """
+        primary = _wr("NWS", 24.22, humidity=43.9)           # no feels/dewpoint
+        other = _wr("Open-Meteo", 13.8, feels_like_c=11.9, dewpoint_c=4.9,
+                    wind_kph=11.1, pressure_mb=713.9)
+        merged = primary.fill_gaps(other)
+        assert merged.temperature == 24.22
+        assert merged.feels_like_c is None, "feels-like must match its own temperature"
+        assert merged.dewpoint_c is None, "dewpoint must match its own temperature"
+        # Independent measurements are still worth filling.
+        assert merged.wind_kph == 11.1
+        assert merged.pressure_mb == 713.9
+
+    def test_missing_derived_fields_do_not_keep_the_chain_walking(self):
+        """Since they can't be filled cross-provider, they aren't gaps - the
+        dispatcher must not burn extra provider calls chasing them."""
+        r = _wr("NWS", 24.22, desc="Clear", humidity=43.9, wind_kph=5.4,
+                wind_dir="W", pressure_mb=976.0, visibility_m=17000.0)
+        assert r.feels_like_c is None and r.dewpoint_c is None
+        assert r.has_gaps() is False
 
     def test_has_gaps_true_when_only_description_empty(self):
         """Empty description counts as a gap so the dispatcher keeps walking the

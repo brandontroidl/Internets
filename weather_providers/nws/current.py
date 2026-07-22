@@ -31,10 +31,20 @@ async def fetch(lat: float, lon: float, location: str) -> WeatherResult:
         return v.get("value") if isinstance(v, dict) else v
     temp = _val("temperature")
     wind_speed = _val("windSpeed")
+    # Apparent temperature from THIS observation, never borrowed from another
+    # provider - feels-like is derived from the temperature beside it, so a
+    # value computed against a different reading contradicts the line it sits
+    # on.  NWS populates exactly one of these at a time and nulls both in mild
+    # conditions, which is precisely when the formatter hides feels-like
+    # anyway (it needs a 2-degree difference to show).
+    feels_like = _val("heatIndex")
+    if feels_like is None:
+        feels_like = _val("windChill")
     return WeatherResult(
         source="NWS", temperature=temp,
         description=(p.get("textDescription") or ""),
         location=location,
+        feels_like_c=feels_like,
         humidity=_val("relativeHumidity"),
         wind_kph=wind_speed,
         wind_dir=deg_to_card(_val("windDirection")),

@@ -597,6 +597,18 @@ def _format_name(addr: dict[str, str], fallback: str) -> tuple[str, str]:
     city = _strip_ctrl(addr.get("city") or addr.get("town") or
                        addr.get("village") or addr.get("county") or "")
     fallback = _strip_ctrl(fallback)
+    if not city:
+        # Parks, landmarks and nature reserves carry no city/town/village/
+        # county at all, so "{city}, {state}" collapsed to a bare state and
+        # `.w yosemite national park` announced itself as ":: CA ::".  The
+        # feature's own name is the first component of Nominatim's
+        # display_name ("Yosemite National Park, California, United States").
+        #
+        # Guarded on ", " because the reverse-geocode path passes a bare
+        # "lat,lon" pair as the fallback - comma, no space - and splitting
+        # that would print just the latitude.
+        if ", " in fallback:
+            city = fallback.split(",", 1)[0].strip()
     if cc == "us":
         raw_state = addr.get("state", "")
         state = _STATE_ABBR.get(raw_state, raw_state)

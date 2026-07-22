@@ -56,10 +56,25 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 # Secondary current-conditions fields the formatter renders as "N/A" when
 # missing.  Used by WeatherResult.has_gaps / fill_gaps for cross-provider
-# gap-filling (temperature/description are the core, never gap-filled).
+# gap-filling (temperature is the core, never gap-filled).
+#
+# ``feels_like_c`` and ``dewpoint_c`` are deliberately ABSENT.  Both are
+# DERIVED from an observation's own temperature (plus humidity and wind), so
+# importing them from a provider that measured a different temperature yields
+# a line that contradicts itself.  Observed live at Yosemite: NWS reported
+# 24.2C from the nearest station (2900m elevation) with no feels-like, and
+# Open-Meteo's model grid reported 13.8C with a feels-like of 11.9C computed
+# against ITS temperature - so the bot printed "Temperature 24.2C :: Feels
+# like 11.3C" at 44% humidity and 6.6mph wind, which no apparent-temperature
+# formula produces.  The same query for San Dimas erred the other way (24.4C
+# shown against a borrowed 28.8C).
+#
+# A derived value must come from the SAME observation as the temperature it is
+# derived from, so providers populate these natively or leave them None - the
+# formatter already hides feels-like when it is missing or within 2 degrees.
 _CURRENT_GAP_FIELDS = (
-    "feels_like_c", "humidity", "wind_kph", "wind_dir",
-    "pressure_mb", "visibility_m", "dewpoint_c", "description",
+    "humidity", "wind_kph", "wind_dir",
+    "pressure_mb", "visibility_m", "description",
 )
 
 

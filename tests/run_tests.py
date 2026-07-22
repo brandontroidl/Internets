@@ -718,20 +718,28 @@ def _():
     )
     assert "Calm" in _format_current(r)
 
-@test("weather _format_current: feels-like hidden when < 2° diff")
+@test("weather _format_current: feels-like is shown whenever it is known")
 def _():
     from weather_providers.base import WeatherResult
     from modules.weather import _format_current
+    # Shown even when it nearly matches the temperature: suppressing a close
+    # value made "we don't know" and "it feels like what it is" look the same.
     r_close = WeatherResult(
         source="X", temperature=20.0, description="Clear",
         location="Here", feels_like_c=20.5,
     )
-    assert "Feels like" not in _format_current(r_close)
+    body = _format_current(r_close)
+    assert "Feels like" in body and "20.5C" in body, body
     r_far = WeatherResult(
         source="X", temperature=20.0, description="Clear",
         location="Here", feels_like_c=15.0,
     )
     assert "Feels like" in _format_current(r_far)
+    # Unknown stays absent - never invented from the temperature.
+    r_none = WeatherResult(
+        source="X", temperature=20.0, description="Clear", location="Here",
+    )
+    assert "Feels like" not in _format_current(r_none)
 
 @test("weather .al: a bare state widens to an area query, a place inside it does not")
 def _():
@@ -1847,6 +1855,44 @@ def _():
     from modules.geocode import _format_name
     name, cc = _format_name({}, "my fallback")
     assert name == "my fallback"
+
+@test("geocode: _format_name names the feature when there is no city (parks, landmarks)")
+def _():
+    from modules.geocode import _format_name
+    # Nominatim returns no city/town/village/county for a park or landmark, so
+    # the old "{city}, {state}" collapsed to a bare state: `.w yosemite
+    # national park` announced itself as ":: CA ::".
+    name, cc = _format_name(
+        {"nature_reserve": "Yosemite National Park", "state": "California",
+         "country": "United States", "country_code": "us"},
+        "Yosemite National Park, California, United States",
+    )
+    assert name == "Yosemite National Park, CA", name
+    assert cc == "us"
+    # Same for a non-US landmark.
+    name, _ = _format_name(
+        {"tourism": "Tour Eiffel", "country": "France", "country_code": "fr"},
+        "Tour Eiffel, Avenue Anatole France, Paris, France",
+    )
+    assert name == "Tour Eiffel, France", name
+    # A real city is unaffected.
+    name, _ = _format_name(
+        {"city": "San Dimas", "state": "California", "country_code": "us"},
+        "San Dimas, Los Angeles County, California, United States",
+    )
+    assert name == "San Dimas, CA", name
+
+@test("geocode: _format_name never truncates a coordinate fallback into half a pair")
+def _():
+    from modules.geocode import _format_name
+    # The reverse-geocode path passes "lat,lon" as the fallback.  Splitting it
+    # on a comma the way a display_name is split would print just the latitude.
+    name, cc = _format_name({}, "34.1067,-117.8067")
+    assert name == "34.1067,-117.8067", name
+    # Even when a country is known but no city is.
+    name, cc = _format_name({"country_code": "us", "state": "California"},
+                            "34.1067,-117.8067")
+    assert "34.1067,-117.8067" in name or name == "CA", name
 
 # ── Postal-code classification + routing (Spain-vs-Ohio / Canada fix) ──
 
