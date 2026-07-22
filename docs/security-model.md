@@ -787,31 +787,50 @@ CLI argument). `hashpw.py` itself states no rationale for this choice. Contrast
 `secret_store.py:684`) and prompts only when `--value` is omitted - its stated reason is
 "safer for shell history" (`secret_store.py:686`), not process-listing exposure;
 `secret_store.py` has no argv/process-listing rationale anywhere in the file. `main`
-rejects a mismatch or a length outside `[8, 1024]` characters
-(lines 310-315), hashes, and prints the exact `config.ini` line to paste under `[admin]`
-(lines 340-343).
+rejects a mismatch, then applies the shared policy check (`hashpw.py:392`), hashes, and
+prints the exact `config.ini` line to paste under `[admin]`.
 
-The `[8, 1024]` range is `hashpw.py`'s own policy at hash-creation time; it is not the
-effective password policy end to end. `admin_cmds.py:120-122` rejects any `AUTH` argument
-longer than 128 characters before it ever reaches `verify_password`, so a password of
-129-1024 characters can be hashed successfully by `hashpw.py` and then never authenticate
-over IRC - the two limits disagree by 8x, and `hashpw.py`'s self-test (below) cannot catch
-this because it never goes through `cmd_auth`.
+### Password policy is one shared check, denominated in bytes
 
-A second, similar mismatch: `cmd_auth` verifies `arg.strip()` (`admin_cmds.py:172`), but
-`main` hashes `pw` exactly as `getpass.getpass` returned it, with no stripping before the
-length checks or the hash call (`hashpw.py:388-397`). A password with leading or trailing
-whitespace hashes and self-tests successfully in `hashpw.py`, then can never authenticate
-over IRC, because the stripped value `cmd_auth` checks never matches the hash of the
-unstripped one.
+`check_password(pw, algo)` (`hashpw.py:142`) is the single validator, called both by
+`main` at hash time and - through `MAX_PASSWORD_BYTES` - by `cmd_auth` at verify time
+(`admin_cmds.py:23`, `:142`). One implementation, so the two ends cannot drift:
+
+| rule | constant | why |
+|---|---|---|
+| at least 8 characters | `MIN_PASSWORD_LEN` (`hashpw.py:121`) | floor |
+| at most 128 **UTF-8 bytes** | `MAX_PASSWORD_BYTES` (`hashpw.py:126`) | must stay under the dispatcher's `_MAX_ARG_LEN` and inside the 512-byte IRC frame |
+| at most 72 bytes for bcrypt | `BCRYPT_MAX_PASSWORD_BYTES` (`hashpw.py:139`) | bcrypt ignores every byte past 72 |
+| no leading/trailing whitespace | - | the bot strips a command argument before dispatch, so such a password can never be transmitted |
+
+**Bytes, not characters.** Every downstream bound is a byte bound - the IRC frame, the
+argument cap, and the `.encode()` each hash function performs - so a 128-character
+non-ASCII passphrase is up to 384 bytes on the wire and is rejected.
+
+**The bcrypt limit is a security limit, not a nuisance.** bcrypt silently truncated at 72
+bytes on the installed 4.x, so a longer password authenticated on any string sharing its
+first 72 bytes; on 5.x the same input raises. Both are refused up front now, at hash time
+and at verify time (`hashpw.py:320-330`), the latter because bcrypt truncates the
+*candidate* too. Consequence for an operator: **a pre-existing bcrypt password longer
+than 72 bytes no longer authenticates** and the hash must be regenerated. `.auth` answers
+only `wrong password.`; the diagnosis is in the log:
+
+```
+WARNING internets.hashpw: bcrypt candidate exceeds the 72-byte limit - refusing.
+If this is the real password, re-generate the hash with hashpw.py (argon2 has no such limit).
+```
+
+Recovery is `python hashpw.py --algo argon2` (or plain `hashpw.py` for stdlib scrypt) and
+pasting the new `password_hash`. No restart: `cmd_auth` calls `get_hash()` on every
+attempt, which re-reads the config.
 
 It then self-tests by calling `verify_password` against both the correct
-and an incorrect password before declaring success (lines 345-349) - a hashing bug that
+and an incorrect password before declaring success (`hashpw.py:423`) - a hashing bug that
 produced a hash nothing could ever verify against would otherwise ship silently. It also
-flags parameter weakness at the extremes: under `_FAST_HASH_THRESHOLD_S = 0.050` warns the
-cost is too low for a 2026 GPU/ASIC attacker (lines 333-335), over
-`_SLOW_HASH_THRESHOLD_S = 1.000` notes it may be too slow for login UX and points at the
-tuning env vars (lines 336-338).
+flags parameter weakness at the extremes: under `_FAST_HASH_THRESHOLD_S = 0.050`
+(`hashpw.py:371`) warns the cost is too low for a 2026 GPU/ASIC attacker, over
+`_SLOW_HASH_THRESHOLD_S = 1.000` (`hashpw.py:372`) notes it may be too slow for login UX
+and points at the tuning env vars (`hashpw.py:415`).
 
 The comment above these thresholds (`hashpw.py:368-369`) claims the module "back[s] off
 automatically (drop memory by 25%, then time_cost by 1)" past the slow threshold - no such
