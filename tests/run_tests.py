@@ -2114,7 +2114,7 @@ _CITY_ROW = [{
 # landmark everyone means is an attraction.  Preferring the settlement blindly
 # regressed this query to Khayelitsha - the scores are what separate them.
 _GRACELAND_ZA_ROW = [{
-    "lat": "-34.0181", "lon": "18.6753", "importance": 0.1553,
+    "lat": "-34.0181", "lon": "18.6753", "importance": 0.1467,   # measured
     "display_name": "Graceland, Khayelitsha, Cape Town, South Africa",
     "address": {"suburb": "Graceland", "city": "Cape Town",
                 "country": "South Africa", "country_code": "za"},

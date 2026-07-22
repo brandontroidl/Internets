@@ -943,6 +943,12 @@ async def geocode(query: str, user_agent: str, *,
     # Oxford Circus (a wrong answer) scores 0.5086 and Graceland (a right one)
     # 0.5087.  It is only used here to rank two candidate answers to the SAME
     # query against each other, which is what it actually measures.
+    #
+    # If an upstream ever stops returning ``importance``, both scores fall to
+    # 0.0 and the tie goes to the settlement.  That still fixes the casino
+    # case and degrades no worse than the old behaviour, but it silently
+    # reinstates the Graceland one - so the ranking is only as good as the
+    # field.  nominatim.openstreetmap.org returns it on every search here.
     sett_hit, sett_imp, stop = await _search_place(
         query, hdrs, feature_type="settlement")
     if stop:

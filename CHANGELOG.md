@@ -19,6 +19,36 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Geocode: a business no longer outranks the place it was named after.**
+  Nominatim free-text `q=` returns the best-ranked OSM object of any class, so
+  `.al new york new york` resolved to the Las Vegas casino and
+  `.al north shore new jersey` to a residential street. A
+  `featureType=settlement` search now runs alongside the free-text one and the
+  more prominent object wins, with a full-query settlement match always beating
+  a hit found only after dropping tokens - so `graceland` still resolves to
+  Memphis rather than a South African township, and parks and landmarks still
+  resolve through the unconstrained path. `importance` is used only to rank two
+  answers to the same query; it is meaningless as an absolute bar (Oxford Circus
+  scores 0.5086, Graceland 0.5087).
+
+- **Wildfire: report a fire's current size, not its size at discovery.**
+  `.wildfire` printed "46 active fire(s) nearby :: Largest 0 acres". The NIFC
+  provider read WFIGS `DiscoveryAcres`, which is the initial-report size and
+  sits at a dispatch default of 0.01 on nearly every record; `IncidentSize`
+  carries the current size. The same query now reports the 2690-acre SUMMIT
+  fire. Most records carry no size, so the count says how many are sized, and
+  sub-acre fires no longer round to a bare "0 acres".
+
+- **Alerts: a bare state name queries the whole state.**
+  `.al mississippi` returned one Heat Advisory while a tropical storm sat on
+  the coast, because the NWS lookup was always `?point=lat,lon` and a state
+  geocodes to a single inland point (1 alert for that point, 17 for `area=MS`).
+  A whole-query state name or USPS code now uses `?area=`; naming a place
+  inside a state ("jackson mississippi") stays a point lookup. Per-zone
+  duplicate alerts are collapsed, the list is ordered by severity so a warning
+  cannot be buried under routine statements, and anything past the 5-line cap
+  is reported as "... and N more" instead of vanishing.
+
 - **Weather: gap-fill N/A current-conditions fields from the fallback chain.**
   Providers build results with `.get()`, so a sparse upstream response yielded a
   non-None result with missing fields; the dispatcher returned it and the
