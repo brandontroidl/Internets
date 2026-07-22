@@ -397,7 +397,7 @@ drain task and awaits it (`sender.py:67`).
 
 `unload_module` (`internets.py:497`) calls `on_unload()`, removes the module's commands and
 the instance. `reload_module` (`internets.py:514`) is unload-then-load. `cmd_reloadall`
-(`admin_cmds.py:409`) snapshots the loaded names and reloads each.
+(`admin_cmds.py:458`) snapshots the loaded names and reloads each.
 
 The `BotModule.COMMANDS` contract is validated at class-definition time
 (`__init_subclass__`, `modules/base.py:220`): each mapped method must exist and be an
@@ -419,7 +419,7 @@ re-reading `geocode.py` from disk.
 
 Consequence: `.reload weather` and `.reloadall` refresh the COMMAND modules but NOT helper
 modules like `geocode` or `units`. An edit to `modules/geocode.py` is invisible until a
-full process restart. Use `.restart` (`admin_cmds.py:424`), which sets `_restart_flag` and
+full process restart. Use `.restart` (`admin_cmds.py:473`), which sets `_restart_flag` and
 requests shutdown; `_main` then `execv`s a brand-new interpreter (`internets.py:1451-1482`)
 with an empty `sys.modules`, so every file is re-read.
 
@@ -585,8 +585,8 @@ do not raise, do not log, and have no error branch to test. A hostile or
 truncated line from the server degrades to an empty or partial result rather
 than an exception, so a malformed line cannot take the read loop down.
 
-`sasl_plain_payload` (`protocol.py:105-108`) is the exception and is not
-wire-facing: it encodes with `.encode("utf-8")` (`protocol.py:107`), which
+`sasl_plain_payload` (`protocol.py:122-125`) is the exception and is not
+wire-facing: it encodes with `.encode("utf-8")` (`protocol.py:124`), which
 raises `UnicodeEncodeError` on any surrogate codepoint. Its inputs are
 `self._nick` and the configured NickServ password (`internets.py:914`), not
 server output, and the `errors="replace"` decode above means a surrogate cannot
@@ -669,21 +669,21 @@ NAMES path does not consult it - see 9.5.
 
 ### 9.4 `parse_mode_changes`: parameter alignment
 
-`parse_mode_changes` (`protocol.py:54-89`) turns a MODE string into
+`parse_mode_changes` (`protocol.py:71-106`) turns a MODE string into
 `[(adding, mode_char, param)]`. Getting this wrong desynchronises every
 following parameter, which is why the ISUPPORT types are parsed at all.
 
 Three behaviours worth knowing:
 
-- **`adding` defaults to `True`** (`protocol.py:66`), so a mode string with no
+- **`adding` defaults to `True`** (`protocol.py:83`), so a mode string with no
   leading sign is treated as additive. The caller's regex requires a leading
   `+`/`-`, so this is unreachable from the wire but matters if you call the
   function directly.
-- **`prefix_modes` is consulted before `chanmode_types`** (`protocol.py:80` vs
+- **`prefix_modes` is consulted before `chanmode_types`** (`protocol.py:97` vs
   `:83`). A mode char in both tables is unconditionally treated as
   parameter-taking, whatever its declared ISUPPORT type.
 - **Argument exhaustion is sticky.** `take_param` increments `arg_idx` even when
-  `args` is already exhausted (`protocol.py:71-72`), so once the parameters run
+  `args` is already exhausted (`protocol.py:88-89`), so once the parameters run
   out every subsequent parameter-taking mode also gets `None`. The index is
   never rewound.
 
@@ -694,11 +694,11 @@ parsed and then discarded.
 
 ### 9.5 `parse_names_entry` and its hardcoded prefix set
 
-`parse_names_entry` (`protocol.py:92-102`) strips the literal set `~&@%+`
-(`protocol.py:97`) and reports op status for `~`, `&`, `@` only
-(`protocol.py:101`) - halfop and voice are not chanops. An entry that is
+`parse_names_entry` (`protocol.py:109-119`) strips the literal set `~&@%+`
+(`protocol.py:114`) and reports op status for `~`, `&`, `@` only
+(`protocol.py:118`) - halfop and voice are not chanops. An entry that is
 entirely prefix characters returns `(entry, False)` rather than an empty nick
-(`protocol.py:98-99`).
+(`protocol.py:115-116`).
 
 That set is a literal, not the PREFIX symbol map the bot already parsed and
 threw away. On a network advertising a prefix symbol outside `~&@%+`, `lstrip`
@@ -805,7 +805,7 @@ argument uses the reason `"Console shutdown"` (`console.py:97`).
 
 **Only the command word is lowercased** (`console.py:86`); arguments keep their
 case. `cmd_debug` on the IRC side lowercases the entire argument string
-(`admin_cmds.py:888`), so `debug WEATHER` at the console and `.debug WEATHER`
+(`admin_cmds.py:937`), so `debug WEATHER` at the console and `.debug WEATHER`
 over IRC do not register the same subsystem. The console form preserves
 `WEATHER`, which matches no real logger name, so it prints a confirmation and
 changes nothing. Use lowercase subsystem names at the console.

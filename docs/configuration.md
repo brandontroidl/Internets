@@ -148,7 +148,7 @@ default is also `"90"`).
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:456` context | Hash gating `.load`/`.unload`/`.reload`. |
+| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:505` context | Hash gating `.load`/`.unload`/`.reload`. |
 
 `get_hash()` (`botlog.py:164-174`) calls `reload_config()` first, then reads
 `cfg["admin"].get("password_hash","").strip()` - so the value is re-pulled live (honoring the
@@ -224,9 +224,9 @@ The exporter only starts if the `[metrics]` section exists **and** `enable` is t
 Not in the template. `modules/seen.py:63-64` reads `[seen] file` (default `seen.json`) if the
 section exists, else uses `seen.json`. Retention (`_max_age_days = 180`) is hardcoded in the
 module, not configurable (`modules/seen.py:70`). The generic `_state_file(cfg, section, default)`
-helper in `admin_cmds.py:1027-1032` follows the same `[section].file` convention for module state
+helper in `admin_cmds.py:1076-1081` follows the same `[section].file` convention for module state
 files; the literal key name `file` is hardcoded inside the helper (`cfg[section].get("file", default)`,
-`admin_cmds.py:1032`), so it implements the convention without taking the key as a parameter.
+`admin_cmds.py:1081`), so it implements the convention without taking the key as a parameter.
 
 ## Secret model
 

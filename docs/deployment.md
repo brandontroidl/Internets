@@ -142,7 +142,7 @@ filter instance:
 
 Setting a base level via `.loglevel LEVEL` also forces `global_debug` off
 (`botlog.py:278`). `.rehash` resets the base level from `[logging] level` and clears all
-debug subsystems (`admin_cmds.py:451`).
+debug subsystems (`admin_cmds.py:500`).
 
 (startup-validation)=
 ### Startup validation (can refuse to boot)
@@ -230,7 +230,7 @@ loser, not the incumbent). Failures return a generic "see log for details" to IR
 
 ### `.rehash` / SIGHUP - config only, no link drop
 
-`.rehash` (`admin_cmds.py:434`) and SIGHUP (`_on_sighup`, `internets.py:1341`) both call
+`.rehash` (`admin_cmds.py:483`) and SIGHUP (`_on_sighup`, `internets.py:1341`) both call
 `reload_config()` to re-read `config.ini` + `config.local.ini` into the live `cfg`, then
 clear all admin sessions defensively. What this refreshes: values read at use-time, e.g.
 `command_prefix` via `_cmd_prefix()` (`internets.py:599`), which is why the core reads the
@@ -244,7 +244,7 @@ full restart. `.rehash` also re-validates the hash prefix and resets the log bas
 
 ### Restart (execv)
 
-`.restart` (`admin_cmds.py:424`) sets `bot._restart_flag = True` then `request_shutdown`.
+`.restart` (`admin_cmds.py:473`) sets `bot._restart_flag = True` then `request_shutdown`.
 After `graceful_shutdown` completes and tasks drain, `_main` (`internets.py:1451`) closes
 logging file handlers (clean rotation across the restart), **releases the process lock**
 (PID survives `execv`, see [Process lock](#process-lock-single-instance-enforcement)),
