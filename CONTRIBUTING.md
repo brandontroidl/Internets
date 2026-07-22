@@ -221,6 +221,37 @@ at the top, elevating per-job only where a SARIF upload needs
   no security value. The remaining open `py/overly-permissive-file` alerts are
   reviewed and intentionally accepted - do not "fix" them without discussion.
 
+## After editing a source file: re-point the doc citations
+
+The docs cite source by line number throughout (`internets.py:357`). **Editing a
+source file silently invalidates every citation below the edit**, and nothing
+catches it for you: the cited line still exists, it just describes something
+else now. A Sphinx build is happy, a range check is happy, and the doc quietly
+starts lying.
+
+So after a change that adds or removes lines in a cited file:
+
+```bash
+scripts/remap-doc-citations.py HEAD internets.py admin_cmds.py           # report
+scripts/remap-doc-citations.py HEAD internets.py admin_cmds.py --apply   # rewrite
+```
+
+The ref is the last commit where the docs and that file agreed - usually `HEAD`
+if you have not committed the source change yet.
+
+Two things the script cannot do for you:
+
+- **UNMAPPABLE citations** point at lines that no longer exist at all. Those
+  need a human, and the prose around them is usually stale too, not just the
+  number.
+- **Spot-check by content afterwards.** `difflib` can mis-anchor when a block
+  both moves and changes in one edit, and an off-by-one still resolves to a real
+  line. Open two or three of the rewritten citations and confirm they say what
+  the sentence claims.
+
+This is not hypothetical: a single session's source edits left roughly 370
+citations pointing at the wrong lines across `docs/`, twice.
+
 ## Building the documentation
 
 ```bash
