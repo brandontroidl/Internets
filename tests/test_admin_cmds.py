@@ -21,6 +21,8 @@ import threading
 import time
 from pathlib import Path
 
+import pathlib
+
 import pytest
 
 # config.py calls argparse.parse_args() at import time; admin_cmds imports
@@ -1018,3 +1020,90 @@ class TestShutdown:
         run(bot.cmd_shutdown("alice", "#c", "maintenance"))
         assert "Shutting down: maintenance" in bot.text()
         assert bot.shutdowns == ["maintenance"]
+
+
+class TestAuthFailureAuditing:
+    """The audit log recorded successful logins and not attacks.
+
+    Adding the failure record is easy to get wrong in two ways that matter more
+    than the omission: writing it inside _auth_lock deadlocks the bot under an
+    auth flood (is_admin takes the same lock on every inbound command), and
+    auditing the lockout branch churns the log because that branch fires on
+    EVERY attempt while locked out.
+    """
+
+    @staticmethod
+    def _records(audit):
+        """AuditLog exposes no reader; the log is JSON lines on disk."""
+        import json
+        return [json.loads(ln) for ln in
+                pathlib.Path(audit.path).read_text().splitlines() if ln.strip()]
+
+    def _setup(self, bot, monkeypatch, ok=False):
+        monkeypatch.setattr(admin_cmds, "get_hash", lambda: "argon2$x")
+        monkeypatch.setattr(admin_cmds, "verify_password", lambda pw, h: ok)
+        bot._nick_hosts["alice"] = "alice@host"
+
+    def test_failed_auth_is_recorded(self, bot, monkeypatch, audit):
+        self._setup(bot, monkeypatch)
+        run(bot.cmd_auth("alice", "alice", "bad"))
+        actions = [e["action"] for e in self._records(audit)]
+        assert "auth_failed" in actions
+
+    def test_failure_record_carries_no_password_length_oracle(
+            self, bot, monkeypatch, audit):
+        """Two wrong passwords of very different lengths must be
+        indistinguishable in the durable record."""
+        self._setup(bot, monkeypatch)
+        run(bot.cmd_auth("alice", "alice", "abcd1234"))
+        run(bot.cmd_auth("alice", "alice", "z" * 100))
+        recs = [e for e in self._records(audit) if e["action"] == "auth_failed"]
+        assert len(recs) == 2
+        assert recs[0]["args"] != {"len": 8}
+        # Whatever is carried must be identical apart from the counter.
+        assert str(8) not in str(recs[0]["args"])
+        assert str(100) not in str(recs[1]["args"])
+
+    def test_lockout_is_recorded_once_at_the_transition_not_per_attempt(
+            self, bot, monkeypatch, audit):
+        """The volume cap. The lockout branch is the highest-volume path."""
+        self._setup(bot, monkeypatch)
+        for _ in range(bot._AUTH_MAX_FAILS + 15):
+            run(bot.cmd_auth("alice", "alice", "bad"))
+        actions = [e["action"] for e in self._records(audit)]
+        assert actions.count("auth_lockout") == 1, actions.count("auth_lockout")
+        # Failures stop being recorded once locked out, so a sustained flood
+        # cannot churn the audit log through its rotation.
+        assert actions.count("auth_failed") <= bot._AUTH_MAX_FAILS
+
+    def test_audit_write_never_happens_under_the_auth_lock(
+            self, bot, monkeypatch, audit):
+        """is_admin takes _auth_lock on every inbound command; holding it
+        across a blocking disk write stalls the whole event loop."""
+        self._setup(bot, monkeypatch)
+        seen = {}
+
+        real = audit.record
+
+        def spy(*a, **kw):
+            got = bot._auth_lock.acquire(blocking=False)
+            seen["free"] = got
+            if got:
+                bot._auth_lock.release()
+            return real(*a, **kw)
+
+        monkeypatch.setattr(audit, "record", spy)
+        run(bot.cmd_auth("alice", "alice", "bad"))
+        assert seen.get("free") is True, "_audit ran while holding _auth_lock"
+
+    def test_actor_control_characters_are_stripped_before_recording(
+            self, bot, monkeypatch, audit):
+        """A failed auth is reachable by anyone, so the actor string is now
+        attacker-controlled. It must not be able to forge columns in .audit."""
+        self._setup(bot, monkeypatch)
+        bot._nick_hosts["ev\x02il"] = "e@h"
+        run(bot.cmd_auth("ev\x02il", "chan", "bad"))
+        for e in self._records(audit):
+            assert "\x02" not in e["actor"]
+            assert all(ord(c) >= 0x20 for c in e["actor"])
+

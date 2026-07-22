@@ -23,6 +23,16 @@ from botlog import (
 from hashpw import MAX_PASSWORD_BYTES, verify_password
 from audit_log import default as _audit
 
+# C0/C1 control bytes, stripped from anything attacker-influenced that lands in
+# a durable audit record.  Local to admin_cmds so this module stays independent
+# of the modules/ package.
+_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _clean_actor(s: object, max_len: int = 64) -> str:
+    """Strip control bytes and bound the length of an audit actor/hostmask."""
+    return _CTRL_RE.sub("", str(s))[:max_len]
+
 log = logging.getLogger("internets")
 
 
@@ -89,7 +99,14 @@ class AdminCommandsMixin:
         """
         try:
             hostmask = self._nick_hosts.get(nick.lower(), "")
-            _audit().record(nick, hostmask, action, args)
+            # Strip control bytes from the actor and hostmask before they
+            # reach a durable record.  Failed-auth records made this path
+            # reachable by unauthenticated users, so the actor string is
+            # attacker-influenced; `.audit` renders it into a PRIVMSG, where a
+            # formatting byte would forge an extra column and let a reader
+            # attribute an action to the wrong nick.
+            _audit().record(_clean_actor(nick), _clean_actor(hostmask),
+                            action, args)
         except Exception as e:
             log.warning(f"audit_log record failed: {e}")
 
@@ -205,6 +222,31 @@ class AdminCommandsMixin:
             hm = self._nick_hosts.get(k, "unknown")
             self.preply(nick, reply_to, f"{nick}: wrong password.")
             log.warning(f"Failed auth: {nick} ({hm}) {new}/{self._AUTH_MAX_FAILS}")
+            # Audit the attack, not only the success.  Three things matter
+            # here and each is load-bearing:
+            #
+            # 1. OUTSIDE _auth_lock.  is_admin takes that same lock on every
+            #    inbound command, so holding it across a blocking disk write
+            #    stalls the event loop for the whole channel under a flood.
+            # 2. OFF the loop, via to_thread - record() writes and fsyncs.
+            # 3. CAPPED.  Recording stops once the nick is locked out (further
+            #    attempts return from the lockout branch above, which
+            #    deliberately audits nothing), so a sustained flood cannot
+            #    churn the 5MB audit log through its rotation and destroy
+            #    older forensic history.  At most _AUTH_MAX_FAILS + 1 records
+            #    per nick per lockout window.
+            #
+            # args carries the counter only - never the password, its length,
+            # or any derivative, since this record is durable and readable via
+            # `.audit`.
+            await asyncio.to_thread(
+                self._audit, nick, "auth_failed",
+                {"fails": new, "max": self._AUTH_MAX_FAILS})
+            if new >= self._AUTH_MAX_FAILS:
+                # The transition into lockout, recorded once.
+                await asyncio.to_thread(
+                    self._audit, nick, "auth_lockout",
+                    {"fails": new, "window_s": self._AUTH_LOCKOUT})
 
     async def cmd_deauth(self, nick: str, reply_to: str, arg: str | None) -> None:
         """End the current admin session."""

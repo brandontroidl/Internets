@@ -6,6 +6,42 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **bcrypt no longer silently truncates a long password.** `hash_bcrypt` passed
+  the password straight to `bcrypt.hashpw`, which ignores every byte past 72. On
+  the installed bcrypt 4.3.0 that meant an over-long password was silently cut
+  down and any string sharing its first 72 bytes authenticated; demonstrated
+  with an 84-char stored password and a 94-char attacker password both verifying
+  `True`. Refused now at hash time *and* at verify time, so an already-stored
+  hash cannot be matched by a longer candidate either. Operators on scrypt (the
+  CLI default) or argon2 are unaffected. An operator whose existing bcrypt
+  password exceeds 72 bytes must re-run `hashpw.py`.
+- **Failed authentication is audit-logged.** The tamper-evident log recorded
+  successful logins and not attacks. Failures and the lockout transition are now
+  recorded, deliberately *outside* `_auth_lock` and off the event loop (holding
+  that lock across a disk write stalls every inbound command, since `is_admin`
+  takes it), capped at `_AUTH_MAX_FAILS + 1` records per nick per lockout window
+  so a flood cannot churn the log through rotation, and carrying only the
+  failure counter - never the password or its length.
+- **Audit actor strings are sanitised.** Failed-auth records made the actor
+  attacker-influenced; control bytes are stripped before anything reaches a
+  durable record, so a crafted nick cannot forge a column in `.audit` output.
+
+### Fixed
+
+- **A malformed ISUPPORT token no longer wipes the mode tables.** A present but
+  malformed `PREFIX=` stored an empty mode set, which silently ended all
+  MODE-driven chanop tracking. Both parsers now return `None` for a malformed
+  token, which the caller refuses; `CHANMODES` is validated structurally, since
+  a truncated `beI` parses to a non-empty dict that would drop `k`/`l` and shift
+  every following MODE parameter. Both tables are also re-seeded on reconnect -
+  they are per-connection facts and a reconnect can land on a different server.
+- **The two admin password length caps agreed.** `hashpw` accepted 1024
+  characters while `cmd_auth` rejected anything over 128, so a password could
+  hash cleanly and then never authenticate. One shared constant now, denominated
+  in UTF-8 bytes rather than code points.
+
 ### Documentation
 
 - **Documented the four subsystems that had no dedicated section anywhere**:
