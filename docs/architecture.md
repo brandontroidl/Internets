@@ -26,8 +26,9 @@ top-level tasks:
 
 - `console` - only when `--no-console` is unset AND stdin is an interactive TTY
   (`internets.py:1362`; the TTY check is `console.should_skip_console()`). Skipping on a
-  non-TTY both avoids an EOF spin loop and refuses admin-equivalent console access to
-  whatever is piped in.
+  non-TTY refuses admin-equivalent console access to whatever is piped in. That is a
+  security reason and it is the only one - there is no EOF spin loop to prevent, since
+  the dispatch loop returns on the first `EOFError` (`console.py:81-82`).
 - `bot` - `bot.run()` (`internets.py:1367`).
 
 `asyncio.wait(..., FIRST_COMPLETED)` (`internets.py:1369`) blocks until either exits.
@@ -36,12 +37,13 @@ If the console exits first while the bot is still running, `_main` calls
 than cancelling the bot task (which would skip `graceful_shutdown`,
 `internets.py:1373-1382`).
 
-Console teardown gotcha: the console is parked in
-`asyncio.to_thread(input, "> ")`, a ThreadPoolExecutor worker blocked on a `read(0)`
-syscall. Cancelling the asyncio task does not interrupt the syscall, so
-`asyncio.run`'s `shutdown_default_executor()` would hang forever. `_main` closes
-`sys.stdin` (`internets.py:1397`) to make the blocking read raise/return, unblocking
-`input()` so the worker returns and the executor shuts down.
+Console teardown gotcha: the console is parked in `input()` on a dedicated
+`threading.Thread(daemon=True)` (`console.py:144`), blocked on a `read(0)` syscall that
+cancelling the asyncio task does not interrupt. It is deliberately NOT an
+`asyncio.to_thread` worker: such a worker is non-daemon and on the default executor, so
+`asyncio.run`'s `shutdown_default_executor()` would wait forever for it. `_main` closes
+`sys.stdin` (`internets.py:1397`) to unblock the read, and the thread being a daemon
+guarantees cleanup completes even if it does not return. Full reasoning in section 10.2.
 
 After all tasks drain, if `bot._restart_flag` is set, `_main` flushes and closes log
 handlers, releases the process lock, and re-execs: `os.execv` on POSIX, a
@@ -57,7 +59,9 @@ would make the new image see its own old PID as a live holder and refuse to star
 - to_thread workers: module handlers offload blocking I/O (HTTP via `requests`, disk,
   password hashing) with `asyncio.to_thread` (`modules/base.py:206`). These run on the
   default executor, off the loop.
-- Console input thread: one to_thread worker parked in `input()`.
+- `console-input` daemon thread: parked in `input()` (`console.py:144`). Explicitly a
+  raw `threading.Thread(daemon=True)`, **not** an `asyncio.to_thread` worker - see
+  section 10.2 for why that distinction is load-bearing rather than stylistic.
 
 Cross-thread mutation is guarded by explicit locks (`threading.Lock`), not by relying on
 the GIL, so the design holds under free-threaded / GIL-disabled Python. Locks:
@@ -557,3 +561,262 @@ Log-flush discipline: handlers are flushed in `graceful_shutdown` (`internets.py
 again before `execv` in `_main` (`internets.py:1408-1411`,`1416-1418`), because `execv` replaces
 the process image without running atexit handlers - unflushed log records would be lost across a
 restart.
+
+## 9. Protocol helpers (`protocol.py`)
+
+Pure functions over strings. No bot state, no I/O, no logging, no imports beyond
+`base64` and `re`. Extracted from `internets.py` so the bot class holds
+orchestration and state while parsing stays independently testable
+(`tests/test_protocol.py`, plus the protocol block in `tests/run_tests.py`).
+
+The read loop decodes with `errors="replace"` (`internets.py:1210`), so every
+string reaching these functions is already valid UTF-8 with U+FFFD substituted
+for undecodable bytes. That is what lets the wire-facing parsers be written
+without defensive decoding.
+
+### 9.1 The five wire-facing parsers are total
+
+`strip_tags`, `parse_isupport_chanmodes`, `parse_isupport_prefix`,
+`parse_mode_changes` and `parse_names_entry` return a value for any `str`. They
+do not raise, do not log, and have no error branch to test. A hostile or
+truncated line from the server degrades to an empty or partial result rather
+than an exception, so a malformed line cannot take the read loop down.
+
+`sasl_plain_payload` (`protocol.py:105-108`) is the exception and is not
+wire-facing: it encodes with `.encode("utf-8")` (`protocol.py:107`), which
+raises `UnicodeEncodeError` on any surrogate codepoint. Its inputs are
+`self._nick` and the configured NickServ password (`internets.py:899`), not
+server output, and the `errors="replace"` decode above means a surrogate cannot
+arrive from the wire in the first place.
+
+### 9.2 Where the parsers sit in the pipeline
+
+`_process` (`internets.py:833`) calls `strip_tags` first (`internets.py:834`),
+then dispatches in a fixed order:
+
+| step | line | effect |
+|---|---|---|
+| `strip_tags` | 834 | IRCv3 tag prefix removed |
+| PING | 835-839 | replies PONG, **returns** |
+| PONG | 843-845 | marks link live, **returns** |
+| module `on_raw` fan-out | 866 | every loaded module sees the line |
+| `_handle_cap` / `_handle_numeric` / `_handle_membership` | 868-870 | first match **returns** |
+| `_handle_privmsg` | 871 | fallthrough |
+
+Two consequences a module author needs:
+
+- **Modules never receive PING or PONG lines.** Both branches return before the
+  fan-out at 866. Do not write an `on_raw` that expects to see keepalive
+  traffic.
+- A line consisting only of tags becomes `""` after `strip_tags`. It survives
+  the PING/PONG checks and still reaches every module's `on_raw`, so `on_raw`
+  implementations must tolerate an empty string.
+
+### 9.3 ISUPPORT parsing and the caller's storage decision
+
+`parse_isupport_chanmodes` (`protocol.py:21-36`) splits `CHANMODES=A,B,C,D` into
+`{mode: type}`. Missing trailing groups are tolerated (`protocol.py:33`); a
+fifth or later group is ignored, because the loop is over the four literal
+labels (`protocol.py:32`).
+
+`parse_isupport_prefix` (`protocol.py:39-51`) parses `PREFIX=(modes)symbols`.
+The regex is `re.match` (`protocol.py:45`), so it is anchored at string start -
+any leading junk before `(` yields `(set(), {})`. The symbol map is zipped to
+`min(len(modes), len(symbols))` (`protocol.py:50`), so a mismatched token
+truncates rather than raising.
+
+The parsers themselves are safe. **The risk is in what the caller does with the
+result.** Both assignments are unconditional once the outer regex matched:
+
+```python
+if cm: self._chanmode_types = parse_isupport_chanmodes(cm.group(1))   # internets.py:935
+if pm: self._prefix_modes, _ = parse_isupport_prefix(pm.group(1))     # internets.py:937
+```
+
+A 005 line carrying no `CHANMODES=`/`PREFIX=` token is harmless - the guard
+skips the call and the RFC-safe constructor defaults survive
+(`internets.py:237-241`). But a token that is *present and malformed* replaces
+those defaults with the degraded parse. For `PREFIX`, a value that fails the
+anchored match stores an empty `_prefix_modes`, and `op_modes = {"o","a","q"} &
+self._prefix_modes` (`internets.py:971`) is then empty, so MODE-driven chanop
+tracking silently stops. See section 9.6.
+
+`_chanmode_types` and `_prefix_modes` are also **not reset on reconnect**.
+`_connect` clears `_caps` and `_chanops` (`internets.py:748-754`) but leaves the
+ISUPPORT tables holding the previous connection's values until a new 005
+arrives.
+
+The symbol map from `parse_isupport_prefix` is discarded at the call site
+(`internets.py:937` binds it to `_`). Only the mode set is kept, and it is used
+on the MODE path (`internets.py:971`). The NAMES path does not consult it - see
+9.5.
+
+### 9.4 `parse_mode_changes`: parameter alignment
+
+`parse_mode_changes` (`protocol.py:54-89`) turns a MODE string into
+`[(adding, mode_char, param)]`. Getting this wrong desynchronises every
+following parameter, which is why the ISUPPORT types are parsed at all.
+
+Three behaviours worth knowing:
+
+- **`adding` defaults to `True`** (`protocol.py:66`), so a mode string with no
+  leading sign is treated as additive. The caller's regex requires a leading
+  `+`/`-`, so this is unreachable from the wire but matters if you call the
+  function directly.
+- **`prefix_modes` is consulted before `chanmode_types`** (`protocol.py:80` vs
+  `:83`). A mode char in both tables is unconditionally treated as
+  parameter-taking, whatever its declared ISUPPORT type.
+- **Argument exhaustion is sticky.** `take_param` increments `arg_idx` even when
+  `args` is already exhausted (`protocol.py:71-72`), so once the parameters run
+  out every subsequent parameter-taking mode also gets `None`. The index is
+  never rewound.
+
+At the call site the result is filtered hard: only `{"o","a","q"}` intersected
+with the advertised prefix modes (`internets.py:971`), and only changes carrying
+a truthy parameter (`internets.py:979`), drive `_chanops`. Halfop and voice are
+parsed and then discarded.
+
+### 9.5 `parse_names_entry` and its hardcoded prefix set
+
+`parse_names_entry` (`protocol.py:92-102`) strips the literal set `~&@%+`
+(`protocol.py:97`) and reports op status for `~`, `&`, `@` only
+(`protocol.py:101`) - halfop and voice are not chanops. An entry that is
+entirely prefix characters returns `(entry, False)` rather than an empty nick
+(`protocol.py:98-99`).
+
+That set is a literal, not the PREFIX symbol map the bot already parsed and
+threw away. On a network advertising a prefix symbol outside `~&@%+`, `lstrip`
+leaves the symbol attached and the returned "nick" carries it into `_chanops`
+(`internets.py:966-967`). This is the one place the discarded symbol map would
+have earned its keep.
+
+### 9.6 Gotchas
+
+- **A malformed `PREFIX=` token disables op tracking silently.** Covered in 9.3.
+  There is no log line and no fallback to the constructor default; ops simply
+  stop being recorded. If chanop state is ever mysteriously empty on one
+  network, check the 005 line before anything else.
+- **NAMES only ever adds ops.** `internets.py:964` uses
+  `setdefault(chan, set())` and never clears the channel's set first, so a NAMES
+  refresh on an already-joined channel cannot remove someone deopped in the
+  interim. Removal happens through MODE (`internets.py:979`), PART/KICK
+  bookkeeping, or `_on_part` dropping the channel entirely.
+- **The MODE branch is channel-only.** `internets.py:970` requires the target to
+  start with `#`, `&`, `+` or `!`, so a user-MODE line is not parsed here.
+- Adding a parser here means adding it to `tests/test_protocol.py`. These
+  functions are pure, so they are the cheapest thing in the repo to test
+  exhaustively, and the read loop's resilience depends on them staying total.
+
+## 10. Interactive console (`console.py`)
+
+An optional stdin REPL for the operator at the terminal running the bot. Enabled
+by default when stdin is a TTY, suppressed by `--no-console` or automatically
+when stdin is not interactive (`internets.py:1362-1367`).
+
+### 10.1 The console is an unauthenticated admin surface
+
+`run_console` logs a deliberate warning on entry (`console.py:121-126`): the
+console grants admin-equivalent capability - `debug`, `loglevel`, `status`,
+`shutdown` - with **no authentication at all**. There is no password prompt and
+no `is_admin` check anywhere in this module, because the trust boundary is
+physical access to the process's stdin, not an IRC identity.
+
+That is why `should_skip_console` (`console.py:42-58`) exists and why it fails
+safe: it returns `True` when `sys.stdin.isatty()` is false (`console.py:56`), and
+also on `AttributeError`/`ValueError` - no stdin at all, or already closed
+(`console.py:57-58`). Under systemd, in a container without `-it`, or with stdin
+redirected from a file, whatever bytes arrive on stdin would otherwise be
+executed with that capability.
+
+`_print_status` also discloses live auth state: it prints the currently
+authenticated admin nicks to stdout (`console.py:162-164`).
+
+### 10.2 Why a daemon thread and not `asyncio.to_thread`
+
+This is the load-bearing design decision in the module, documented at
+`console.py:109-117`. It is restated here because the obvious "cleanup" reverts
+it and reintroduces a hang that is tedious to diagnose.
+
+`input()` parks its thread on a blocking read that nothing short of process death
+interrupts. An `asyncio.to_thread` worker runs on the default executor and is
+**not** a daemon, so `asyncio.run()`'s cleanup calls
+`loop.shutdown_default_executor()` and waits forever for that input-blocked
+worker to return. The observed symptom of the older design was the whole process
+hanging on the last shutdown log line until the operator hit Ctrl-C.
+
+So the thread is created explicitly:
+
+```python
+t = threading.Thread(target=_wrap, daemon=True, name="console-input")  # console.py:144
+```
+
+A daemon thread cannot hold up interpreter shutdown, so cleanup completes even if
+it never returns. Do not convert this to `asyncio.to_thread`.
+
+### 10.3 Crossing back into the event loop
+
+`run_console` creates an `asyncio.Event` and awaits it (`console.py:129`,
+`:147`); the worker sets it through `loop.call_soon_threadsafe(done.set)` inside
+a `finally` (`console.py:136-142`). That call is wrapped in
+`try/except RuntimeError` because the loop may already be closed during a
+shutdown race.
+
+`_wrap` also catches every exception out of the dispatch loop and logs it
+(`console.py:134-135`). A crash therefore does not propagate: `done` is still set
+by the `finally`, the console silently disappears, and `_main` treats the
+completed task as "console exited" (`internets.py:1373-1382`).
+
+The three dispatched actions are safe to call from off-loop, each for its own
+reason (`console.py:66-73`): `apply_debug`/`apply_loglevel` mutate logger state,
+`_print_status` reads bot fields through their lock-guarded accessors
+(`console.py:159`, `:162`), and `bot.request_shutdown` uses
+`loop.call_soon_threadsafe` internally.
+
+### 10.4 Command surface and parsing
+
+| command | effect |
+|---|---|
+| `help` | prints `_CONSOLE_HELP` (`console.py:87-88`) |
+| `debug [subsystem ...]` | `apply_debug` (`console.py:89-90`) |
+| `loglevel ...` | `apply_loglevel`, prints the returned error if any (`console.py:91-93`) |
+| `status` | `_print_status` (`console.py:94-95`) |
+| `shutdown` / `quit` | requests shutdown and returns (`console.py:96-100`) |
+| anything else | `Unknown command: ... - type 'help' for commands.` (`console.py:101-102`) |
+
+Blank lines are skipped (`console.py:83-84`). The loop exits on `EOFError`
+(Ctrl-D), `KeyboardInterrupt` (Ctrl-C) or `ValueError` (stdin closed mid-read)
+(`console.py:81-82`), and on `shutdown`/`quit`. A bare `shutdown` with no
+argument uses the reason `"Console shutdown"` (`console.py:97`).
+
+**Only the command word is lowercased** (`console.py:86`); arguments keep their
+case. `cmd_debug` on the IRC side lowercases the entire argument string
+(`admin_cmds.py:888`), so `debug WEATHER` at the console and `.debug WEATHER`
+over IRC do not register the same subsystem. The console form preserves
+`WEATHER`, which matches no real logger name, so it prints a confirmation and
+changes nothing. Use lowercase subsystem names at the console.
+
+`help` is dispatched (`console.py:87`) but is not listed in `_CONSOLE_HELP`'s own
+output.
+
+### 10.5 Shutdown interaction
+
+`_main` closes stdin and then cancels pending tasks (`internets.py:1397`,
+`:1402-1403`). Nothing is awaited between those two statements, so the event loop
+cannot deliver `done.set()` before the cancellation is applied. `run_console` -
+parked at `await done.wait()` (`console.py:147`) - therefore normally receives
+`CancelledError` and re-raises it (`console.py:148-151`). That is the expected
+path, not an error path, and there is nothing to clean up precisely because the
+dispatch thread is `daemon=True`.
+
+A console `shutdown` command takes the other route: `request_shutdown` sets the
+stop event on the loop, `_main` proceeds with graceful shutdown, and the console
+task is cancelled as part of it.
+
+### 10.6 Testing status
+
+There is no `tests/test_console.py`, and `console.py` is listed in the coverage
+`omit` set on the grounds that it needs a live loop and a TTY to exercise
+(`pyproject.toml`). It is integration-tested by running the bot, not unit-tested.
+Treat changes here as unguarded by the suite: the failure mode this module exists
+to avoid - a hung shutdown - is exactly the kind that a green test run will not
+catch.

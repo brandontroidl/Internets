@@ -1356,9 +1356,11 @@ async def _main(lock: ProcessLock | None = None) -> None:
     bot_task: asyncio.Task | None = None
     # Console is gated on (a) operator opt-in (no --no-console) AND
     # (b) stdin actually being an interactive TTY.  Skipping when stdin
-    # is piped / a non-TTY prevents the console from looping on EOF and
-    # avoids granting admin-equivalent capability to whatever happens
-    # to be piped in.  console.should_skip_console() owns the check.
+    # is piped / a non-TTY avoids granting admin-equivalent capability
+    # to whatever happens to be piped in - that is the whole reason, and
+    # it is a security one.  (It does NOT prevent an "EOF loop": the
+    # dispatch loop returns on the first EOFError, console.py:77-78.)
+    # console.should_skip_console() owns the check.
     if not cli_args.no_console and not should_skip_console():
         tasks.append(asyncio.create_task(run_console(bot), name="console"))
         log.info("Interactive console enabled (type 'help' for commands)")
@@ -1382,16 +1384,21 @@ async def _main(lock: ProcessLock | None = None) -> None:
         pending.discard(bot_task)
     # Cancel any other still-pending tasks (e.g. the console).
     #
-    # The console is the tricky one: it's blocked in
-    # ``asyncio.to_thread(input, "> ")`` which parks a ThreadPoolExecutor
-    # worker on a blocking ``read(0)`` syscall.  Cancelling the asyncio
-    # task flips it to cancelled but does NOT interrupt the syscall -
-    # ``asyncio.run()``'s subsequent ``loop.shutdown_default_executor()``
-    # then waits forever for the thread to return, and the whole process
-    # hangs on the last log line.  Closing stdin makes the blocking read
-    # raise OSError / return empty, which unblocks ``input()`` (it raises
-    # EOFError, which ``run_console`` already catches), the thread
-    # returns, and the executor shuts down cleanly.
+    # The console is the tricky one: it's blocked in ``input()`` on the
+    # dedicated ``console-input`` daemon thread (``console.py:140``),
+    # parked on a blocking ``read(0)`` syscall.  Cancelling the asyncio
+    # task flips it to cancelled but does NOT interrupt the syscall.
+    # Closing stdin makes the blocking read raise OSError / return empty,
+    # which unblocks ``input()`` (it raises EOFError, which the dispatch
+    # loop already catches) so the thread returns on its own.
+    #
+    # This is why that thread is a raw ``threading.Thread(daemon=True)``
+    # and NOT ``asyncio.to_thread``: a to_thread worker is non-daemon and
+    # lives on the default executor, so ``asyncio.run()``'s
+    # ``loop.shutdown_default_executor()`` would wait forever for it and
+    # the whole process would hang on the last log line.  Being a daemon
+    # thread, it cannot hold up interpreter shutdown even if it never
+    # returns.  See console.py:105-113.
     if pending:
         try:
             sys.stdin.close()

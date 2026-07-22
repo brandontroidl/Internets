@@ -44,9 +44,13 @@ def should_skip_console() -> bool:
 
     The console is unsafe when stdin isn't an interactive TTY - e.g.
     under systemd, in a Docker container without -it, or with stdin
-    redirected to a file.  Skipping in those cases prevents the
-    console from looping on EOF and avoids granting admin equivalence
-    to whatever piped input happens to be there.
+    redirected to a file.  Skipping in those cases avoids granting
+    admin equivalence to whatever piped input happens to be there.
+    That is a security reason, and it is the only one: the dispatch
+    loop returns on the first EOFError (see ``_console_dispatch_loop``),
+    so there is no EOF loop to prevent.
+
+    Fails safe: a missing or already-closed stdin also returns True.
     """
     try:
         return not sys.stdin.isatty()
