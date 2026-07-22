@@ -4,7 +4,7 @@ https://api.weather.gov/
 Free, no API key.  US locations only.  Requires User-Agent header.
 """
 from __future__ import annotations
-from .._http import get_json
+from ._scope import OutOfCoverage, nws_json as get_json
 from ..base import WeatherResult
 from ._codes import deg_to_card, ms_to_kph
 
@@ -15,11 +15,11 @@ async def _get_station(lat: float, lon: float) -> str:
     data = await get_json(f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}", headers=_HEADERS)
     obs_url = data.get("properties", {}).get("observationStations")
     if not obs_url:
-        raise ValueError("NWS: no observation stations for this location")
+        raise OutOfCoverage("NWS: no observation stations for this location")
     stations = await get_json(obs_url, headers=_HEADERS)
     features = stations.get("features", [])
     if not features:
-        raise ValueError("NWS: empty station list")
+        raise OutOfCoverage("NWS: empty station list")
     return features[0].get("id", "")
 
 async def fetch(lat: float, lon: float, location: str) -> WeatherResult:

@@ -1,7 +1,7 @@
 """NWS - hourly forecast."""
 from __future__ import annotations
 from datetime import datetime
-from .._http import get_json
+from ._scope import OutOfCoverage, nws_json as get_json
 from ..base import HourlyResult, HourlyEntry
 from ._codes import deg_to_card
 
@@ -11,7 +11,7 @@ async def fetch(lat: float, lon: float, location: str, hours: int = 12) -> Hourl
     pts = await get_json(f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}", headers=_HEADERS)
     fc_url = pts.get("properties", {}).get("forecastHourly")
     if not fc_url:
-        raise ValueError("NWS: no hourly forecast URL")
+        raise OutOfCoverage("NWS: no hourly forecast URL")
     data = await get_json(fc_url, headers=_HEADERS)
     periods = data.get("properties", {}).get("periods", [])
     entries = []

@@ -1,6 +1,6 @@
 """NWS - active weather alerts (most authoritative for US)."""
 from __future__ import annotations
-from .._http import get_json
+from ._scope import nws_json as get_json
 from ..base import AlertsResult, AlertEntry
 from ._codes import map_severity
 

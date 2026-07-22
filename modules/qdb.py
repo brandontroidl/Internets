@@ -66,6 +66,12 @@ def _lookup_sync(qid: str | None, base_url: str, ua: str) -> list[str]:
     try:
         with requests.get(url, headers={"User-Agent": ua},
                           timeout=10, stream=True) as r:
+            # The archive answers an unknown quote id with 404.  That is a
+            # clean "no such quote", not an outage - reporting it as
+            # "endpoint unavailable" sends people chasing a problem that
+            # isn't there.
+            if r.status_code == 404:
+                return [f"quote {qid} not found" if qid else "no quote found"]
             r.raise_for_status()
             body = r.raw.read(_MAX_BODY_BYTES + 1, decode_content=True)
             if len(body) > _MAX_BODY_BYTES:

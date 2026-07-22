@@ -19,6 +19,25 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **NWS: a location it doesn't cover is no longer counted as a provider
+  failure.** api.weather.gov serves US points only and says so three ways -
+  HTTP 400 (`out of bounds`) from `/alerts/active?point=`, HTTP 404 (`Data
+  Unavailable For Requested Point`) from `/points/`, and a 200 whose payload
+  simply has no station, forecast URL or marine zone (an inland location is
+  never in a marine zone). All three reached the dispatcher as exceptions, so
+  every non-US `.w`/`.al` recorded a failure against NWS and dinged its circuit
+  breaker - enough of them could open it and degrade US alerts. They now yield
+  a `None` result, which falls through to a global provider and records no
+  failure. Genuine outages, rate-limits and auth errors (401/403/429/5xx) still
+  raise, so the breaker still sees what it should.
+
+- **qdb: a missing quote id says so, instead of blaming the endpoint.** The
+  archive answers an unknown id with 404, which surfaced as "QDB endpoint
+  unavailable" and sent operators chasing an outage that wasn't happening. The
+  stale `[qdb] api_url` comment (which still described a defunct XML protocol
+  and claimed a blank value hides the command) now documents the working
+  HTML-scraped default and warns that a stale override 404s every lookup.
+
 - **Geocode: a business no longer outranks the place it was named after.**
   Nominatim free-text `q=` returns the best-ranked OSM object of any class, so
   `.al new york new york` resolved to the Las Vegas casino and

@@ -233,6 +233,107 @@ class TestGDACS:
         assert isinstance(r, AlertsResult)
 
 
+class TestNWSCoverage:
+    """A non-US point must not be reported as an NWS failure.
+
+    api.weather.gov answers a well-formed request for a point outside its
+    coverage with HTTP 400 ('Parameter "point" is invalid: out of bounds').
+    Raised as an HTTPError that reaches the dispatcher, it calls
+    record_failure() and dings the NWS circuit breaker - so enough non-US
+    queries could open it and degrade US alerts.  Observed live: `.al cirus
+    cirus` geocoded to Spain and logged dispatch_fail for nws.
+    """
+
+    @pytest.mark.parametrize("status", [400, 404])
+    def test_no_data_statuses_become_out_of_coverage(self, status):
+        # /alerts/active?point= answers 400 "out of bounds"; /points/ answers
+        # 404 "Data Unavailable For Requested Point". Both mean "not covered".
+        import weather_providers.nws._scope as scope
+        from weather_providers._http import HTTPError
+
+        async def boom(url, **kw):
+            raise HTTPError(f"HTTP {status} for ...", status=status)
+
+        orig = scope.get_json
+        try:
+            scope.get_json = boom
+            with pytest.raises(scope.OutOfCoverage):
+                asyncio.run(scope.nws_json("https://api.weather.gov/x"))
+        finally:
+            scope.get_json = orig
+
+    @pytest.mark.parametrize("status", [403, 429, 500, 503])
+    def test_real_failures_still_propagate(self, status):
+        # An outage, a rate-limit or an auth problem must stay a failure so the
+        # breaker and the rate-limit accounting still see it.
+        import weather_providers.nws._scope as scope
+        from weather_providers._http import HTTPError
+
+        async def boom(url, **kw):
+            raise HTTPError(f"HTTP {status} for ...", status=status,
+                            is_rate_limit=(status == 429))
+
+        orig = scope.get_json
+        try:
+            scope.get_json = boom
+            with pytest.raises(HTTPError):
+                asyncio.run(scope.nws_json("https://api.weather.gov/x"))
+        finally:
+            scope.get_json = orig
+
+    def test_inland_point_is_not_a_marine_failure(self, monkeypatch):
+        # San Dimas is nowhere near a marine zone; NWS says so by omitting the
+        # forecast zone. That is a normal answer, not a provider failure.
+        from weather_providers.nws import NWSProvider, marine
+        async def stub(url, **kw):
+            return {"properties": {}}      # no forecastZone key
+        _patch(monkeypatch, marine, stub)
+        r = asyncio.run(NWSProvider().get_marine(34.1067, -117.8067, "San Dimas, CA"))
+        assert r is None
+
+    def test_provider_returns_none_outside_coverage(self):
+        # None (not an exception) is what makes the dispatcher fall through
+        # to a global provider without recording a failure.
+        from weather_providers.nws import NWSProvider
+        import weather_providers.nws._scope as scope
+        from weather_providers._http import HTTPError
+
+        async def boom(url, **kw):
+            raise HTTPError("HTTP 400 for ...", status=400)
+
+        orig = scope.get_json
+        try:
+            scope.get_json = boom
+            p = NWSProvider()
+            for call in (
+                p.get_alerts(38.4697, -0.9729, "Monovar, Spain"),
+                p.get_weather(38.4697, -0.9729, "Monovar, Spain"),
+                p.get_forecast(38.4697, -0.9729, "Monovar, Spain"),
+                p.get_hourly(38.4697, -0.9729, "Monovar, Spain"),
+                p.get_marine(38.4697, -0.9729, "Monovar, Spain"),
+            ):
+                assert asyncio.run(call) is None
+        finally:
+            scope.get_json = orig
+
+    def test_no_failure_recorded_when_provider_returns_none(self):
+        # The dispatcher contract this fix depends on.
+        from weather_providers._dispatch import Dispatcher
+
+        class _Uncovered:
+            name, requires_key = "uncovered", False
+            async def get_weather(self, lat, lon, location, **kw):
+                return None
+            async def get_forecast(self, lat, lon, location, days=4, **kw):
+                return None
+
+        d = Dispatcher()
+        d.register(_Uncovered(), "uncovered")
+        assert asyncio.run(d.dispatch("current", 0.0, 0.0, "x")) is None
+        health = d._providers["uncovered"].health
+        assert health.is_callable(), "returning None must not trip the breaker"
+
+
 class TestNWSAlertScope:
     """A state name must query the whole state, not one geocoded point.
 

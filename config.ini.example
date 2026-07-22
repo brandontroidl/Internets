@@ -135,8 +135,12 @@ steamids_file = steamids.json
 api_url = http://idlerpg.rizon.net/xml.php
 
 [qdb]
-; QDB-compatible XML endpoint.  qdb.us is defunct as of 2024.
-; Leave blank to keep the .qdb command hidden.
+; Quote-archive base URL.  The module HTML-scrapes it (no XML any more:
+; the classic QDB RSS protocol is dead network-wide - qdb.us serves an
+; unrelated site and bash.org is offline).  Leave BLANK to use the built-in
+; default, https://bash-org-archive.com, which is verified working.  Only set
+; this if a better mirror appears; a stale value here overrides a working
+; default and every lookup 404s.
 api_url =
 
 [metrics]

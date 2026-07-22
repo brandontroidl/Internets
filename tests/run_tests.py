@@ -776,6 +776,52 @@ def _():
         W.geocode, weather_providers.get_alerts = orig_geo, orig_alerts
     assert seen == ["MS", None], seen
 
+@test("qdb: a missing quote id reports 'not found', not 'endpoint unavailable'")
+def _():
+    import modules.qdb as q
+
+    class _Resp:
+        status_code = 404
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def raise_for_status(self):
+            raise AssertionError("404 must be handled before raise_for_status")
+
+    class _FakeRequests:
+        RequestException = q.requests.RequestException
+        @staticmethod
+        def get(url, **kw):
+            return _Resp()
+
+    orig = q.requests
+    try:
+        q.requests = _FakeRequests
+        lines = q._lookup_sync("999999999", "https://example.org", "ua")
+    finally:
+        q.requests = orig
+    # The endpoint answered fine - the quote is what is missing.
+    assert lines == ["quote 999999999 not found"], lines
+
+@test("qdb: a real transport error still reports the endpoint as unavailable")
+def _():
+    import modules.qdb as q
+
+    class _FakeRequests:
+        RequestException = q.requests.RequestException
+        @staticmethod
+        def get(url, **kw):
+            raise q.requests.RequestException("connection reset")
+
+    orig = q.requests
+    try:
+        q.requests = _FakeRequests
+        lines = q._lookup_sync(None, "https://example.org", "ua")
+    finally:
+        q.requests = orig
+    assert lines == ["QDB endpoint unavailable"], lines
+
 @test("geocode: us_state_code matches a bare state name/abbreviation only")
 def _():
     from modules.geocode import us_state_code

@@ -12,25 +12,33 @@ from ..base import (
     MarineResult,
 )
 from . import current, forecast, hourly, alerts, marine
+from ._scope import none_if_uncovered
 
 
 class NWSProvider:
+    """NWS endpoints, each yielding None for a point NWS does not cover.
+
+    A None result makes the dispatcher fall through to a global provider
+    without recording a failure - see ``_scope`` for why that matters.
+    """
+
     name: str = "NWS"
     requires_key: bool = False
 
     async def get_weather(self, lat, lon, location, **kw):
-        return await current.fetch(lat, lon, location)
+        return await none_if_uncovered(current.fetch(lat, lon, location))
 
     async def get_forecast(self, lat, lon, location, days=4, **kw):
-        return await forecast.fetch(lat, lon, location, days)
+        return await none_if_uncovered(forecast.fetch(lat, lon, location, days))
 
     async def get_hourly(self, lat, lon, location, hours=12, **kw):
-        return await hourly.fetch(lat, lon, location, hours)
+        return await none_if_uncovered(hourly.fetch(lat, lon, location, hours))
 
     async def get_alerts(self, lat, lon, location, **kw):
         # ``area`` (a USPS state code) widens the query from the geocoded
         # point to the whole state; see alerts.fetch.
-        return await alerts.fetch(lat, lon, location, area=kw.get("area"))
+        return await none_if_uncovered(
+            alerts.fetch(lat, lon, location, area=kw.get("area")))
 
     async def get_marine(self, lat, lon, location, **kw):
-        return await marine.fetch(lat, lon, location)
+        return await none_if_uncovered(marine.fetch(lat, lon, location))

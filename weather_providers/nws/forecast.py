@@ -1,6 +1,6 @@
 """NWS - daily forecast."""
 from __future__ import annotations
-from .._http import get_json
+from ._scope import OutOfCoverage, nws_json as get_json
 from ..base import WeatherResult, ForecastDay
 
 _HEADERS = {"User-Agent": "(Internets IRC Bot)", "Accept": "application/geo+json"}
@@ -9,7 +9,7 @@ async def fetch(lat: float, lon: float, location: str, days: int = 4) -> Weather
     pts = await get_json(f"https://api.weather.gov/points/{lat:.4f},{lon:.4f}", headers=_HEADERS)
     fc_url = pts.get("properties", {}).get("forecast")
     if not fc_url:
-        raise ValueError("NWS: no forecast URL")
+        raise OutOfCoverage("NWS: no forecast URL")
     data = await get_json(fc_url, headers=_HEADERS)
     periods = data.get("properties", {}).get("periods", [])
     # NWS returns periods for day/night. Pair them up.
