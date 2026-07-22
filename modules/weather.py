@@ -18,7 +18,7 @@ import logging
 from typing import Any
 
 from .base    import BotModule, strip_ctrl
-from .geocode import geocode
+from .geocode import geocode, us_state_code
 from .units   import cf, kph, km_mi, mb, aqi_fmt, wave_fmt, swell_fmt
 
 log = logging.getLogger("internets.weather")
@@ -114,8 +114,25 @@ def _format_alerts(r: object) -> list[str]:
         raise TypeError(f"expected AlertsResult, got {type(r).__name__}")
     if not r.alerts:
         return [f"No active alerts. [{_sanitize(r.source, 30)}]"]
+    _CAP = 5
+    # NWS issues one alert per forecast zone, so a state-wide query returns the
+    # same warning repeated across every zone it covers.  Collapse identical
+    # event+headline pairs first, or three copies of one watch eat the cap.
+    seen: set[tuple[str, str]] = set()
+    distinct = []
+    for a in r.alerts:
+        key = (a.event, a.headline)
+        if key not in seen:
+            seen.add(key)
+            distinct.append(a)
+    # NWS returns newest-issued first, so routine statements can bury the
+    # warning that matters: for Mississippi under a tropical storm the actual
+    # Tropical Storm Warning fell past the cap.  Rank by severity, stable so
+    # equal-severity alerts keep the provider's own ordering.
+    _RANK = {"extreme": 0, "severe": 1, "moderate": 2, "minor": 3, "unknown": 4}
+    ordered = sorted(distinct, key=lambda a: _RANK.get((a.severity or "").lower(), 4))
     lines: list[str] = []
-    for a in r.alerts[:5]:
+    for a in ordered[:_CAP]:
         sev = _sanitize(a.severity, 10).upper()
         event = _sanitize(a.event, 60)
         headline = _sanitize(a.headline, 200)
@@ -123,6 +140,11 @@ def _format_alerts(r: object) -> list[str]:
         if headline and headline != event:
             line += f" - {headline}"
         lines.append(line)
+    # Never drop alerts silently: a state under a hurricane can carry 15+, and
+    # showing 5 with no marker reads as "that is all of them".
+    withheld = len(ordered) - _CAP
+    if withheld > 0:
+        lines.append(f"... and {withheld} more")
     lines.append(f"[{_sanitize(r.source, 30)}]")
     return lines
 
@@ -696,10 +718,18 @@ class WeatherModule(BotModule):
         if geo is None:
             return
         lat, lon, display, cc = geo
-        log.info("alerts%s %r (%s) [%.4f,%.4f]",
+        # A bare state name asks a state-wide question, and a single geocoded
+        # point cannot answer it - the point for "mississippi" is inland and
+        # misses every coastal warning.  Widen to the whole state.
+        raw, _ = self._resolve(nick, rest)
+        area = us_state_code(raw) if raw else None
+        log.info("alerts%s %r (%s) [%.4f,%.4f]%s",
                  f" [{provider}]" if provider else "",
-                 display, cc or "?", lat, lon)
+                 display, cc or "?", lat, lon,
+                 f" area={area}" if area else "")
         kwargs = {"force_provider": provider} if provider else {}
+        if area:
+            kwargs["area"] = area
         result = await get_alerts(lat, lon, display, **kwargs)
         if result:
             self.bot.privmsg(reply_to, f":: {display} Alerts ::")

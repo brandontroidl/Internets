@@ -28,7 +28,9 @@ class NWSProvider:
         return await hourly.fetch(lat, lon, location, hours)
 
     async def get_alerts(self, lat, lon, location, **kw):
-        return await alerts.fetch(lat, lon, location)
+        # ``area`` (a USPS state code) widens the query from the geocoded
+        # point to the whole state; see alerts.fetch.
+        return await alerts.fetch(lat, lon, location, area=kw.get("area"))
 
     async def get_marine(self, lat, lon, location, **kw):
         return await marine.fetch(lat, lon, location)

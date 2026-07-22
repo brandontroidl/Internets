@@ -235,6 +235,28 @@ def _looks_like_us(query: str) -> bool:
     return bool(_US_STATE_NAME_RE.search(query) or _US_STATE_ABBR_RE.search(query))
 
 
+# Reverse of _STATE_ABBR, plus the abbreviations themselves, for whole-query
+# state matching.  Both sides lowercased: unlike _US_STATE_ABBR_RE (which
+# scans WITHIN a query and so must stay uppercase-only to avoid matching
+# "ca"/"or"/"in" as words), matching the ENTIRE query is unambiguous - a user
+# who types just "ms" means Mississippi.
+_STATE_QUERY: dict[str, str] = {
+    **{name.lower(): abbr for name, abbr in _STATE_ABBR.items()},
+    **{abbr.lower(): abbr for abbr in _STATE_ABBR.values()},
+}
+
+
+def us_state_code(query: str) -> str | None:
+    """Return the USPS code if *query* is a bare US state name/abbreviation.
+
+    Whole-query match only.  "mississippi" and "MS" are the state; "jackson
+    mississippi" is a specific place inside it and must stay a point lookup.
+    Callers use this to widen a state-wide question (active alerts) from one
+    geocoded point to the whole state.
+    """
+    return _STATE_QUERY.get((query or "").strip().lower())
+
+
 # ---------------------------------------------------------------------------
 # International country / territory / province detection
 # ---------------------------------------------------------------------------

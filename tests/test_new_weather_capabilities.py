@@ -233,6 +233,44 @@ class TestGDACS:
         assert isinstance(r, AlertsResult)
 
 
+class TestNWSAlertScope:
+    """A state name must query the whole state, not one geocoded point.
+
+    Reported live: with Tropical Storm Bertha's centre on the Mississippi
+    coast, `.al mississippi` returned only a Heat Advisory from NWS Jackson.
+    The point lookup landed inland, so every coastal warning was invisible -
+    api.weather.gov returned 1 alert for that point and 15 for area=MS.
+    """
+
+    def test_point_lookup_is_the_default(self, monkeypatch):
+        from weather_providers.nws import alerts
+        seen = {}
+        async def stub(url, **kw):
+            seen.update(kw.get("params") or {})
+            return {"features": []}
+        _patch(monkeypatch, alerts, stub)
+        asyncio.run(alerts.fetch(32.2988, -90.1848, "Jackson, MS"))
+        assert seen.get("point") == "32.2988,-90.1848"
+        assert "area" not in seen
+
+    def test_area_lookup_replaces_the_point(self, monkeypatch):
+        from weather_providers.nws import alerts
+        seen = {}
+        async def stub(url, **kw):
+            seen.update(kw.get("params") or {})
+            return {"features": []}
+        _patch(monkeypatch, alerts, stub)
+        asyncio.run(alerts.fetch(32.2988, -90.1848, "MS", area="MS"))
+        assert seen.get("area") == "MS"
+        # Sending both would narrow the query straight back to the point.
+        assert "point" not in seen
+
+    def test_user_agent_carries_a_contact(self):
+        from weather_providers.nws import alerts
+        ua = alerts._HEADERS["User-Agent"]
+        assert "@" in ua or "http" in ua.lower(), ua
+
+
 class TestNIFC:
     def test_no_fires_is_empty(self, monkeypatch):
         from weather_providers.nifc import wildfire

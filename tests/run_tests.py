@@ -733,6 +733,123 @@ def _():
     )
     assert "Feels like" in _format_current(r_far)
 
+@test("weather .al: a bare state widens to an area query, a place inside it does not")
+def _():
+    import asyncio
+    import weather_providers
+    import modules.weather as W
+
+    seen: list = []
+    sent: list = []
+
+    class FakeBot:
+        cfg = {"bot": {"command_prefix": "."}}
+        def loc_get(self, nick):
+            return None
+        def rate_limited(self, nick):
+            return False
+        def privmsg(self, target, msg):
+            sent.append(msg)
+        def notice(self, nick, msg):
+            sent.append(msg)
+        def preply(self, nick, target, msg):
+            sent.append(msg)
+
+    async def fake_geocode(q, ua, **kw):
+        return (32.2988, -90.1848, "MS", "us")
+
+    async def fake_get_alerts(lat, lon, location, **kw):
+        seen.append(kw.get("area"))
+        return weather_providers.AlertsResult(source="NWS", location=location)
+
+    orig_geo, orig_alerts = W.geocode, weather_providers.get_alerts
+    try:
+        W.geocode = fake_geocode
+        weather_providers.get_alerts = fake_get_alerts
+        m = W.WeatherModule(FakeBot())
+        # Skip on_load(): it calls configure() to register real providers.
+        # geocode is stubbed above, so these are all _geo actually needs.
+        m._ua, m._cooldown, m._default_country = "bot (https://example.org)", 1, "us"
+        asyncio.run(m.cmd_alerts("bob", "#chan", "mississippi"))
+        asyncio.run(m.cmd_alerts("bob", "#chan", "jackson mississippi"))
+    finally:
+        W.geocode, weather_providers.get_alerts = orig_geo, orig_alerts
+    assert seen == ["MS", None], seen
+
+@test("geocode: us_state_code matches a bare state name/abbreviation only")
+def _():
+    from modules.geocode import us_state_code
+    assert us_state_code("mississippi") == "MS"
+    assert us_state_code("MS") == "MS"
+    assert us_state_code("ms") == "MS"
+    assert us_state_code("  New Jersey  ") == "NJ"
+    assert us_state_code("district of columbia") == "DC"
+    # A state mentioned inside a larger query is a POINT lookup, not an area:
+    # the user named a specific place, not the whole state.
+    assert us_state_code("jackson mississippi") is None
+    assert us_state_code("new york new york") is None
+    assert us_state_code("kansas city missouri") is None
+    # Not states.
+    assert us_state_code("london") is None
+    assert us_state_code("") is None
+    assert us_state_code("92253") is None
+
+@test("weather _format_alerts: the most severe alerts survive the cap")
+def _():
+    from modules.weather import _format_alerts
+    from weather_providers.base import AlertsResult, AlertEntry
+    # NWS returns newest-first, so during a hurricane five routine statements
+    # can bury the actual warning. Severity decides who makes the cut.
+    alerts = ([AlertEntry(event=f"Local Statement {i}", severity="moderate",
+                          headline="") for i in range(6)]
+              + [AlertEntry(event="Tropical Storm Warning", severity="severe",
+                            headline=""),
+                 AlertEntry(event="Extreme Heat Warning", severity="extreme",
+                            headline="")])
+    lines = _format_alerts(AlertsResult(source="NWS", location="MS", alerts=alerts))
+    body = "\n".join(lines)
+    assert "Tropical Storm Warning" in body, body
+    assert "Extreme Heat Warning" in body, body
+    # Highest severity first.
+    assert lines[0].startswith("[EXTREME]"), lines
+    assert lines[1].startswith("[SEVERE]"), lines
+    assert "3 more" in body, body
+
+@test("weather _format_alerts: per-zone duplicates collapse to one line")
+def _():
+    from modules.weather import _format_alerts
+    from weather_providers.base import AlertsResult, AlertEntry
+    # NWS issues one alert per forecast zone, so a state-wide query returns the
+    # same warning many times over. Three identical watches must not eat the cap.
+    dupes = [AlertEntry(event="Tropical Storm Watch", severity="severe",
+                        headline="issued 9:57AM by NWS New Orleans LA")
+             for _ in range(3)]
+    alerts = dupes + [
+        AlertEntry(event="Tropical Storm Warning", severity="severe", headline="h1"),
+        AlertEntry(event="Coastal Flood Warning", severity="severe", headline="h2"),
+    ]
+    lines = _format_alerts(AlertsResult(source="NWS", location="MS", alerts=alerts))
+    body = "\n".join(lines)
+    assert body.count("Tropical Storm Watch") == 1, body
+    assert "Tropical Storm Warning" in body and "Coastal Flood Warning" in body, body
+    assert "more" not in body, body   # 5 raw -> 3 distinct, nothing withheld
+
+@test("weather _format_alerts: says how many alerts were withheld past the cap")
+def _():
+    from modules.weather import _format_alerts
+    from weather_providers.base import AlertsResult, AlertEntry
+    many = [AlertEntry(event=f"Event {i}", severity="severe", headline="")
+            for i in range(15)]
+    lines = _format_alerts(AlertsResult(source="NWS", location="MS", alerts=many))
+    body = "\n".join(lines)
+    # 15 alerts silently became 5 - during a hurricane that hides the warnings.
+    assert "10 more" in body, body
+    # At or under the cap, say nothing.
+    few = _format_alerts(AlertsResult(
+        source="NWS", location="MS",
+        alerts=[AlertEntry(event="Heat Advisory", severity="moderate", headline="")]))
+    assert "more" not in "\n".join(few), few
+
 @test("weather _format_wildfire: sub-acre sizes never render as '0 acres'")
 def _():
     from modules.weather import _format_wildfire
@@ -2078,8 +2195,10 @@ def _():
 def _():
     import asyncio
     import modules.geocode as g
-    # Unconstrained search misses the full query and only hits after a token is
-    # dropped; the settlement pass answered the question the user actually asked.
+    # The unconstrained search misses the full query and only hits after a
+    # token is dropped.  A truncated query answers a DIFFERENT question, so the
+    # full-query settlement wins even though it scores far lower - importance
+    # only arbitrates two answers to the SAME query.
     calls: list = []
 
     class _FakeResp:
@@ -2094,18 +2213,18 @@ def _():
         params = dict(params or {})
         calls.append(params)
         if params.get("featureType") == "settlement":
-            return _FakeResp(_CITY_ROW)
-        # Unconstrained: miss on the full query, hit once "york" is dropped.
-        return _FakeResp(_CASINO_ROW if params["q"] != "new york new york" else [])
+            return _FakeResp(_GRACELAND_ZA_ROW)      # weak (0.1553) but exact
+        # Unconstrained: miss on the full query, hit once a token is dropped.
+        return _FakeResp([] if params["q"] == "graceland gardens" else _PARK_ROW)
 
     orig_get, orig_read = g._get, g._read_json_capped
     try:
         g._get, g._read_json_capped = fake_get, (lambda r: r.payload)
         g._geocode_cache.clear()
-        res = asyncio.run(g.geocode("new york new york", "bot (https://example.org)"))
+        res = asyncio.run(g.geocode("graceland gardens", "bot (https://example.org)"))
     finally:
         g._get, g._read_json_capped = orig_get, orig_read
-    assert res is not None and res[:2] == (40.7128, -74.006), res
+    assert res is not None and res[:2] == (-34.0181, 18.6753), res
 
 
 @test("geocode: a transport error on the settlement pass does not trigger a second request")
