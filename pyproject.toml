@@ -44,16 +44,22 @@ dependencies = [
 async = ["aiohttp>=3.14.1"]  # 2026 request-smuggling/parser CVEs (subsumes CVE-2024-52304 chunked-encoding floor)
 bcrypt = ["bcrypt>=4.2.0"]    # Rust-backed; current wheels
 argon2 = ["argon2-cffi>=23.1.0"]
-weatherkit = ["PyJWT>=2.10.1", "cryptography>=44.0.0"]
-# CVE-2024-53861 (JWT header confusion); cryptography 44 removes
-# legacy TLS 1.0/1.1 + ships current OpenSSL.
+weatherkit = ["PyJWT>=2.13.0", "cryptography>=48.0.1"]
+# Floors must match requirements.txt, which carries the security-floor policy.
+# PyJWT >=2.13.0 carries the 2026 PYSEC fixes (subsumes the 2.10.1
+# CVE-2024-53861 JOSE header-confusion floor); cryptography >=48.0.1 carries
+# GHSA-537c-gmf6-5ccf and ships vendored OpenSSL with current CVE patches.
+# These previously sat at 2.10.1 / 44.0.0, so `pip install internets-irc[
+# weatherkit]` could resolve a cryptography this project's own requirements
+# file calls unsafe. CI cannot catch that: security.yml audits
+# requirements.lock only, never the extras.
 xml = ["defusedxml>=0.7.1"]
 all = [
     "aiohttp>=3.14.1",
     "bcrypt>=4.2.0",
     "argon2-cffi>=23.1.0",
-    "PyJWT>=2.10.1",
-    "cryptography>=44.0.0",
+    "PyJWT>=2.13.0",
+    "cryptography>=48.0.1",
     "defusedxml>=0.7.1",
 ]
 dev = [

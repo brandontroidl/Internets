@@ -2503,6 +2503,47 @@ def _():
     assert bot._prefix_modes == {"o", "v"}
     assert bot._chanmode_types["l"] == "C"
 
+@test("DEPS: pyproject extras never sit below the requirements.txt security floors")
+def _():
+    """requirements.txt carries the security-floor policy; the extras are what
+    `pip install internets-irc[...]` actually resolves.
+
+    These drifted: weatherkit and all pinned PyJWT>=2.10.1 / cryptography>=44.0.0
+    while requirements.txt required >=2.13.0 / >=48.0.1 for the 2026 PYSEC fixes
+    and GHSA-537c-gmf6-5ccf, so installing the extra could pull a cryptography
+    this project's own policy calls unsafe. CI cannot catch it - security.yml
+    audits requirements.lock only, never the extras - so the check lives here.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+
+    def vt(v):
+        return tuple(int(x) for x in re.findall(r"\d+", v))
+
+    floors = {}
+    for line in (root / "requirements.txt").read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        m = re.match(r"^([A-Za-z0-9_.\-]+)\s*>=\s*([0-9][^\s,;]*)", line)
+        if m:
+            floors[m.group(1).lower()] = m.group(2)
+    assert floors, "parsed no floors from requirements.txt"
+
+    pyproject = (root / "pyproject.toml").read_text()
+    below = []
+    for block in re.finditer(r"^(\w+)\s*=\s*\[(.*?)\]", pyproject, re.S | re.M):
+        extra, body = block.group(1), block.group(2)
+        if extra == "dev":          # dev tooling has its own policy
+            continue
+        for pin in re.finditer(r'"([A-Za-z0-9_.\-]+)\s*>=\s*([0-9][^"]*)"', body):
+            pkg, ver = pin.group(1).lower(), pin.group(2)
+            want = floors.get(pkg)
+            if want and vt(ver) < vt(want):
+                below.append(f"{extra}: {pkg}>={ver} < requirements.txt >={want}")
+
+    assert not below, ("pyproject floors below the security policy: " + "; ".join(below))
+
 @test("VERSION: every hand-written version literal in docs matches __version__")
 def _():
     """The docs carry the version in prose, and nothing derived it.

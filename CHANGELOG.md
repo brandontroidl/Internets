@@ -4,6 +4,19 @@ All notable changes to Internets are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Raised the `weatherkit` / `all` extras to the security floors
+  `requirements.txt` already declared.** They pinned `PyJWT>=2.10.1` and
+  `cryptography>=44.0.0` while the policy required `>=2.13.0` and `>=48.0.1`
+  (2026 PYSEC fixes; GHSA-537c-gmf6-5ccf), so `pip install
+  internets-irc[weatherkit]` could resolve a cryptography this project's own
+  requirements file calls unsafe. CI could not catch it - `security.yml` audits
+  `requirements.lock` only, never the extras - so a test now asserts no extra
+  sits below a `requirements.txt` floor.
+
 ## [5.0.0] - 2026-07-22
 
 Major release. Backward-incompatible for admin authentication.
