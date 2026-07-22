@@ -2503,6 +2503,51 @@ def _():
     assert bot._prefix_modes == {"o", "v"}
     assert bot._chanmode_types["l"] == "C"
 
+@test("VERSION: every hand-written version literal in docs matches __version__")
+def _():
+    """The docs carry the version in prose, and nothing derived it.
+
+    docs/conf.py, README.md and four docs/*.md pages each hold a hand-edited
+    version string. A bump that misses one leaves the published documentation
+    announcing the wrong release, which no build step notices. This is the
+    enforcement half of that decision.
+    """
+    import re
+    from pathlib import Path
+    from internets import __version__
+
+    root = Path(__file__).resolve().parent.parent
+    major_minor = ".".join(__version__.split(".")[:2])
+
+    # Any X.Y.Z that is NOT the current version is a stale literal. History
+    # in CHANGELOG.md is exempt, and so are dependency pins.
+    stale = []
+    for rel in ("README.md", "docs/conf.py", "docs/deployment.md",
+                "docs/configuration.md", "docs/providers.md",
+                "docs/security-model.md"):
+        path = root / rel
+        if not path.exists():
+            continue
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if "Internets" not in line and "version" not in line and "release" not in line:
+                continue
+            # NOT \b\d: in "v5.0.0" the char before the digit is "v", a word
+            # character, so there is no boundary and \b never matches. Guard on
+            # digits instead, which also avoids matching part of "1.2.3.4".
+            for found in re.findall(r"(?<!\d)\d+\.\d+\.\d+(?!\d)", line):
+                if found != __version__ and not re.search(r">=|==|~=|<", line):
+                    stale.append(f"{rel}:{n} -> {found}")
+
+    assert not stale, (
+        f"version literals disagree with __version__={__version__}: {stale}")
+
+    # docs/conf.py additionally carries the truncated MAJOR.MINOR form.
+    conf = (root / "docs" / "conf.py").read_text()
+    m = re.search(r'^version\s*=\s*"([^"]+)"', conf, re.M)
+    assert m and m.group(1) == major_minor, (
+        f"docs/conf.py version = {m.group(1) if m else None!r}, "
+        f"expected {major_minor!r}")
+
 @test("VERSION: __version__ matches pyproject.toml")
 def _():
     from internets import __version__

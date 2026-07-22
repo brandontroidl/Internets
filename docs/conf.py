@@ -16,8 +16,8 @@
 project = "Internets"
 author = "Brandon Troidl"
 copyright = "2026, Brandon Troidl"
-release = "4.0.0"
-version = "4.0"
+release = "5.0.0"
+version = "5.0"
 
 # -- General configuration ----------------------------------------------------
 extensions = [
@@ -96,7 +96,7 @@ napoleon_include_init_with_doc = False
 
 # -- HTML output --------------------------------------------------------------
 html_theme = "sphinx_rtd_theme"
-html_title = "Internets 4.0.0"
+html_title = "Internets 5.0.0"
 html_short_title = "Internets"
 html_static_path = []
 

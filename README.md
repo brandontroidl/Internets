@@ -1,4 +1,4 @@
-# Internets v4.0.0
+# Internets v5.0.0
 
 A modular IRC bot and multi-provider weather aggregator on Python's asyncio and RFC 2812. Worldwide weather (current, forecast, hourly, nowcast, air quality, UV, pollen, astronomy, alerts, wildfire, space weather, marine, tides, historical), stock/crypto/FX prices, movie and music lookups, dictionary and reference tools (Wikipedia, DOI, ISBN, RFC, arXiv, periodic table, tldr-pages), a large developer/encoding/network/security toolkit, IP geolocation and reputation, science/infosec/AI/BSD news feeds, and stateful IRC-native tools (seen, tell, remind, notes). Plugin architecture with hot-reload: modules load, unload, and reload without restarting the bot.
 

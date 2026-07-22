@@ -301,6 +301,44 @@ on 3.14 silently omits them and breaks CI's 3.10 jobs. The lockfile header recor
 the exact `pip-compile` invocation. Commit `requirements.txt` and
 `requirements.lock` together in the same commit.
 
+## Cutting a release
+
+The version lives in six hand-edited places. Two are cross-checked by
+`tests/run_tests.py` and the rest by the doc-literal guard beside it, so a
+missed one fails the suite rather than shipping.
+
+1. **Bump the version** in `pyproject.toml`, `config.py`, and `docs/conf.py`
+   (three literals there: `release`, the truncated `version` MAJOR.MINOR, and
+   `html_title`). The prose literals in `README.md` and `docs/*.md` and the
+   User-Agent example in `config.ini.example` move with them.
+2. **Cut the CHANGELOG.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`
+   and put the categories in Keep a Changelog order (Added, Changed, Deprecated,
+   Removed, Fixed, Security). Merge any duplicate category headings - they
+   accumulate when unrelated work lands in the same cycle.
+3. **Write a breaking-change preamble** directly under the version heading if
+   anything requires operator action, following the shape 3.0.0 and 4.0.0 use:
+   plain language, what breaks, and the exact remedy. This is the only thing
+   that reaches an operator who does not read the diff. Do not bury it in a
+   bullet.
+4. **Run every gate**: `python tests/run_tests.py`, `pytest tests/`, the
+   core-coverage gate, `scripts/verify_install.sh`, and `scripts/build-docs.sh`.
+5. **Tag**, matching the existing convention exactly - annotated, GPG-signed,
+   `v`-prefixed, message `Internets vX.Y.Z`:
+
+   ```bash
+   git tag -s vX.Y.Z -m "Internets vX.Y.Z"
+   git push origin vX.Y.Z
+   ```
+
+   Note the tag is `v`-prefixed while the CHANGELOG heading is not. Verify with
+   `git tag -v vX.Y.Z`.
+
+**SemVer here is about the operator, not an import surface.** This is an
+application: MAJOR means "an existing working deployment needs you to do
+something." v5.0.0 is major because a bcrypt password over 72 bytes stops
+authenticating until the operator re-runs `hashpw.py` - nobody's Python API
+changed.
+
 ## Pull requests
 
 - Open against `main`.

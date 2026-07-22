@@ -99,10 +99,31 @@ class TestVersion:
         assert isinstance(config.__version__, str)
         assert re.fullmatch(r"\d+\.\d+\.\d+", config.__version__)
 
-    def test_version_matches_cli_program_name(self):
-        # The --version action embeds __version__; assert the contract that
-        # the constant is the single source the CLI advertises.
-        assert config.__version__ == "4.0.0"
+    def test_version_matches_pyproject(self):
+        """Derived, not hardcoded.
+
+        This previously asserted a literal, which made every release bump turn
+        the suite red for no reason and told a reader nothing. Its old name and
+        comment also claimed it checked the CLI, which it never did. Compare
+        against the packaging metadata instead - that is the actual invariant,
+        and it fails only when the two genuinely disagree.
+        """
+        import pathlib
+        import re as _re
+
+        pyproject = (pathlib.Path(__file__).resolve().parent.parent
+                     / "pyproject.toml").read_text()
+        # Anchored at line start so a `version = "..."` inside some other
+        # table cannot be picked up instead of [project]'s.
+        m = _re.search(r'^version\s*=\s*"([^"]+)"', pyproject, _re.M)
+        assert m, "pyproject.toml has no top-level version"
+        assert config.__version__ == m.group(1)
+
+    def test_version_is_advertised_by_the_cli(self):
+        """The claim the old test's comment made but never checked."""
+        actions = {a.dest: a for a in config._cli._actions}
+        assert "version" in actions
+        assert config.__version__ in actions["version"].version
 
 
 # ── _secret_or_cfg three-tier resolution ─────────────────────────────────

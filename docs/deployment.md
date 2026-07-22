@@ -1,6 +1,6 @@
 # Deployment and operations
 
-Operations manual for Internets v4.0.0. Grounded in `console.py`, `process_lock.py`,
+Operations manual for Internets v5.0.0. Grounded in `console.py`, `process_lock.py`,
 `botlog.py`, `internets.py`, `config.py`, `metrics.py`, `store.py`, `audit_log.py`,
 `admin_cmds.py`. Read those alongside this.
 
@@ -38,7 +38,7 @@ Parsed in `config.py:115` (`argparse`). All optional:
 
 | Flag | Effect |
 |------|--------|
-| `--version` | Print `Internets 4.0.0` and exit. |
+| `--version` | Print `Internets 5.0.0` and exit. |
 | `--debug [SUBSYSTEM ...]` | No args = global debug (all subsystems). With args = per-subsystem, e.g. `--debug weather store`. Applied in `botlog.py:150`. |
 | `--loglevel LEVEL` | Base level: `DEBUG`/`INFO`/`WARNING`/`ERROR`. Overrides `[logging] level`. |
 | `--debug-file PATH` | Write ALL output at DEBUG to a separate rotating file. Overrides `[logging] debug_file`. |
@@ -367,6 +367,13 @@ the JSON state files, and `config.ini` (securely - it holds secrets). The `.bak`
 are good.
 
 ## Upgrade procedure
+
+0. **Read the CHANGELOG entry for the version you are moving to, first.**
+   Breaking changes and the operator action they require are recorded there, not
+   here. A major release can require you to do something before the bot will
+   authenticate you again - v5.0.0, for instance, stops accepting a bcrypt
+   password longer than 72 UTF-8 bytes, and the only symptom is `.auth`
+   answering `wrong password.`
 
 1. Stop the bot gracefully: `.shutdown` from IRC/console, or `kill -INT <pid>`. Confirm
    `internets.pid` is gone (or stale-cleared on next start).

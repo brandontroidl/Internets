@@ -199,7 +199,7 @@ oper_password =
 ; ── PII / contact identifier ────────────────────────────────────────
 ; Nominatim and several weather APIs require a real contact in the
 ; User-Agent.  Prefer a URL over an email when possible, e.g.
-; "Internets/4.0.0 (https://github.com/youruser/yourrepo)".
+; "Internets/5.0.0 (https://github.com/youruser/yourrepo)".
 
 weather_user_agent =
 

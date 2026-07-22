@@ -1,6 +1,6 @@
 # Security model
 
-Maintainer's manual for the security-relevant subsystems of Internets v4.0.0. Every
+Maintainer's manual for the security-relevant subsystems of Internets v5.0.0. Every
 claim below is grounded in the source as of this writing; file:line references are for
 navigation. Read the code alongside this.
 

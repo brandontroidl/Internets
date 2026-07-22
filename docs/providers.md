@@ -1,6 +1,6 @@
 # Weather subsystem - provider framework and reference
 
-Internets 4.0.0. This is the maintainer manual for the weather aggregator: the
+Internets 5.0.0. This is the maintainer manual for the weather aggregator: the
 provider framework under `weather_providers/`, how `modules/weather.py` drives
 dispatch, how `modules/geocode.py` turns a user string into coordinates, and a
 complete reference of the 32 provider packages.

@@ -4,29 +4,40 @@ All notable changes to Internets are documented in this file.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.0.0] - 2026-07-22
 
-### Security
+Major release. Backward-incompatible for admin authentication.
 
-- **bcrypt no longer silently truncates a long password.** `hash_bcrypt` passed
-  the password straight to `bcrypt.hashpw`, which ignores every byte past 72. On
-  the installed bcrypt 4.3.0 that meant an over-long password was silently cut
-  down and any string sharing its first 72 bytes authenticated; demonstrated
-  with an 84-char stored password and a 94-char attacker password both verifying
-  `True`. Refused now at hash time *and* at verify time, so an already-stored
-  hash cannot be matched by a longer candidate either. Operators on scrypt (the
-  CLI default) or argon2 are unaffected. An operator whose existing bcrypt
-  password exceeds 72 bytes must re-run `hashpw.py`.
-- **Failed authentication is audit-logged.** The tamper-evident log recorded
-  successful logins and not attacks. Failures and the lockout transition are now
-  recorded, deliberately *outside* `_auth_lock` and off the event loop (holding
-  that lock across a disk write stalls every inbound command, since `is_admin`
-  takes it), capped at `_AUTH_MAX_FAILS + 1` records per nick per lockout window
-  so a flood cannot churn the log through rotation, and carrying only the
-  failure counter - never the password or its length.
-- **Audit actor strings are sanitised.** Failed-auth records made the actor
-  attacker-influenced; control bytes are stripped before anything reaches a
-  durable record, so a crafted nick cannot forge a column in `.audit` output.
+**bcrypt passwords over 72 UTF-8 bytes no longer authenticate.** bcrypt ignores
+every byte past 72, so such a password was previously accepted while only its
+first 72 bytes protected the account. Both hashing and verification now refuse
+it outright. If `[admin] password_hash` starts with `bcrypt$` and your password
+is longer than 72 bytes, re-run `hashpw.py` (argon2 has no such limit) and paste
+the new hash; no restart is needed, the hash is re-read on every `.auth`. The
+symptom is a plain `wrong password.` with `bcrypt candidate exceeds the 72-byte
+limit` in the log. Operators on scrypt (the CLI default) or argon2 are
+unaffected by this one.
+
+**The admin password cap is now 128 UTF-8 BYTES, not 128 characters.** A
+non-ASCII passphrase that fits in 128 characters may exceed 128 bytes and will
+stop authenticating; re-generate it shorter. Passwords with leading or trailing
+whitespace are also rejected at creation - they could never have authenticated
+over IRC, since the bot strips a command argument before dispatch.
+
+**The wheel was missing three modules** (`audit_log`, `process_lock`,
+`metrics`), so a non-editable install could not start. Fixed, and the install
+gate that should have caught it now runs in CI. See Security / Fixed below.
+
+### Added
+
+- **Skeleton module (`modules/example.py`).** A loadable, fully-commented
+  copy-and-fill template for a new command module: documents the `BotModule`
+  contract (`COMMANDS`, the `cmd_*(nick, reply_to, arg)` signature, `on_load`,
+  `is_configured`, `help_lines`, `forget`, `setup`) and the real conventions -
+  rate limiting, `strip_ctrl` on output, the off-loop `_fetch_sync` shape with
+  error handling over the size-capped `fetch_json`, the `_netsafe` SSRF caveat
+  for user-supplied URLs, and the shared User-Agent via `cred`. Not autoloaded;
+  `docs/modules.md` Part 1 points to it.
 
 ### Fixed
 
@@ -41,66 +52,6 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   characters while `cmd_auth` rejected anything over 128, so a password could
   hash cleanly and then never authenticate. One shared constant now, denominated
   in UTF-8 bytes rather than code points.
-
-### Documentation
-
-- **Documented the four subsystems that had no dedicated section anywhere**:
-  `protocol.py` and `console.py` (`docs/architecture.md` 9-10), `hashpw.py` and
-  `admin_cmds.py` (`docs/security-model.md` 10-11). Every top-level module now
-  has one.
-- **Corrected a factual error that appeared in four places** - both
-  `docs/architecture.md` sites, `internets.py` and `console.py`'s own docstring -
-  describing the console as an `asyncio.to_thread` worker. It is a raw
-  `threading.Thread(daemon=True)`, and the distinction is load-bearing: a
-  to_thread worker is non-daemon on the default executor, so
-  `shutdown_default_executor()` waits forever for a thread parked in `input()`.
-  The stale text would have led a maintainer to reintroduce that hang. Also
-  dropped the "prevents the console from looping on EOF" rationale (three sites);
-  the dispatch loop returns on the first `EOFError`, so the only real reason to
-  skip on a non-TTY is that the console is an unauthenticated admin surface.
-- **Documented the cross-provider gap-fill**, which was entirely absent from the
-  docs despite being load-bearing: how a sparse `current` result is merged from
-  the chain, the 3-contributor bound, and the derived-field invariant that keeps
-  `feels_like_c`/`dewpoint_c` out of `_CURRENT_GAP_FIELDS`
-  (`docs/providers.md` 4.5).
-- **Documented coverage-vs-failure handling** and the `nws/_scope.py` pattern
-  for regional providers, including which HTTP statuses mean "not my region"
-  and which must stay failures (`docs/providers.md` 4.9).
-- **Rewrote the place-name resolution section** for the settlement pass,
-  `importance` ranking and its limits, `us_state_code`, and the landmark
-  display fallback (`docs/providers.md` 9.3-9.5).
-- **Documented `.alerts` point-vs-area scoping**, alert dedup/severity ordering,
-  and `.wildfire` acreage semantics (`docs/providers.md` 8.4-8.5,
-  `docs/modules.md`).
-- **Restored the "Adding a provider" guide** lost in the v4.0.0 docs rewrite,
-  rewritten against the current `_cred`/lazy-import factory pattern rather than
-  the pre-rewrite one (`docs/providers.md` 12).
-- **Documented the documentation build** (`scripts/build-docs.sh`), the only
-  script with no coverage anywhere, including the expected warning baseline and
-  that autoapi publishes source docstrings as reference material.
-- **Corrected the test-suite documentation.** The two suites are disjoint, not
-  overlapping: `tests/run_tests.py` is not collected by pytest, so neither
-  command is a superset of the other. Documented why `async def test_` functions
-  must not be used - without `pytest-asyncio` installed they are collected,
-  reported as passed, and never executed.
-- **Fixed stale counts and claims**: `weather_providers/__init__.py` said 30
-  provider packages (32), `_http.py` said 14 providers, `README.md` said 70
-  command modules (72) and 31 pytest modules (39), and `CONTRIBUTING.md` said
-  CodeQL runs `security-and-quality` when it runs `security-extended`. The
-  package docstring matters because autoapi renders it into the API reference.
-
-### Added
-
-- **Skeleton module (`modules/example.py`).** A loadable, fully-commented
-  copy-and-fill template for a new command module: documents the `BotModule`
-  contract (`COMMANDS`, the `cmd_*(nick, reply_to, arg)` signature, `on_load`,
-  `is_configured`, `help_lines`, `forget`, `setup`) and the real conventions -
-  rate limiting, `strip_ctrl` on output, the off-loop `_fetch_sync` shape with
-  error handling over the size-capped `fetch_json`, the `_netsafe` SSRF caveat
-  for user-supplied URLs, and the shared User-Agent via `cred`. Not autoloaded;
-  `docs/modules.md` Part 1 points to it.
-
-### Fixed
 
 - **Feels-like no longer contradicts the temperature beside it.** `.w yosemite
   national park` reported `Temperature 24.2C :: Feels like 11.3C` at 44%
@@ -179,6 +130,75 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sparse current result keeps its more-accurate temperature and conditions and
   has only its missing secondary fields filled from the next usable provider,
   crediting both sources (`[NWS + Open-Meteo]`).
+
+### Security
+
+- **bcrypt no longer silently truncates a long password.** `hash_bcrypt` passed
+  the password straight to `bcrypt.hashpw`, which ignores every byte past 72. On
+  the installed bcrypt 4.3.0 that meant an over-long password was silently cut
+  down and any string sharing its first 72 bytes authenticated; demonstrated
+  with an 84-char stored password and a 94-char attacker password both verifying
+  `True`. Refused now at hash time *and* at verify time, so an already-stored
+  hash cannot be matched by a longer candidate either. Operators on scrypt (the
+  CLI default) or argon2 are unaffected. An operator whose existing bcrypt
+  password exceeds 72 bytes must re-run `hashpw.py`.
+- **Failed authentication is audit-logged.** The tamper-evident log recorded
+  successful logins and not attacks. Failures and the lockout transition are now
+  recorded, deliberately *outside* `_auth_lock` and off the event loop (holding
+  that lock across a disk write stalls every inbound command, since `is_admin`
+  takes it), capped at `_AUTH_MAX_FAILS + 1` records per nick per lockout window
+  so a flood cannot churn the log through rotation, and carrying only the
+  failure counter - never the password or its length.
+- **Audit actor strings are sanitised.** Failed-auth records made the actor
+  attacker-influenced; control bytes are stripped before anything reaches a
+  durable record, so a crafted nick cannot forge a column in `.audit` output.
+
+### Documentation
+
+- **Documented the four subsystems that had no dedicated section anywhere**:
+  `protocol.py` and `console.py` (`docs/architecture.md` 9-10), `hashpw.py` and
+  `admin_cmds.py` (`docs/security-model.md` 10-11). Every top-level module now
+  has one.
+- **Corrected a factual error that appeared in four places** - both
+  `docs/architecture.md` sites, `internets.py` and `console.py`'s own docstring -
+  describing the console as an `asyncio.to_thread` worker. It is a raw
+  `threading.Thread(daemon=True)`, and the distinction is load-bearing: a
+  to_thread worker is non-daemon on the default executor, so
+  `shutdown_default_executor()` waits forever for a thread parked in `input()`.
+  The stale text would have led a maintainer to reintroduce that hang. Also
+  dropped the "prevents the console from looping on EOF" rationale (three sites);
+  the dispatch loop returns on the first `EOFError`, so the only real reason to
+  skip on a non-TTY is that the console is an unauthenticated admin surface.
+- **Documented the cross-provider gap-fill**, which was entirely absent from the
+  docs despite being load-bearing: how a sparse `current` result is merged from
+  the chain, the 3-contributor bound, and the derived-field invariant that keeps
+  `feels_like_c`/`dewpoint_c` out of `_CURRENT_GAP_FIELDS`
+  (`docs/providers.md` 4.5).
+- **Documented coverage-vs-failure handling** and the `nws/_scope.py` pattern
+  for regional providers, including which HTTP statuses mean "not my region"
+  and which must stay failures (`docs/providers.md` 4.9).
+- **Rewrote the place-name resolution section** for the settlement pass,
+  `importance` ranking and its limits, `us_state_code`, and the landmark
+  display fallback (`docs/providers.md` 9.3-9.5).
+- **Documented `.alerts` point-vs-area scoping**, alert dedup/severity ordering,
+  and `.wildfire` acreage semantics (`docs/providers.md` 8.4-8.5,
+  `docs/modules.md`).
+- **Restored the "Adding a provider" guide** lost in the v4.0.0 docs rewrite,
+  rewritten against the current `_cred`/lazy-import factory pattern rather than
+  the pre-rewrite one (`docs/providers.md` 12).
+- **Documented the documentation build** (`scripts/build-docs.sh`), the only
+  script with no coverage anywhere, including the expected warning baseline and
+  that autoapi publishes source docstrings as reference material.
+- **Corrected the test-suite documentation.** The two suites are disjoint, not
+  overlapping: `tests/run_tests.py` is not collected by pytest, so neither
+  command is a superset of the other. Documented why `async def test_` functions
+  must not be used - without `pytest-asyncio` installed they are collected,
+  reported as passed, and never executed.
+- **Fixed stale counts and claims**: `weather_providers/__init__.py` said 30
+  provider packages (32), `_http.py` said 14 providers, `README.md` said 70
+  command modules (72) and 31 pytest modules (39), and `CONTRIBUTING.md` said
+  CodeQL runs `security-and-quality` when it runs `security-extended`. The
+  package docstring matters because autoapi renders it into the API reference.
 
 ## [4.0.0] - 2026-06-28
 

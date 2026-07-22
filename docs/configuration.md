@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Internets 4.0.0. Every configuration key and secret, where it is read, its type, default,
+Internets 5.0.0. Every configuration key and secret, where it is read, its type, default,
 bounds, and the audit findings (dead keys, an unused secret, keys read by code but absent
 from the template). Grounded in `config.py`, `config.ini.example`, `secret_store.py`, and the
 actual consumers cited inline as `file:line`.
@@ -106,7 +106,7 @@ constants.
 
 | Flag | Overrides | Effect |
 |---|---|---|
-| `--version` | - | Prints `Internets 4.0.0`, exits. |
+| `--version` | - | Prints `Internets 5.0.0`, exits. |
 | `--debug [SUBSYSTEM ...]` | - | No args = global debug; with args = per-subsystem (`--debug weather store`). Default `None`. |
 | `--loglevel LEVEL` | `LOG_LEVEL` | `DEBUG`/`INFO`/`WARNING`/`ERROR`. |
 | `--debug-file PATH` | `LOG_DEBUG` | Captures all DEBUG to a separate file. |

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import secret_store
 
-__version__ = "4.0.0"
+__version__ = "5.0.0"
 
 
 def _secret_or_cfg(secret_name: str, section: str, key: str, default: str = "") -> str:
