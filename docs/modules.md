@@ -221,6 +221,33 @@ temp/wind/pressure/distance formatting) is imported by `weather.py` only.
 | `.weather`/`.w` `.forecast`/`.f` `.hourly`/`.h` `.nowcast`/`.nc` `.alerts`/`.al` `.aqi`/`.air` `.uv`/`.uvi` `.pollen`/`.allergy` `.astro`/`.sun` `.marine`/`.sea` `.history`/`.hist` `.wildfire`/`.fire` `.space`/`.aurora` `.tides`/`.tide` `.providers` | Capability-based weather dispatcher front-end; resolves location, calls `weather_providers`, formats normalized dataclasses. `.providers` is admin-only health/capability dump. Accepts city/zip/`lat,lon`/`-n nick` and per-provider `-flag`s. | UA + provider keys (core chain keyless - nws + openmeteo cover most capabilities - but ~20 of 32 providers are key-gated and register only when their credential is present) | weather.py |
 | `.regloc` (`.register_location`) `.myloc` `.delloc` | Save / show / delete the caller's default location (stored in the core per-nick loc store via `bot.loc_set/loc_get/loc_del`, `location.py:48/54/65`; resolved via geocode). No `forget()` override; `.forgetme` wipes the location through `privacy.forgetme` -> `loc_del`. | local store | location.py |
 
+Behaviour worth knowing before you touch this module (full detail in
+`docs/providers.md`):
+
+- **`.alerts` widens to a whole state.** A query that is *only* a US state name
+  or USPS code (`.al mississippi`, `.al ms`) queries NWS with `area=XX` instead
+  of the geocoded point, because a state resolves to one inland coordinate and a
+  point lookup returns only alerts covering that exact spot. Naming a place
+  inside the state (`.al jackson mississippi`) stays a point lookup. Alerts are
+  deduplicated by `(event, headline)` (NWS issues one per forecast zone), sorted
+  most-severe first, capped at 5, and anything beyond the cap is reported as
+  `... and N more` rather than dropped.
+- **Feels-like is always shown when known**, even when it nearly matches the
+  temperature. It is never gap-filled from another provider - see the derived
+  field invariant in `docs/providers.md` section 4.5.
+- **`.wildfire` reports `(N sized)`** alongside the incident count, because
+  NIFC's current-incident layer is mostly small dispatch records carrying no
+  size at all. Acreage comes from `IncidentSize` (current), never
+  `DiscoveryAcres` (size at initial report, a 0.01 default on nearly every
+  record).
+- **A location NWS does not cover is not a provider failure.** Non-US points
+  return `None` from every NWS endpoint so the dispatcher falls through without
+  penalising NWS's circuit breaker.
+- **Geocoding runs a settlement-constrained search alongside the free-text
+  one** and keeps the more prominent result, so a business no longer outranks
+  the place it was named after (`new york new york` resolved to the Las Vegas
+  casino before this).
+
 ### Network, DNS, lookup
 
 | Command(s) | Does | Needs | File |

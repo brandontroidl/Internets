@@ -6,6 +6,39 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Documented the cross-provider gap-fill**, which was entirely absent from the
+  docs despite being load-bearing: how a sparse `current` result is merged from
+  the chain, the 3-contributor bound, and the derived-field invariant that keeps
+  `feels_like_c`/`dewpoint_c` out of `_CURRENT_GAP_FIELDS`
+  (`docs/providers.md` 4.5).
+- **Documented coverage-vs-failure handling** and the `nws/_scope.py` pattern
+  for regional providers, including which HTTP statuses mean "not my region"
+  and which must stay failures (`docs/providers.md` 4.9).
+- **Rewrote the place-name resolution section** for the settlement pass,
+  `importance` ranking and its limits, `us_state_code`, and the landmark
+  display fallback (`docs/providers.md` 9.3-9.5).
+- **Documented `.alerts` point-vs-area scoping**, alert dedup/severity ordering,
+  and `.wildfire` acreage semantics (`docs/providers.md` 8.4-8.5,
+  `docs/modules.md`).
+- **Restored the "Adding a provider" guide** lost in the v4.0.0 docs rewrite,
+  rewritten against the current `_cred`/lazy-import factory pattern rather than
+  the pre-rewrite one (`docs/providers.md` 12).
+- **Documented the documentation build** (`scripts/build-docs.sh`), the only
+  script with no coverage anywhere, including the expected warning baseline and
+  that autoapi publishes source docstrings as reference material.
+- **Corrected the test-suite documentation.** The two suites are disjoint, not
+  overlapping: `tests/run_tests.py` is not collected by pytest, so neither
+  command is a superset of the other. Documented why `async def test_` functions
+  must not be used - without `pytest-asyncio` installed they are collected,
+  reported as passed, and never executed.
+- **Fixed stale counts and claims**: `weather_providers/__init__.py` said 30
+  provider packages (32), `_http.py` said 14 providers, `README.md` said 70
+  command modules (72) and 31 pytest modules (39), and `CONTRIBUTING.md` said
+  CodeQL runs `security-and-quality` when it runs `security-extended`. The
+  package docstring matters because autoapi renders it into the API reference.
+
 ### Added
 
 - **Skeleton module (`modules/example.py`).** A loadable, fully-commented

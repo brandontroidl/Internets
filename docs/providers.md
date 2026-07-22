@@ -33,11 +33,12 @@ its missing secondary fields filled from the next usable provider, crediting
 both sources (`[NWS + Open-Meteo]`), bounded to 3 contributors and the chain
 deadline (`_dispatch.py`, `base.py: WeatherResult.has_gaps/fill_gaps`).
 
-The package docstring (`__init__.py:4`) still says "30 provider packages" and
-`_http.py:106` still says "14 providers" (a session-cache comment); `_dispatch.py`
-contains neither stale count. The live count is 32 (`ls weather_providers/` minus
-the five framework files and `__pycache__`). `README.md` and `provider_status()`
-are the live sources of truth for the count.
+The live count is 32 (`ls weather_providers/` minus the framework files and
+`__pycache__`), across 14 capabilities. Both previously-stale hardcoded counts
+(the package docstring and a session-cache comment in `_http.py`) have been
+corrected; the docstring matters because autoapi renders it into the API
+reference. `provider_status()` remains the runtime source of truth - prefer
+querying it over trusting any count written into prose, including this one.
 
 ## 2. The normalized data contract (`base.py`)
 
@@ -209,7 +210,69 @@ This is a load-bearing distinction (`_dispatch.py:413`):
   and keep winning its rank slot. Only real data is a success.
 - **non-`None` result**: `rp.health.record_success(latency)` then return it.
 
-### 4.5 Failure handling
+A provider must therefore signal "not my region" by **returning `None`, not by
+raising**. Raising routes into 4.5 and records a failure against a provider that
+did nothing wrong. NWS is the worked example - see section 4.9.
+
+### 4.5 Cross-provider gap-fill (`current` only)
+
+NWS station observations routinely null `dewpoint`, `pressure`, `visibility`
+and `textDescription`. Returning that as-is prints a line of `N/A` even when the
+next provider in the chain has the values, so for the `current` capability the
+dispatcher keeps walking and merges (`_dispatch.py:429-441`):
+
+1. The first usable result becomes `primary`.
+2. If `primary.has_gaps()` (`base.py:122`), the loop continues instead of
+   returning.
+3. Each subsequent usable result is folded in with
+   `primary.fill_gaps(other)` (`base.py:129`), which copies **only** fields the
+   primary is missing and never overwrites one it has.
+4. Stops when `not primary.has_gaps()` or `merged >= 3`, and is bounded by the
+   same chain deadline as everything else.
+5. Source credit becomes `"NWS + Open-Meteo"` so the output names every
+   contributor.
+
+If the chain is exhausted with a still-sparse primary, it is returned anyway
+(`_dispatch.py:474`) - a partial answer beats none.
+
+#### The derived-field invariant (do not undo this)
+
+`_CURRENT_GAP_FIELDS` (`base.py:75`) is the gap-fill set:
+
+```python
+_CURRENT_GAP_FIELDS = (
+    "humidity", "wind_kph", "wind_dir",
+    "pressure_mb", "visibility_m", "description",
+)
+```
+
+`feels_like_c` and `dewpoint_c` are **deliberately absent**, and `temperature`
+was never in it. Those three are not independent measurements - feels-like and
+dewpoint are *derived from* an observation's own temperature, humidity and wind.
+Importing one from a provider that measured a different temperature produces a
+line that contradicts itself.
+
+Observed: `.w yosemite national park` printed `Temperature 24.2C :: Feels like
+11.3C` at 44% humidity and 6.6mph wind, a figure no apparent-temperature formula
+yields. NWS read the nearest station (2900m elevation, 714mb) at 24.22C and
+supplied no feels-like; Open-Meteo's model grid read 13.8C and contributed a
+feels-like of 11.9C computed against *its* temperature. The two providers were
+describing points 10.4C apart. `.w 91773` erred the other way - 24.4C shown
+beside a borrowed 28.8C.
+
+The rule: **a derived field must come from the same observation as the
+temperature printed beside it.** Providers populate them natively or leave them
+`None`. If you add a field to `WeatherResult`, decide which kind it is before
+adding it to this tuple; when in doubt, leave it out, because a missing value is
+honest and a borrowed one is not.
+
+Regression cover: `tests/test_dispatcher.py::TestGapFill` -
+`test_derived_fields_are_never_imported_from_another_observation` and
+`test_missing_derived_fields_do_not_keep_the_chain_walking` (the latter pins
+that these fields, being unfillable, must not keep the chain burning provider
+calls).
+
+### 4.6 Failure handling
 
 On any exception (`_dispatch.py:443`):
 
@@ -231,7 +294,7 @@ bot down. If every provider in the chain fails or returns no data, `dispatch`
 logs `All providers failed` and returns `None`; the command layer then prints
 the per-command failure message.
 
-### 4.6 Provider-bug exceptions
+### 4.7 Provider-bug exceptions
 
 `_BUG_EXC_TYPES` (`_dispatch.py:130`: `TypeError, AttributeError, KeyError,
 IndexError, NameError, FrozenInstanceError`) signal a defect in the provider's
@@ -240,12 +303,56 @@ outage. The dispatcher still falls through (resilience), but additionally logs
 `dispatch_bug` at ERROR so the defect surfaces instead of hiding behind the
 normal "provider unavailable" path.
 
-### 4.7 Introspection helpers
+### 4.8 Introspection helpers
 
 `capabilities()` -> `{capability: [provider_ids]}`. `capability_matrix()` ->
 human-readable per-capability chain string (used by `.providers`).
 `health_summary()` -> delegates to `health_registry.summary()`. `get_provider`,
 `provider_ids`, `register`/`unregister`/`clear`.
+
+### 4.9 Coverage vs failure: the NWS worked example (`nws/_scope.py`)
+
+api.weather.gov serves US points only, and says so three different ways:
+
+| surface | signal |
+|---|---|
+| `/alerts/active?point=` | HTTP 400 `Parameter "point" is invalid: out of bounds` |
+| `/points/{lat},{lon}` | HTTP 404 `Data Unavailable For Requested Point` |
+| any endpoint | HTTP 200 whose payload carries no station, forecast URL or marine zone |
+
+All three used to surface as exceptions, so every non-US `.w` or `.al` took the
+4.6 path and called `record_failure()` against NWS. Enough of them open the
+breaker (section 5.4) and US alerts then fall through to a less authoritative
+provider - a provider degraded by questions it was never able to answer. An
+inland `.marine` did the same: not being in a marine zone is a normal answer,
+not a fault.
+
+`_scope.py` converts all three into one `None`:
+
+- `_NO_DATA_STATUSES = frozenset({400, 404})` (`_scope.py:34`). Every request
+  here is built from validated coordinates, so these mean the *point* is
+  unsupported, not that the request was malformed.
+- `nws_json()` (`_scope.py:41`) wraps `get_json` and re-raises those two
+  statuses as `OutOfCoverage`. **Every other status still raises `HTTPError`** -
+  401/403/429/5xx must stay failures so the breaker and rate-limit accounting
+  still see them.
+- The payload-shaped cases raise `OutOfCoverage` directly at their check sites
+  (`current.py:18,22`, `forecast.py:12`, `hourly.py:14`, `marine.py:18,24`).
+- `none_if_uncovered()` (`_scope.py:55`) awaits a fetch and returns `None` on
+  `OutOfCoverage`. Every `NWSProvider` method wraps its fetch in it
+  (`nws/__init__.py`).
+
+Coverage is left to upstream rather than a hardcoded bounding box. A box for
+CONUS + Alaska + Hawaii + territories drifts the moment NWS changes what it
+serves, and would have to handle the Aleutians' antimeridian wrap besides.
+
+**Apply this pattern to any regional provider you add.** ECCC (Canada), Met.no,
+and the US-only air-quality providers have the same shape. The test is not "did
+the call fail" but "is this provider *able* to answer for this point" - and only
+the second one should ever touch the breaker.
+
+Regression cover: `tests/test_new_weather_capabilities.py::TestNWSCoverage`,
+including a parametrized check that 403/429/500/503 still propagate.
 
 ## 5. Per-provider health and circuit breaker (`_health.py`)
 
@@ -457,6 +564,86 @@ nowcast at 8.
 `.providers` (`cmd_providers`, admin only) dumps `health_summary()` and
 `capability_matrix()`.
 
+**Feels-like is shown whenever it is known** (`modules/weather.py:62`). It was
+previously suppressed unless it differed from the temperature by 2 degrees,
+which made "we don't know" and "it feels like what it is" indistinguishable.
+Once the value started coming from the same observation as the temperature
+(section 4.5), the honest answer is usually a close one rather than a missing
+one, so the suppression was removed. A `None` stays absent - never synthesized
+from the temperature.
+
+### 8.4 `.alerts` scoping: point vs area
+
+`.alerts` does not use the generic `_weather_cmd` path. Beyond geocoding, it
+asks whether the query names a whole US state (`modules/weather.py:730`):
+
+```python
+raw, _ = self._resolve(nick, rest)
+area = us_state_code(raw) if raw else None
+```
+
+A bare state name or USPS code passes `area=XX` through the dispatcher into
+`NWSProvider.get_alerts`, which forwards it to `alerts.fetch(..., area=...)`
+(`nws/alerts.py:14`). `area` and `point` are mutually exclusive - sending both
+narrows straight back to the point.
+
+Why: a state geocodes to one inland coordinate, and a point lookup returns only
+the alerts whose polygon covers that exact spot. With Tropical Storm Bertha's
+centre on the Mississippi coast, `.al mississippi` returned a single Heat
+Advisory from NWS Jackson. Measured against api.weather.gov at the time:
+
+```
+point = Jackson MS       ->  1 alert
+point = Biloxi MS coast  ->  4 alerts (incl. Tropical Storm Warning)
+area  = MS               -> 17 alerts (3x TS Warning, 3x TS Watch, ...)
+```
+
+Naming a place *inside* a state (`jackson mississippi`) stays a point lookup -
+that user asked about a place, not a state.
+
+The other alert providers receive `area` in their `**kw` and ignore it; all 12
+`get_alerts` implementations accept `**kw`.
+
+#### Making a 17-alert state readable
+
+Widening the query exposed two further ways the important alert stayed hidden
+(`_format_alerts`, `modules/weather.py:116`):
+
+1. **Per-zone duplicates.** NWS issues one alert per forecast zone, so a
+   state-wide query repeats the same warning across every zone it covers. Three
+   identical Tropical Storm Watches consumed the 5-line cap. Identical
+   `(event, headline)` pairs are collapsed first.
+2. **Newest-first ordering.** NWS returns most-recently-issued first, so routine
+   statements outranked the actual Tropical Storm Warning. Entries are sorted by
+   `_RANK` (`modules/weather.py:137`: extreme < severe < moderate < minor <
+   unknown), stable so equal-severity alerts keep the provider's own order.
+
+Anything past the cap is reported as `... and N more` (counted over the
+*deduped* set) rather than vanishing. A state under a hurricane can carry 15+;
+showing 5 with no marker reads as "that is all of them".
+
+### 8.5 `.wildfire` acreage
+
+`WildfireResult` (`base.py:349`) carries `max_acres` and `sized_count`.
+
+NIFC's WFIGS current-incident layer has four acreage fields. `DiscoveryAcres` is
+the size at *initial report* and sits at a dispatch default of 0.01 on nearly
+every record; `IncidentSize` is the current size. Reading the wrong one printed
+`46 active fire(s) nearby :: Largest 0 acres` while the SUMMIT fire was burning
+2690 acres at 98% containment.
+
+`IncidentSize` is null on most records - small incidents nobody sized - so
+`sized_count` reports how many of `fire_count` carry a size at all, rather than
+implying the whole set is measured:
+
+```
+46 active fire(s) nearby (8 sized) :: Nearest LAC-253228 5km :: Largest 2,690 acres :: [NIFC]
+```
+
+Detection-only sources (NASA FIRMS) leave `sized_count` at 0 and print the plain
+count with no acreage. Sub-acre sizes render with two decimals rather than
+rounding to a bare `0 acres` - 0.1 acres is a real fire.
+
 ## 9. Location resolution (`modules/geocode.py`)
 
 `geocode(query, user_agent, *, default_country="us")` (`geocode.py:720`) ->
@@ -485,7 +672,7 @@ calls to threads internally.
    to a random Missouri suburb). A bare `39 98` (no comma/sign/decimal) is
    intentionally rejected as too ambiguous.
 5. **Postal-code resolution** (structured, country-aware) - see 9.2.
-6. **Place-name word-drop loop** - see 9.3.
+6. **Settlement pass + unconstrained free-text with word-drop** - see 9.3.
 
 ### 9.2 Postal codes: classifier + structured lookup
 
@@ -532,30 +719,112 @@ Nominatim postal (`_nominatim_postal`) and Zippopotam (`_zippo`) both fail
 closed (`None`) on any missing/oversize/unparseable field; `_zippo` treats a 404
 as a clean miss.
 
-### 9.3 Place-name word-drop fallback
+### 9.3 Place names: the settlement pass and why it exists
 
-If no postal match, the free-text loop (`geocode.py:836`): per candidate, derive
-`countrycodes` fresh (`_looks_like_us` for US states/abbrevs/ZIP, else
-`_country_code_for` for country names and CA/AU subdivisions), query Nominatim
-`q=`. On a hit, format and return. On a miss, drop the last token and retry,
-capped at `_MAX_DROPS = 4`. The cap is an abuse control: an adversarial
-many-token query would otherwise drop one token at a time for ~100 sequential
-requests, breaching Nominatim's 1 req/s policy and risking a channel-wide IP
-ban.
+Nominatim's free-text `q=` returns the single best-ranked OSM object of **any**
+class. For a weather lookup that is the wrong contract: a query that happens to
+name a business outranks the place it was named after.
 
-This recovers from trailing-token typos (`la quinta caifornia` -> `la quinta`)
-and from the Georgia clash: `Georgia` is a US state, so `tbilisi georgia` first
-pins to `countrycodes=us` and misses, then drops `georgia` and resolves
-`tbilisi` unconstrained (`_COUNTRY_NAME_MAP` deliberately omits `georgia` for
-this reason, `geocode.py:252`).
+Observed, US-pinned (the pin comes from the state name in the query):
 
-### 9.4 Display-name safety
+```
+.al new york new york      -> tourism/hotel   New York New York Hotel and Casino, Las Vegas
+.al north shore new jersey -> highway/residential  North Shore Boulevard, Helmetta NJ
+```
 
-`_format_name` (`geocode.py:569`) builds `City, ST` (US, USPS abbreviation via
-`_STATE_ABBR`) or `City, Country`. Every component is `_strip_ctrl`'d - all of
-it ultimately comes from user-editable OSM data, so a vandalized place name
-(`\r\nQUIT :pwned`, reverse/bold/color codes) can never be spliced into an IRC
-line. Names are capped at `_MAX_NAME_CHARS = 160`.
+`featureType=settlement` constrains a search to cities/towns/villages. But
+preferring the settlement *unconditionally* breaks the mirror case - a township
+named Graceland in South Africa preempts the Memphis landmark. So both searches
+run and the more prominent object wins.
+
+`_search_place(candidate, hdrs, *, feature_type=None)` (`geocode.py:754`) is the
+single implementation both passes share. It returns `(hit, importance, stop)`:
+
+- `hit` - `(lat, lon, name, cc)` or `None`.
+- `importance` - the matched object's OSM prominence (0.0 if upstream omits it).
+- `stop` - `True` when the caller must not retry with a shorter query: transport
+  failure, or a row whose lat/lon is missing, unparseable, or out of range.
+  Retrying either just burns requests against the 1 req/s policy.
+
+`countrycodes` is derived fresh per candidate inside the helper (`_looks_like_us`
+for US states/abbrevs/ZIP, else `_country_code_for` for country names and CA/AU
+subdivisions).
+
+The resolution order (`geocode.py:939`):
+
+1. Settlement pass on the **full** query. `stop` here returns `None`
+   immediately - Nominatim is unhappy, do not hammer it.
+2. The unconstrained loop. On a hit for the full query, the settlement hit wins
+   if `sett_imp >= free_imp`; otherwise the free-text hit does.
+3. On a hit only *after* dropping tokens, a full-query settlement hit always
+   wins - a truncated query answers a different question than the user asked.
+4. If the unconstrained search finds nothing usable, the settlement hit (if any)
+   is returned.
+
+**`importance` is used only to rank two answers to the same query.** It is
+worthless as an absolute quality bar: Oxford Circus (the wrong answer for
+`circus circus`) scores 0.5086 and Graceland (the right answer for `graceland`)
+scores 0.5087. The result *class* is the signal; the score only breaks a tie
+between two candidates for one query. If an upstream ever stops returning
+`importance`, both scores fall to 0.0 and the tie goes to the settlement - which
+still fixes the casino case but silently reinstates the Graceland one, so the
+ranking is only as good as that field.
+
+Word-drop is unchanged and still capped at `_MAX_DROPS = 4` (`geocode.py:978`),
+an abuse control: an adversarial many-token query would otherwise drop one token
+at a time for ~100 sequential requests. Worst case per query is now 6 requests
+(settlement + initial + 4 drops), up from 5.
+
+It still recovers trailing-token typos (`la quinta caifornia` -> `la quinta`)
+and the Georgia clash: `Georgia` is a US state, so `tbilisi georgia` first pins
+to `countrycodes=us` and misses, then drops `georgia` and resolves `tbilisi`
+unconstrained (`_COUNTRY_NAME_MAP` deliberately omits `georgia` for this reason,
+`geocode.py:252`).
+
+Known residual: `circus circus` resolves to City of Westminster. Nominatim ranks
+Oxford Circus above the Las Vegas casino globally and the query carries no city;
+`circus circus las vegas` resolves correctly. Arbitrating business names is out
+of scope for a weather bot.
+
+### 9.4 Whole-query US state detection (`us_state_code`)
+
+`us_state_code(query)` (`geocode.py:249`) returns a USPS code only when the
+**entire** query is a bare state name or abbreviation. `_STATE_QUERY` maps both
+directions, lowercased.
+
+This is deliberately not `_US_STATE_ABBR_RE`, which scans *within* a query and
+so must stay uppercase-only to avoid matching `ca`/`or`/`in` as ordinary words.
+Matching the whole query is unambiguous: a user who types just `ms` means
+Mississippi.
+
+```python
+us_state_code("mississippi")        # "MS"
+us_state_code("ms")                 # "MS"
+us_state_code("jackson mississippi")# None - a place INSIDE the state
+```
+
+The consumer is `.alerts` (section 8.4). All 51 codes it can emit (50 states +
+DC) were verified accepted by api.weather.gov as `area` values.
+
+### 9.5 Display-name safety and the feature fallback
+
+`_format_name(addr, fallback)` (`geocode.py:591`) builds `City, ST` (US, USPS
+abbreviation via `_STATE_ABBR`) or `City, Country`.
+
+Nominatim returns no `city`/`town`/`village`/`county` for parks, landmarks and
+nature reserves, which collapsed the output to a bare state - `.w yosemite
+national park` announced itself as `:: CA ::`. When there is no city component,
+the feature's own name is taken from the first component of the display_name
+fallback, giving `Yosemite National Park, CA`.
+
+That split is guarded on `", "` being present, because the reverse-geocode path
+passes a bare `lat,lon` pair as its fallback - comma, no space - and splitting
+that would print just the latitude.
+
+Every component is `_strip_ctrl`'d - all of it ultimately comes from
+user-editable OSM data, so a vandalized place name (`\r\nQUIT :pwned`,
+reverse/bold/color codes) can never be spliced into an IRC line. Names are
+capped at `_MAX_NAME_CHARS = 160`.
 
 ## 10. WeatherKit JWT signing (`weatherkit/__init__.py`)
 
@@ -690,7 +959,149 @@ a capability's rank map sort last at rank 99 if they support it.
 - space_weather: swpc.
 - tides: noaa_coops, tidecheck.
 
-## 12. Gotchas for the next maintainer
+## 12. Adding a provider
+
+The dispatcher discovers capabilities from method names, so a provider is
+"registered" by existing, having a factory, and being named in
+`provider_priority`. Nothing enumerates its capabilities by hand.
+
+### 12.1 Package layout
+
+One package per provider, one sub-module per endpoint:
+
+```
+weather_providers/myprovider/
+    __init__.py      provider class; delegates to sub-modules
+    current.py       -> get_weather
+    forecast.py      -> get_forecast
+    _codes.py        shared helpers (optional)
+```
+
+### 12.2 Endpoint sub-module
+
+Use the shared capped client (`_http.get_json`) - never a bare `requests`/
+`aiohttp` call. It enforces the body-size cap, timeout, redirect policy and
+session reuse described in section 3.
+
+```python
+from .._http import get_json
+from ..base import WeatherResult
+
+_HEADERS = {"User-Agent": "Internets IRC Bot (https://github.com/brandontroidl/Internets)"}
+
+async def fetch(api_key: str, lat: float, lon: float, location: str) -> WeatherResult:
+    data = await get_json(
+        "https://api.myweather.com/current",
+        params={"key": api_key, "lat": f"{lat:.4f}", "lon": f"{lon:.4f}"},
+        headers=_HEADERS,
+    )
+    p = data.get("current", {})
+    return WeatherResult(
+        source="MyWeather",
+        temperature=p.get("temp_c"),
+        description=(p.get("condition") or ""),
+        location=location,
+        humidity=p.get("humidity"),
+        wind_kph=p.get("wind_kph"),
+    )
+```
+
+Import explicitly (`from ..base import WeatherResult`), not `import *` - the
+star form was removed from this package deliberately.
+
+Field rules that matter:
+
+- **Populate what you measured; leave the rest `None`.** The formatter renders
+  `None` as `N/A` and the dispatcher gap-fills it from the next provider
+  (section 4.5). A fabricated value is worse than a missing one.
+- **`description` empty string, not `"Unknown"`.** `""` counts as a gap and gets
+  filled; `"Unknown"` is treated as a real value and blocks the fill.
+- **`feels_like_c` / `dewpoint_c` only if the upstream gives them for this same
+  observation.** They are excluded from gap-fill for the reason in section 4.5.
+  Never compute one from another provider's numbers.
+- **SI/metric in, always.** `base.py` has `ms_to_kph`, `km_to_m`, `deg_to_card`;
+  the `modules/units.py` layer does the display conversion. Do not store
+  Fahrenheit or mph.
+
+### 12.3 Provider class
+
+```python
+from ..base import WeatherResult, ForecastDay   # explicit imports
+from . import current, forecast
+
+
+class MyProvider:
+    name: str = "MyWeather"
+    requires_key: bool = True
+
+    def __init__(self, api_key: str) -> None:
+        self._key = api_key
+
+    async def get_weather(self, lat, lon, location, **kw):
+        return await current.fetch(self._key, lat, lon, location)
+
+    async def get_forecast(self, lat, lon, location, days=4, **kw):
+        return await forecast.fetch(self._key, lat, lon, location, days)
+```
+
+- **`**kw` on every method.** The dispatcher forwards caller kwargs verbatim
+  (`area=` for alerts, `days=`, `hours=`, `target_date=`). A method without
+  `**kw` raises `TypeError` on an unrelated caller's kwarg and is logged as a
+  provider bug (section 4.7).
+- **Implement only the capabilities you support.** Omit the method entirely;
+  `hasattr` discovery skips you. Do not stub one that returns `None` forever -
+  that wastes a chain slot.
+- **Return `None` for "outside my coverage", never raise** (sections 4.4, 4.9).
+- Method names must match `CAPABILITY_METHODS` (`_dispatch.py`) exactly.
+
+### 12.4 Factory + registration (`weather_providers/__init__.py`)
+
+```python
+def _f_myprovider(cfg):
+    key = _cred(cfg, "myprovider_key", "myprovider_key")
+    if not key:
+        log.info("myprovider: skipped (no myprovider_key)")
+        return None
+    from .myprovider import MyProvider     # lazy: keeps import graph light
+    return MyProvider(key)
+
+_reg("myprovider", _f_myprovider)
+```
+
+`_cred(cfg, secret_name, ini_key)` (`__init__.py:65`) reads secret_store first,
+then `config.ini` - the ini fallback exists so the bot works before
+`python -m secret_store migrate`. Return `None` (do not raise) when unconfigured;
+the registry simply skips you. A keyless provider omits the whole key block.
+
+Import the provider class **inside** the factory, not at module top - a
+top-level import pulls every provider's dependencies on startup.
+
+### 12.5 Config, secrets, priority
+
+1. Add the key to `KNOWN_SECRETS` (`secret_store.py`) so the CLI and the
+   migration path know about it.
+2. Add it to `config.ini.example` under `[weather_providers]` with a blank
+   value and a comment naming the signup URL.
+3. Add the id to `provider_priority` in `config.ini.example`. **Priority is an
+   ordering, not an allowlist** - a provider absent from the list still loads
+   and sorts last.
+4. Add a short flag to `_PROVIDER_FLAGS` (`modules/weather.py`) if the provider
+   is worth forcing manually. Check for collisions first (`-aw` is Apple, not
+   AccuWeather).
+
+### 12.6 Tests and docs before you open the PR
+
+- A registry test asserting the factory is discovered and the capability set
+  matches (see `tests/test_new_weather_capabilities.py` for the shape).
+- A fetch test with a stubbed `get_json` covering a full payload, a sparse
+  payload (missing secondary fields), and the no-coverage path.
+- Add the provider to section 11 of this file and to the capability
+  cross-reference table.
+
+Run **both** suites (`python tests/run_tests.py` and `pytest tests/`) - they are
+disjoint; see CONTRIBUTING.
+
+## 13. Gotchas for the next maintainer
 
 - **Adding a capability to a provider = adding the `get_*` method.** No
   registration list to update. But if it's a new capability entirely, add it to

@@ -45,7 +45,11 @@ Thumbs.db
 
 # ── Bot runtime files ────────────────────────────────────────────────
 # Log files (main bot log + rotated copies).
+# `*.log` alone does NOT match a rotated `internets.log.1` - the rotation
+# suffix lands after the extension - so the `.log.*` form is required for the
+# comment above to be true.  Without it a blanket `git add -A` commits bot logs.
 *.log
+*.log.*
 # Tamper-evident admin-action audit log (separate from *.log convention,
 # listed explicitly for clarity even though *.log already covers it).
 audit.log

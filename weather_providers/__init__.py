@@ -1,7 +1,7 @@
 """Multi-provider weather aggregation platform with capability-based dispatch.
 
 Architecture:
-    30 provider packages (sub-module per endpoint)
+    32 provider packages (sub-module per endpoint)
     ↓
     Dispatcher (capability discovery + accuracy-then-health routing)
     ↓

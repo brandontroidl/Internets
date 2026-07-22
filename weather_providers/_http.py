@@ -103,7 +103,7 @@ def get_max_response_bytes() -> int:
 # ── Cached aiohttp session ───────────────────────────────────────────
 
 # Per-call ClientSession creation costs ~1 ms + TLS handshake on first
-# hit per host.  At dispatcher fan-out across 14 providers that adds
+# hit per host.  At dispatcher fan-out across a long provider chain that adds
 # up.  Cache one session per running event loop - when aiohttp is used
 # off a different loop (rare) we transparently create a fresh one.
 _session_cache: dict[int, "aiohttp.ClientSession"] = {}

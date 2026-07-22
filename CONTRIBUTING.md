@@ -67,14 +67,40 @@ TLS-floor inspection, log sanitization).
 ### `pytest tests/` - full suite
 
 Per-module test files (`tests/test_*.py`). `pyproject.toml [tool.pytest.ini_options]`
-sets `testpaths = ["tests"]`, `asyncio_mode = "auto"` (async tests need no
-`@pytest.mark.asyncio`), and `addopts = "--strict-markers"` (an unknown
+sets `testpaths = ["tests"]` and `addopts = "--strict-markers"` (an unknown
 `@pytest.mark.<name>` is an error, not a silent skip - keep it on locally so
 marker typos surface before CI). `tests/conftest.py` puts the project root on
 `sys.path`.
 
-The two suites overlap deliberately; the standalone harness is the
-dependency-free smoke check, pytest is the full matrix. Run both.
+#### Do not write `async def test_` functions
+
+**Drive the event loop explicitly instead:**
+
+```python
+def test_dispatch_falls_through():
+    out = asyncio.run(d.dispatch("current", 0.0, 0.0, "x"))
+    assert out is None
+```
+
+`pytest-asyncio` is declared in the `dev` extra, but the suite does not depend
+on it and it is frequently absent from a working environment. Without that
+plugin an `async def test_` function is **collected, reported as passed, and
+never actually executed** - it silently no-ops, and you get a green test that
+proves nothing. Every async test in this repo therefore uses `asyncio.run(...)`
+(or `loop.run_until_complete`, see `tests/test_sender.py:1-8`) inside an
+ordinary sync test function.
+
+The `asyncio_mode = "auto"` line in `pyproject.toml` is inert whenever the
+plugin is missing; pytest emits `PytestConfigWarning: Unknown config option:
+asyncio_mode` in that case. That warning is expected and is not a failure.
+
+#### The two suites are disjoint, not overlapping
+
+`tests/run_tests.py` is named `run_tests.py`, not `test_*.py`, so **pytest's
+default collection never picks it up**. Running only `pytest` silently skips its
+checks; running only `run_tests.py` skips everything else. Neither command is a
+superset of the other, which is why CI runs them as two separate steps. Run
+both.
 
 ### Coverage gate (core-only)
 
@@ -187,9 +213,43 @@ at the top, elevating per-job only where a SARIF upload needs
     `--ignore-vuln PYSEC-2025-183` (disputed pyjwt finding about
     application-chosen key size, not the library; re-evaluate if a fix ships).
   - `gitleaks`: full-history (`fetch-depth: 0`) secret scan.
-- **`codeql.yml`** - GitHub semantic SAST (`security-and-quality` queries,
-  Python). Catches taint/dataflow bugs bandit's pattern matching misses; both
-  feed the same Security tab and dedupe.
+- **`codeql.yml`** - GitHub semantic SAST (`queries: security-extended`,
+  Python; `codeql.yml:50`). Catches taint/dataflow bugs bandit's pattern
+  matching misses; both feed the same Security tab and dedupe. The suite is
+  deliberately `security-extended` rather than `security-and-quality`: the
+  latter's maintainability queries produced overwhelming noise (123 alerts) with
+  no security value. The remaining open `py/overly-permissive-file` alerts are
+  reviewed and intentionally accepted - do not "fix" them without discussion.
+
+## Building the documentation
+
+```bash
+scripts/build-docs.sh           # HTML + PDF
+scripts/build-docs.sh html      # HTML only
+scripts/build-docs.sh pdf       # PDF only
+```
+
+Output lands in `docs/_build/` (gitignored - never commit build output).
+
+Sphinx with MyST (Markdown sources) and `sphinx-autoapi`, which generates the
+API reference **from the source docstrings**. That last part is the bit people
+miss: a docstring is published documentation, so a stale or wrong one ships to
+readers. Treat `weather_providers/__init__.py`'s architecture docstring, and any
+module-level docstring, as documentation under the same accuracy bar as these
+`.md` files.
+
+PDF needs a TeX Live with `xelatex` + `makeindex`. The script runs explicit
+xelatex passes rather than `latexmk`.
+
+The build is intentionally **not** run with `-W` (warnings-as-errors). A ~25
+warning baseline is expected and benign: duplicate-object nags from autoapi on
+re-exported attributes, and docutils formatting complaints about a few
+plain-text module docstrings. Content renders correctly. Do not chase them, but
+do check that *your* change did not add a new one - compare the count before and
+after.
+
+New prose page: add the file under `docs/` and register it in the `toctree` in
+`docs/index.md`, or Sphinx warns that the document is not in any toctree.
 
 ## Regenerating the lockfile
 

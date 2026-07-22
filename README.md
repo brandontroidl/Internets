@@ -39,10 +39,10 @@ metrics.py       opt-in Prometheus exporter (127.0.0.1 only; off by default)
 process_lock.py  PID lock with stale-detection; blocks a second instance corrupting state
 
 weather_providers/   32 provider packages + base dataclasses, _http, _dispatch, _health
-modules/             ~70 command modules (see docs/architecture.md for the catalog)
+modules/             72 command modules (see docs/modules.md for the catalog)
 modules/base.py      BotModule base class, help_row(), strip_ctrl(), the plugin interface
 modules/_netsafe.py  SSRF-safe fetch with DNS-TOCTOU pinning (probe, scinews article reader)
-tests/               run_tests.py (standalone) + 31 pytest modules
+tests/               run_tests.py (standalone) + 39 pytest modules
 ```
 
 The outbound path goes through `Sender`, an async drain over `asyncio.PriorityQueue` implementing a token bucket (5 burst, ~40 msg/min sustained) to stay under flood limits. Protocol messages (PONG, CAP, NICK) bypass the bucket at priority 0. `Sender.enqueue()` is thread-safe via `loop.call_soon_threadsafe()`. The queue is bounded at 200 messages.
@@ -486,7 +486,33 @@ python tests/run_tests.py        # standalone, no dependencies
 pytest tests/ -v                 # full suite (pip install -e ".[dev]")
 ```
 
-`tests/run_tests.py` is a self-contained runner. The pytest suite is 31 modules (`tests/test_*.py`) covering protocol parsing, store CRUD/flush/pruning, calculator sandboxing and DoS guards, dice, weather provider registry and capability dispatch, provider health scoring, config parsing, output formatting, unit conversion, sender injection prevention and line limits, password hashing, rate limiting, the SSRF/netsafe guard, `fetch_json` size caps, secret store, and per-module behavior (ipintel, scinews, secinfo, devtools, mathx, physcalc, probe, dnsutils, pkginfo, reflookup, satpass, astro2, crypto-cache, stocks, and more). Coverage gate (`fail_under = 75` in `pyproject.toml`) is **core-only**: `modules/*` and `weather_providers/*` are omitted from the measured source, so the headline percentage measures the top-level orchestration modules, not the whole repo.
+**Both are required. They are disjoint suites, not two ways to run one.**
+`tests/run_tests.py` is named `run_tests.py`, not `test_*.py`, so pytest's
+default collection **does not pick it up** - running only `pytest` silently
+skips its 204 checks, and running only `run_tests.py` skips the other 1669.
+CI runs both as separate steps (`.github/workflows/tests.yml`), and so should
+you before opening a PR.
+
+`tests/run_tests.py` is a self-contained runner built on a `@test` decorator
+with no third-party dependency, so it works on a bare checkout before
+`pip install -e ".[dev]"`. It holds the completeness gates (for example the
+`strip_ctrl` enumeration in `docs/security-model.md`) and the geocode/format
+unit checks.
+
+The pytest suite is 39 modules (`tests/test_*.py`) covering protocol parsing,
+store CRUD/flush/pruning, calculator sandboxing and DoS guards, dice, weather
+provider registry and capability dispatch, provider health scoring, gap-fill
+merge semantics, NWS coverage handling, config parsing, output formatting, unit
+conversion, sender injection prevention and line limits, password hashing, rate
+limiting, the SSRF/netsafe guard, `fetch_json` size caps, secret store, and
+per-module behavior (ipintel, scinews, secinfo, devtools, mathx, physcalc,
+probe, dnsutils, pkginfo, reflookup, satpass, astro2, crypto-cache, stocks, and
+more).
+
+The coverage gate (`fail_under = 75` in `pyproject.toml`) is **core-only**:
+`modules/*` and `weather_providers/*` are omitted from the measured source, so
+the headline percentage measures the top-level orchestration modules, not the
+whole repo. Do not read it as repo-wide coverage.
 
 ## Operational notes
 
