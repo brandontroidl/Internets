@@ -714,6 +714,75 @@ async def _resolve_postal(kind: str, code: str, hint: str | None,
 
 
 # ---------------------------------------------------------------------------
+# Free-text place search
+# ---------------------------------------------------------------------------
+
+async def _search_place(candidate: str, hdrs: dict[str, str], *,
+                        feature_type: str | None = None,
+                        ) -> tuple[tuple[float, float, str, str] | None, float, bool]:
+    """Run one Nominatim free-text search for *candidate*.
+
+    Returns ``(hit, importance, stop)``.  ``hit`` is ``(lat, lon, name, cc)``
+    on success, else None.  ``importance`` is the matched object's OSM
+    prominence score (0.0 when upstream omits it), used ONLY to compare two
+    candidate answers for the same query - see ``geocode``.  ``stop`` is True
+    when the caller must NOT retry with a shorter query - either the transport
+    failed, or upstream returned a row we could not parse.  Retrying either
+    case just burns requests against Nominatim's 1 req/s policy for no gain.
+
+    *feature_type* maps to Nominatim's ``featureType`` parameter; pass
+    ``"settlement"`` to constrain the search to cities/towns/villages.
+    """
+    params: dict = {"q": candidate, "format": "json",
+                    "limit": 1, "addressdetails": 1}
+    if feature_type:
+        params["featureType"] = feature_type
+
+    if _USZIP_RE.match(candidate) or _looks_like_us(candidate):
+        params["countrycodes"] = "us"
+    else:
+        cc = _country_code_for(candidate)
+        if cc:
+            params["countrycodes"] = cc
+
+    try:
+        with await asyncio.to_thread(
+            _get, "https://nominatim.openstreetmap.org/search",
+            params=params, headers=hdrs,
+        ) as r:
+            hits = _read_json_capped(r)
+    except Exception as e:
+        log.warning(f"Geocode '{candidate}': {e}")
+        return (None, 0.0, True)
+
+    if not (isinstance(hits, list) and hits and isinstance(hits[0], dict)):
+        return (None, 0.0, False)
+
+    hit = hits[0]
+    # Defensive coercion: Nominatim returns lat/lon as strings.  If they're
+    # missing or unparseable, stop rather than propagate an exception with
+    # attacker-influenced data.
+    try:
+        lat = float(hit.get("lat"))
+        lon = float(hit.get("lon"))
+    except (TypeError, ValueError):
+        return (None, 0.0, True)
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return (None, 0.0, True)
+    try:
+        imp = float(hit.get("importance"))
+    except (TypeError, ValueError):
+        imp = 0.0
+    addr = hit.get("address", {})
+    if not isinstance(addr, dict):
+        addr = {}
+    # display_name and candidate are upstream/user strings - _format_name
+    # will _strip_ctrl them before returning, never interpret IRC codes.
+    name, cc = _format_name(addr, hit.get("display_name", candidate))
+    return ((lat, lon, name, cc), imp, False)
+
+
+# ---------------------------------------------------------------------------
 # Public geocode function
 # ---------------------------------------------------------------------------
 
@@ -833,10 +902,35 @@ async def geocode(query: str, user_agent: str, *,
         return _store(await _resolve_postal(
             kind, core, hint, default_country, hdrs, user_agent))
 
+    # ---- Settlement pass -------------------------------------------------
+    # Free-text ``q=`` returns the single best-ranked OSM object of ANY kind,
+    # so a query that happens to name a business outranks the place it was
+    # named after: "new york new york" resolves to the Las Vegas casino (the
+    # US pin comes from the state name), "north shore new jersey" to a
+    # residential street.  Asking for ``featureType=settlement`` constrains
+    # the search to cities/towns/villages, which is usually what a weather
+    # lookup wants.
+    #
+    # But preferring the settlement UNCONDITIONALLY is also wrong: a tiny
+    # township named Graceland in South Africa would then preempt the famous
+    # Memphis landmark, and a suburb called Newton Circus would preempt a
+    # better answer for "circus circus".  So we run both searches and keep the
+    # more prominent object.
+    #
+    # NOTE on ``importance``: it is meaningless as an ABSOLUTE quality bar -
+    # Oxford Circus (a wrong answer) scores 0.5086 and Graceland (a right one)
+    # 0.5087.  It is only used here to rank two candidate answers to the SAME
+    # query against each other, which is what it actually measures.
+    sett_hit, sett_imp, stop = await _search_place(
+        query, hdrs, feature_type="settlement")
+    if stop:
+        # Transport or parse failure - Nominatim is unhappy, don't hammer it.
+        return _store(None)
+
     # ---- Place-name search with word-drop fallback -----------------------
-    # If Nominatim returns no hits for the full query, drop the last token
-    # and retry.  This recovers from typos in trailing state/country tokens
-    # (e.g. "la quinta caifornia" → "la quinta") and from overly-specific
+    # If the unconstrained search returns no hits for the full query, drop the
+    # last token and retry.  This recovers from typos in trailing state/country
+    # tokens (e.g. "la quinta caifornia" → "la quinta") and from overly-specific
     # queries that don't match any single OSM object.
     # Cap the sequential Nominatim hits per command: an adversarial many-token
     # query would otherwise drop one token at a time for up to ~100 requests,
@@ -845,46 +939,18 @@ async def geocode(query: str, user_agent: str, *,
     candidate = query
     drops = 0
     while candidate:
-        params: dict = {"q": candidate, "format": "json", "limit": 1, "addressdetails": 1}
-
-        if _USZIP_RE.match(candidate) or _looks_like_us(candidate):
-            params["countrycodes"] = "us"
-        else:
-            cc = _country_code_for(candidate)
-            if cc:
-                params["countrycodes"] = cc
-
-        try:
-            with await asyncio.to_thread(
-                _get, "https://nominatim.openstreetmap.org/search",
-                params=params, headers=hdrs,
-            ) as r:
-                hits = _read_json_capped(r)
-        except Exception as e:
-            log.warning(f"Geocode '{candidate}': {e}")
-            return _store(None)
-
-        if isinstance(hits, list) and hits and isinstance(hits[0], dict):
-            hit = hits[0]
-            # Defensive coercion: Nominatim returns lat/lon as strings.
-            # If they're missing or unparseable, skip this hit rather than
-            # propagate an exception with attacker-influenced data.
-            try:
-                lat = float(hit.get("lat"))
-                lon = float(hit.get("lon"))
-            except (TypeError, ValueError):
-                break
-            if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
-                break
-            addr = hit.get("address", {})
-            if not isinstance(addr, dict):
-                addr = {}
-            # display_name and candidate are upstream/user strings - _format_name
-                # will _strip_ctrl them before returning, never interpret IRC codes.
-            name, cc = _format_name(addr, hit.get("display_name", candidate))
+        free_hit, free_imp, stop = await _search_place(candidate, hdrs)
+        if free_hit is not None:
+            # A settlement match on the FULL query always beats a match found
+            # only after dropping tokens - the truncated query answers a
+            # different question than the user asked.
+            if sett_hit is not None and (candidate != query or sett_imp >= free_imp):
+                return _store(sett_hit)
             if candidate != query:
                 log.info(f"Geocode: '{query}' missed, resolved via truncated '{candidate}'")
-            return _store((lat, lon, name, cc))
+            return _store(free_hit)
+        if stop:
+            break
 
         words = candidate.rsplit(None, 1)
         if len(words) < 2 or drops >= _MAX_DROPS:
@@ -892,4 +958,6 @@ async def geocode(query: str, user_agent: str, *,
         candidate = words[0]
         drops += 1
 
-    return _store(None)
+    # Unconstrained search found nothing usable; the settlement hit (if any)
+    # is the best answer we have.
+    return _store(sett_hit)

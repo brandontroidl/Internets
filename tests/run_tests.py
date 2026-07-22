@@ -1917,7 +1917,184 @@ def _():
         asyncio.run(g.geocode("aa bb cc dd ee ff gg hh ii jj", "bot (https://example.org)"))
     finally:
         g._get, g._read_json_capped = orig_get, orig_read
-    assert n["calls"] <= 5, n["calls"]   # initial + at most _MAX_DROPS(4) retries
+    # settlement pass + initial free-text + at most _MAX_DROPS(4) retries
+    assert n["calls"] <= 6, n["calls"]
+
+# Nominatim free-text ``q=`` returns the best-ranked OSM object of ANY kind, so a
+# query naming a business outranks the place it was named after.  Observed live:
+# "new york new york" (US-pinned) → the Las Vegas casino; "north shore new jersey"
+# → a residential street in Helmetta.  The settlement-constrained pass below is
+# what fixes it; ``importance`` cannot, because it scores the matched object's
+# prominence rather than the match quality (Oxford Circus 0.5086 vs Graceland
+# 0.5087 - no threshold separates garbage from a correct answer).
+
+def _fake_nominatim(by_feature_type):
+    """Build a (fake_get, fake_read, calls) trio for the free-text path.
+
+    ``by_feature_type`` maps the request's ``featureType`` value (or None for
+    an unconstrained search) to the JSON row list Nominatim would return.
+    """
+    calls: list = []
+
+    class _FakeResp:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_get(url, params=None, headers=None, timeout=10):
+        params = dict(params or {})
+        calls.append(params)
+        return _FakeResp(by_feature_type.get(params.get("featureType"), []))
+
+    return fake_get, (lambda r: r.payload), calls
+
+
+_CASINO_ROW = [{
+    "lat": "36.1023", "lon": "-115.1745", "importance": 0.4442,
+    "display_name": "New York New York Hotel and Casino, Las Vegas, Nevada",
+    "address": {"city": "Las Vegas", "state": "Nevada", "country_code": "us"},
+}]
+_CITY_ROW = [{
+    "lat": "40.7128", "lon": "-74.0060", "importance": 0.8818,
+    "display_name": "New York, United States",
+    "address": {"city": "New York", "state": "New York", "country_code": "us"},
+}]
+# "graceland": a minor South African township IS a settlement, while the
+# landmark everyone means is an attraction.  Preferring the settlement blindly
+# regressed this query to Khayelitsha - the scores are what separate them.
+_GRACELAND_ZA_ROW = [{
+    "lat": "-34.0181", "lon": "18.6753", "importance": 0.1553,
+    "display_name": "Graceland, Khayelitsha, Cape Town, South Africa",
+    "address": {"suburb": "Graceland", "city": "Cape Town",
+                "country": "South Africa", "country_code": "za"},
+}]
+_GRACELAND_TN_ROW = [{
+    "lat": "35.0478", "lon": "-90.0261", "importance": 0.5087,
+    "display_name": "Graceland, Elvis Presley Boulevard, Memphis, Tennessee",
+    "address": {"tourism": "Graceland", "city": "Memphis",
+                "state": "Tennessee", "country_code": "us"},
+}]
+# Verbatim shape of Nominatim's real reply for "yosemite national park" - a
+# nature_reserve with no city/town/village/county key at all.
+_PARK_ROW = [{
+    "lat": "37.8393004", "lon": "-119.5164635", "importance": 0.5858,
+    "display_name": "Yosemite National Park, California, United States",
+    "address": {"nature_reserve": "Yosemite National Park",
+                "state": "California", "ISO3166-2-lvl4": "US-CA",
+                "country": "United States", "country_code": "us"},
+}]
+
+
+@test("geocode: settlement pass beats a POI top-hit (new york new york → the city, not the casino)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    fake_get, fake_read, calls = _fake_nominatim(
+        {"settlement": _CITY_ROW, None: _CASINO_ROW})
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, fake_read
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("new york new york", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    assert calls and calls[0].get("featureType") == "settlement", calls
+    assert res == (40.7128, -74.006, "New York, NY", "us"), res
+
+
+@test("geocode: a settlement miss falls back to unconstrained search (landmarks still resolve)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    # No settlement matches "yosemite national park" - the nature reserve only
+    # comes back from the unconstrained search, so the fallback must run.
+    fake_get, fake_read, calls = _fake_nominatim({"settlement": [], None: _PARK_ROW})
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, fake_read
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("yosemite national park", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    assert [c.get("featureType") for c in calls][:2] == ["settlement", None], calls
+    # The coordinates identify which pass produced the answer; the display
+    # string is _format_name's contract and is asserted by its own tests.
+    assert res is not None and res[:2] == (37.8393004, -119.5164635), res
+
+
+@test("geocode: a minor settlement never preempts a far more prominent landmark (graceland)")
+def _():
+    import asyncio
+    import modules.geocode as g
+    fake_get, fake_read, calls = _fake_nominatim(
+        {"settlement": _GRACELAND_ZA_ROW, None: _GRACELAND_TN_ROW})
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, fake_read
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("graceland", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    # Both searches must run - deciding needs the pair, not just the first hit.
+    assert [c.get("featureType") for c in calls][:2] == ["settlement", None], calls
+    assert res is not None and res[:2] == (35.0478, -90.0261), res
+
+
+@test("geocode: a settlement hit on the full query beats a word-dropped free-text hit")
+def _():
+    import asyncio
+    import modules.geocode as g
+    # Unconstrained search misses the full query and only hits after a token is
+    # dropped; the settlement pass answered the question the user actually asked.
+    calls: list = []
+
+    class _FakeResp:
+        def __init__(self, payload):
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_get(url, params=None, headers=None, timeout=10):
+        params = dict(params or {})
+        calls.append(params)
+        if params.get("featureType") == "settlement":
+            return _FakeResp(_CITY_ROW)
+        # Unconstrained: miss on the full query, hit once "york" is dropped.
+        return _FakeResp(_CASINO_ROW if params["q"] != "new york new york" else [])
+
+    orig_get, orig_read = g._get, g._read_json_capped
+    try:
+        g._get, g._read_json_capped = fake_get, (lambda r: r.payload)
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("new york new york", "bot (https://example.org)"))
+    finally:
+        g._get, g._read_json_capped = orig_get, orig_read
+    assert res is not None and res[:2] == (40.7128, -74.006), res
+
+
+@test("geocode: a transport error on the settlement pass does not trigger a second request")
+def _():
+    import asyncio
+    import modules.geocode as g
+    n = {"calls": 0}
+    def boom(url, params=None, headers=None, timeout=10):
+        n["calls"] += 1
+        raise OSError("connection reset")
+    orig_get = g._get
+    try:
+        g._get = boom
+        g._geocode_cache.clear()
+        res = asyncio.run(g.geocode("san dimas ca", "bot (https://example.org)"))
+    finally:
+        g._get = orig_get
+    assert res is None
+    assert n["calls"] == 1, n["calls"]   # Nominatim down → fail fast, don't hammer
+
 
 @test("weather: no saved location prompts for regloc instead of a default location")
 def _():
