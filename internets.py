@@ -53,7 +53,23 @@ from botlog import log, log_filter  # noqa: F401 - log_filter used by tests
 from admin_cmds import AdminCommandsMixin
 from console import run_console, should_skip_console
 from store import Store, RateLimiter
-from sender import Sender
+from sender import Sender, redact_secrets
+
+# Redact a credential in the trailing text of an inbound PRIVMSG/NOTICE before
+# it reaches the `<< ...` debug log.  Scoped to the trailing (message) text so a
+# sender host like `ident@host` cannot trigger the IDENT verb, and deliberately
+# NOT gated on the target matching the bot's nick: the leak this closes happened
+# while self._nick tracking was wrong (a bare-nick NICK change was dropped), so
+# redaction must not depend on nick tracking being correct.
+_RE_TRAILING_MSG = re.compile(r"(?i)^(.*?\s(?:PRIVMSG|NOTICE)\s+\S+\s+:)(.*)$")
+
+
+def _redact_inbound(line: str) -> str:
+    """Mask a credential in an inbound PRIVMSG/NOTICE trailing, else return as-is."""
+    m = _RE_TRAILING_MSG.match(line)
+    if not m:
+        return line
+    return m.group(1) + redact_secrets(m.group(2))
 from protocol import (
     strip_tags,
     parse_isupport_chanmodes,
@@ -215,7 +231,6 @@ class IRCBot(AdminCommandsMixin):
     _RE_NICK      = re.compile(r":([^!\s]+)(?:!(\S+))? NICK :?(\S+)")
     _RE_PRIVMSG   = re.compile(r":([^!]+)!(\S+) PRIVMSG (\S+) :(.*)")
     _RE_MOTD      = re.compile(r":\S+ (?:376|422) ")
-    _RE_AUTH_LOG  = re.compile(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", re.IGNORECASE)
     _CHAN_RE      = re.compile(r"^[#&+!][^\s,\x07]{1,49}$")
 
     _CORE: dict[str, str] = {
@@ -1134,7 +1149,11 @@ class IRCBot(AdminCommandsMixin):
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else None
         if cmd and cmd in all_cmds:
-            log_arg = "[REDACTED]" if cmd in ("auth", "deauth") else arg
+            # auth/deauth: fully masked. Everything else (notably `.raw`, which
+            # can carry a NickServ/oper password in its argument) has any
+            # credential in the argument redacted by the shared verb list.
+            log_arg = ("[REDACTED]" if cmd in ("auth", "deauth")
+                       else (redact_secrets(arg) if arg else arg))
             log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{hostmask} "
                      f"{'(PM)' if is_pm else 'in ' + reply_to}")
             self._dispatch(nick, reply_to, cmd, arg, is_pm)
@@ -1250,9 +1269,7 @@ class IRCBot(AdminCommandsMixin):
                 if not raw: raise ConnectionResetError("Server closed connection")
                 line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
                 if not line: continue
-                if self._RE_AUTH_LOG.search(line):
-                    log.debug(f"<< {line.split(':',2)[0]}:*** AUTH [REDACTED] ***")
-                else: log.debug(f"<< {line}")
+                log.debug(f"<< {_redact_inbound(line)}")
                 self._process(line)
                 if not identified and self._RE_MOTD.match(line):
                     if self._cap_busy: self.send("CAP END", priority=0); self._cap_busy = False

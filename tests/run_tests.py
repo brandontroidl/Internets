@@ -1113,13 +1113,56 @@ def _():
     assert "\x00" not in line
     loop.close()
 
-@test("sender: credential redaction in logs")
+@test("redact: one verb list masks credentials in both directions")
 def _():
-    # We can't easily test log output, but verify _REDACT_OUT covers key commands
-    assert any("PASS" in p for p in Sender._REDACT_OUT)
-    assert any("IDENTIFY" in p for p in Sender._REDACT_OUT)
-    assert any("AUTHENTICATE" in p for p in Sender._REDACT_OUT)
-    assert any("OPER" in p for p in Sender._REDACT_OUT)
+    from sender import redact_secrets
+    # Inbound .raw forms - the leak this closes.
+    assert redact_secrets("raw identify K4ng3rk0n!") == "raw identify [REDACTED]"
+    assert redact_secrets("raw privmsg nickserv identify K4ng3rk0n!") == \
+        "raw privmsg nickserv identify [REDACTED]"
+    assert redact_secrets("raw oper admin operpw") == "raw oper [REDACTED]"
+    assert redact_secrets(".auth hunter2") == ".auth [REDACTED]"
+    # Outbound forms - same function, same visible-prefix result the wire path
+    # produced before, so existing behaviour is preserved.
+    assert redact_secrets("NS IDENTIFY nspw") == "NS IDENTIFY [REDACTED]"
+    assert redact_secrets("PRIVMSG NickServ :IDENTIFY nspw") == \
+        "PRIVMSG NickServ :IDENTIFY [REDACTED]"
+    assert redact_secrets("AUTHENTICATE c2VjcmV0") == "AUTHENTICATE [REDACTED]"
+    assert redact_secrets("PASS serverpw") == "PASS [REDACTED]"
+    # IDENTIFY must not be mis-split by the shorter IDENT verb.
+    assert redact_secrets("identify pw") == "identify [REDACTED]"
+    # Word-boundary: a verb embedded in another word is NOT a credential.
+    assert redact_secrets("PRIVMSG #chan :your password expired") == \
+        "PRIVMSG #chan :your password expired"
+    # No credential verb -> unchanged. We MUST still be able to see .raw nick.
+    assert redact_secrets("raw nick Internets") == "raw nick Internets"
+    assert redact_secrets("PRIVMSG #chan :hello world") == "PRIVMSG #chan :hello world"
+
+@test("redact: the inbound << path masks a PM credential but not the sender prefix")
+def _():
+    from internets import _redact_inbound
+    # The exact incident line, IRCv3 tags included. Password must vanish.
+    line = ("@account=brandon;time=2026-07-22T21:45:50.830Z "
+            ":brandon!brandon@place.holder PRIVMSG Internets :raw identify K4ng3rk0n!")
+    out = _redact_inbound(line)
+    assert "K4ng3rk0n!" not in out
+    assert "raw identify [REDACTED]" in out
+    # A hostmask literally containing "ident" must NOT trigger redaction of the
+    # command - only the trailing message text is scanned.
+    tricky = ":bob!ident@some.host PRIVMSG Internets :raw nick Internets"
+    assert _redact_inbound(tricky) == tricky
+    # A non-credential PM is logged verbatim - diagnosing this incident depended
+    # on seeing `.raw nick Internets` in the log.
+    assert _redact_inbound(":a!a@h PRIVMSG Internets :raw nick Internets") == \
+        ":a!a@h PRIVMSG Internets :raw nick Internets"
+
+@test("redact: inbound masking does not depend on correct self-nick tracking")
+def _():
+    # This leak happened BECAUSE self._nick was wrong, so redaction must not be
+    # gated on target == self._nick or it fails in exactly that case.
+    from internets import _redact_inbound
+    line = ":brandon!b@h PRIVMSG SomeOtherNick :raw identify secretpw"
+    assert "secretpw" not in _redact_inbound(line)
 
 
 # ══════════════════════════════════════════════════════════════════════

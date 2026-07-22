@@ -6,6 +6,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **A credential passed to `.raw` no longer lands in the logs in plaintext.**
+  The inbound `<<` debug log redacted only the bot's own `.auth`; anything else
+  an admin PMed - `.raw identify <pw>`, `.raw privmsg nickserv identify <pw>`,
+  `.raw oper <name> <pw>` - was logged verbatim. The same credential also
+  reached five other sites once `.raw` dispatched: the `cmd='raw' arg=...`
+  dispatch log, the "Raw line sent by" log, the tamper-evident audit record,
+  the IRC echo back to the admin, and the outbound `>>` log of the line sent to
+  the server. All six now pass through one shared verb-based redactor
+  (`sender.redact_secrets`), replacing the old outbound-only prefix list so the
+  two directions cannot drift. Redaction is log-only; the wire is unchanged.
+
 ### Fixed
 
 - **The bot now tracks its own nick change when the server uses a bare-nick

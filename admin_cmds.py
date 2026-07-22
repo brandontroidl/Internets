@@ -21,6 +21,7 @@ from botlog import (
     log_filter, get_hash, apply_debug, apply_loglevel,
 )
 from hashpw import MAX_PASSWORD_BYTES, verify_password
+from sender import redact_secrets
 from audit_log import default as _audit
 
 # C0/C1 control bytes, stripped from anything attacker-influenced that lands in
@@ -565,9 +566,15 @@ class AdminCommandsMixin:
             self.preply(nick, reply_to, f"{nick}: line exceeds 510 bytes - rejected.")
             return
         self.send(line)
-        self.preply(nick, reply_to, f">> {line}")
-        log.info(f"Raw line sent by {nick}: {line!r}")
-        self._audit(nick, "raw", line)
+        # The wire gets the full line (sent above); the echo, the log, and the
+        # tamper-evident audit record get a credential-redacted copy. `.raw` is
+        # the one command whose argument can be an arbitrary credential-bearing
+        # protocol line (`identify <pw>`, `oper <name> <pw>`), and it must not
+        # land in any of those three durable/visible places in plaintext.
+        safe = redact_secrets(line)
+        self.preply(nick, reply_to, f">> {safe}")
+        log.info(f"Raw line sent by {nick}: {safe!r}")
+        self._audit(nick, "raw", safe)
 
     # ── Speech / nick ───────────────────────────────────────────────
 

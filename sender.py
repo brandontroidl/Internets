@@ -13,8 +13,45 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 from typing import Callable
+
+# ── Credential redaction (single source of truth, both directions) ───────
+#
+# One list of verbs that mean "a credential follows".  redact_secrets() is
+# applied to every OUTBOUND line before it is logged (below) AND to inbound
+# lines before internets.py logs them, so a credential cannot be redacted in
+# one direction and leak in the other.  The verb, not its context, is the
+# signal, which is why a `.raw identify <pw>` (no service target) is caught
+# just as `PRIVMSG NickServ :IDENTIFY <pw>` is.
+#
+# Redaction is LOG-ONLY: the bytes on the wire are never altered.  Matching is
+# word-boundaried, so a verb embedded in another word ("password", "compass")
+# is not a false positive; a bare standalone verb in relayed .say text is
+# over-redacted in the debug log, which is the safe side for a credential.
+_SECRET_VERBS: tuple[str, ...] = (
+    "AUTHENTICATE", "IDENTIFY", "REGISTER", "IDENT", "OPER", "PASS", "AUTH",
+)
+# Longest-first so IDENTIFY wins over IDENT and AUTHENTICATE over AUTH at the
+# same position.  The verb (and its trailing space) is kept; everything after
+# is masked.  `\S.*` requires real content after the verb, so a bare verb with
+# no argument is left alone.
+_RE_SECRET = re.compile(
+    r"(?i)(\b(?:" + "|".join(sorted(_SECRET_VERBS, key=len, reverse=True))
+    + r")\b\s+)(\S.*)")
+
+
+def redact_secrets(text: str) -> str:
+    """Mask the argument after the first credential verb, keeping the verb.
+
+    Direction-agnostic on a bare command/text: `NS IDENTIFY pw` and
+    `raw identify pw` both become `... [REDACTED]`.  Callers that pass a full
+    inbound line with a `nick!user@host` prefix must scope this to the trailing
+    text first (see internets._redact_inbound), or a host like `ident@h` would
+    match the IDENT verb.
+    """
+    return _RE_SECRET.sub(lambda m: m.group(1) + "[REDACTED]", text, count=1)
 
 log = logging.getLogger("internets.sender")
 
@@ -140,41 +177,6 @@ class Sender:
         item = (priority, seq, msg)
         self._loop.call_soon_threadsafe(self._safe_put, item)
 
-    # Prefixes of outgoing IRC commands whose arguments contain secrets.
-    # Matched case-insensitively in ``_write_line`` so misconfigured callers
-    # using lowercase ("privmsg nickserv :identify ...") are also covered.
-    # Order matters only for log readability; matching is greedy on the
-    # first prefix that matches.
-    _REDACT_OUT: tuple[str, ...] = (
-        # Server password handshake.
-        "PASS ",
-        # OPER login (oper-name + password on the wire).
-        "OPER ",
-        # NickServ IDENTIFY in all the common spellings.  Cover both the
-        # PRIVMSG form and the IRCv3 short form "NS IDENTIFY ...", plus
-        # the "/ns identify" alias some clients emit verbatim, and
-        # NickServ REGISTER (which also carries a password).
-        "PRIVMSG NickServ :IDENTIFY ",
-        "PRIVMSG NICKSERV :IDENTIFY ",
-        "PRIVMSG NickServ :REGISTER ",
-        "PRIVMSG NICKSERV :REGISTER ",
-        "NICKSERV IDENTIFY ",
-        "NICKSERV REGISTER ",
-        "NS IDENTIFY ",
-        "NS REGISTER ",
-        # ChanServ IDENTIFY also carries a channel password.
-        "PRIVMSG ChanServ :IDENTIFY ",
-        "PRIVMSG CHANSERV :IDENTIFY ",
-        "CHANSERV IDENTIFY ",
-        "CS IDENTIFY ",
-        # Generic IDENT (older networks / Atheme aliases).
-        "IDENT ",
-        # SASL: AUTHENTICATE <base64-of-user\0user\0pass> for PLAIN, or
-        # the empty "AUTHENTICATE +" continuation - redact both.  Any
-        # non-prefix-stripped AUTHENTICATE payload is treated as secret.
-        "AUTHENTICATE ",
-    )
-
     # Maximum IRC line length including \r\n (RFC 2812 §2.3).
     _MAX_IRC_LINE = 512
 
@@ -190,13 +192,10 @@ class Sender:
             while encoded and (encoded[-1] & 0xC0) == 0x80:
                 encoded = encoded[:-1]
             msg = encoded.decode("utf-8", errors="replace")
-        # Redact credentials from logs.
-        log_msg = msg
-        for prefix in self._REDACT_OUT:
-            if msg.upper().startswith(prefix.upper()):
-                log_msg = prefix + "[REDACTED]"
-                break
-        log.debug(f">> {log_msg}")
+        # Redact credentials from the log only - the wire gets the full msg.
+        # This catches the bot's own IDENTIFY/PASS/OPER/AUTHENTICATE and a
+        # credential injected via `.raw` alike (module-level redact_secrets).
+        log.debug(f">> {redact_secrets(msg)}")
         try:
             if self._writer and not self._writer.is_closing():
                 self._writer.write((msg + "\r\n").encode("utf-8", errors="replace"))
