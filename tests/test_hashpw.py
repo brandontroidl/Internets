@@ -385,3 +385,28 @@ class TestPasswordPolicy:
         assert m, "internets.py no longer defines _MAX_ARG_LEN"
         assert hashpw.MAX_PASSWORD_BYTES <= int(m.group(1))
 
+    def test_verify_refuses_a_candidate_bcrypt_would_truncate(self, fast_costs):
+        """Close the verify side of the truncation bypass.
+
+        bcrypt truncates the CANDIDATE as well as the stored password, so
+        without this guard any longer string sharing a stored hash's first 72
+        bytes authenticates. Refusing over-long candidates fails closed.
+
+        Tradeoff accepted deliberately: an operator whose existing bcrypt
+        password is over 72 bytes is locked out and must re-run hashpw.py.
+        """
+        stored = "a" * 72
+        h = hashpw.hash_bcrypt(stored)
+        # Allow branch: the real password still works. A guard verified only
+        # on deny is half-verified.
+        assert hashpw.verify_password(stored, h) is True
+        # Deny branch: the truncation collision no longer authenticates.
+        assert hashpw.verify_password(stored + "ANYTHING", h) is False
+
+    def test_verify_unaffected_for_algorithms_without_the_limit(self, fast_costs):
+        # argon2 has no 72-byte wall; a long password must still verify, so
+        # the bcrypt guard must not leak into the other algorithms.
+        long_pw = "b" * hashpw.MAX_PASSWORD_BYTES
+        h = hashpw.hash_argon2(long_pw)
+        assert hashpw.verify_password(long_pw, h) is True
+

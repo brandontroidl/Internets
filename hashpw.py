@@ -316,8 +316,20 @@ def _verify_bcrypt(password: str, stored: str) -> bool:
         import bcrypt
     except ImportError as e:
         raise ValueError(f"bcrypt not installed - run: pip install bcrypt ({e})")
+    raw = password.encode()
+    if len(raw) > BCRYPT_MAX_PASSWORD_BYTES:
+        # bcrypt truncates the CANDIDATE too, so without this any longer
+        # string sharing the stored password's first 72 bytes would verify.
+        # Refusing fails closed.  The length is deliberately not logged: this
+        # runs on an unauthenticated, attacker-reachable path and the log
+        # should not become a password-length oracle.
+        log.warning("bcrypt candidate exceeds the %d-byte limit - refusing. "
+                    "If this is the real password, re-generate the hash with "
+                    "hashpw.py (argon2 has no such limit).",
+                    BCRYPT_MAX_PASSWORD_BYTES)
+        return False
     try:
-        return bcrypt.checkpw(password.encode(), stored.split("$", 1)[1].encode())
+        return bcrypt.checkpw(raw, stored.split("$", 1)[1].encode())
     except (ValueError, TypeError, IndexError):
         return False
 
