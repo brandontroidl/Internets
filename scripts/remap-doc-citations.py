@@ -32,7 +32,11 @@ from __future__ import annotations
 import difflib
 import pathlib
 import re
-import subprocess
+import shutil
+# subprocess is required to read a file at a git ref. Every call goes through
+# _git() below: absolute executable path, list form, no shell, and no
+# argument that can begin with '-' unless it is a literal flag.
+import subprocess  # nosec B404
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -48,11 +52,46 @@ def doc_files() -> list[pathlib.Path]:
     return [p for p in out if p.is_file()]
 
 
+# Absolute path, resolved once. Invoking a bare "git" would take whatever the
+# caller's PATH resolves it to (bandit B607).
+GIT = shutil.which("git")
+
+
+def _git(*args: str) -> subprocess.CompletedProcess:
+    """Run git with an absolute executable path and a fixed argument list.
+
+    No shell anywhere, so nothing here is shell-parsed. Callers must ensure no
+    argument can begin with "-" unless it is a literal flag - git parses a
+    leading dash as an option regardless of the position it was passed in.
+    """
+    if GIT is None:
+        sys.exit("git not found on PATH")
+    # Absolute executable path, fixed list form, no shell: see the module
+    # docstring for why each argument is safe to interpolate.
+    return subprocess.run([GIT, "-C", str(REPO), *args],  # nosec B603
+                          capture_output=True, text=True)
+
+
+def resolve_ref(ref: str) -> str:
+    """Resolve *ref* to a full commit SHA, or exit.
+
+    Two jobs. It gives a clear error for a typo'd ref instead of a confusing
+    failure three steps later, and it guarantees the value interpolated into the
+    `<rev>:<path>` object spec below is 40 hex characters - so a ref like
+    `--output=/tmp/x` cannot reach git's option parser.
+    """
+    if ref.startswith("-"):
+        sys.exit(f"refusing ref {ref!r}: git would parse a leading '-' as an option")
+    proc = _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+    sha = proc.stdout.strip()
+    if proc.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        sys.exit(f"not a commit: {ref}")
+    return sha
+
+
 def build_line_map(ref: str, src_name: str) -> dict[int, int]:
     """old line number -> new line number, for lines that survived intact."""
-    proc = subprocess.run(
-        ["git", "-C", str(REPO), "show", f"{ref}:{src_name}"],
-        capture_output=True, text=True)
+    proc = _git("show", f"{resolve_ref(ref)}:{src_name}")
     if proc.returncode != 0:
         sys.exit(f"cannot read {src_name} at {ref}: {proc.stderr.strip()}")
     old = proc.stdout.splitlines()
