@@ -76,7 +76,17 @@ Changelog = "https://github.com/brandontroidl/Internets/blob/main/CHANGELOG.md"
 internets = "internets:_entry"
 
 [tool.setuptools]
-py-modules = ["internets", "config", "botlog", "admin_cmds", "console", "sender", "store", "protocol", "hashpw", "secret_store"]
+# Every top-level module must be listed here or it is silently omitted from the
+# wheel.  audit_log, process_lock and metrics were missing, which shipped an
+# uninstallable package in v3.0.0 and v4.0.0: internets.py imports process_lock
+# and admin_cmds.py imports audit_log at module scope, so the console script
+# raised ModuleNotFoundError on start.  scripts/verify_install.sh is the gate
+# that must catch this - run it after touching this list.
+py-modules = [
+    "internets", "config", "botlog", "admin_cmds", "console", "sender",
+    "store", "protocol", "hashpw", "secret_store",
+    "audit_log", "process_lock", "metrics",
+]
 
 [tool.setuptools.packages.find]
 include = ["modules*", "weather_providers*"]

@@ -140,3 +140,22 @@ jobs:
       - name: Check syntax (modules)
         run: |
           for f in modules/*.py; do python -m py_compile "$f"; done
+
+  package:
+    runs-on: ubuntu-latest
+    name: Packaging (wheel install gate)
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        with:
+          python-version: "3.12"
+
+      # CONTRIBUTING documents this as the gate for any change to pyproject.toml
+      # py-modules, packages.find, the entry point, or module layout - but until
+      # now nothing ran it, so it protected nothing. A wheel missing audit_log,
+      # process_lock and metrics shipped in v3.0.0 and v4.0.0 undetected.
+      - name: Build a wheel, install it, and verify it actually imports
+        run: bash scripts/verify_install.sh
+

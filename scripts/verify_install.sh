@@ -63,6 +63,15 @@ python -m pip install --quiet --upgrade pip
 echo "[verify] installing wheel into temp venv"
 python -m pip install --quiet "${WHEEL}"
 
+# Everything from here on must resolve against the INSTALLED WHEEL, never the
+# source tree.  Python puts the current directory on sys.path, so with cwd at
+# the repo root `import internets` loads internets.py from source and
+# importlib.metadata finds the stale internets_irc.egg-info/ (which carries no
+# RECORD) instead of the venv's dist-info.  Both made this gate inspect the
+# thing it was supposed to be checking against.  That is how a wheel missing
+# audit_log, process_lock and metrics passed and shipped in v3.0.0 and v4.0.0.
+cd "${TMPDIR_VENV}"
+
 # ---- 4. Verify installed-file hashes match RECORD ---------------------
 echo "[verify] checking installed-file hashes against RECORD"
 python - <<'PY'
@@ -110,8 +119,44 @@ sys.exit(1 if errs else 0)
 PY
 
 # ---- 5. Smoke test ----------------------------------------------------
-echo "[verify] import + version smoke test"
+# config.py reads config.ini from the CWD at import time and exits if it is
+# absent, so stage one here the way an operator would.  config.ini.example is
+# deliberately not shipped in the wheel - the bot is installed from a checkout,
+# which is what `secret_store init`'s own error message tells you.
+cp "${ROOT}/config.ini.example" "${TMPDIR_VENV}/config.ini"
+
+echo "[verify] import + version smoke test (from outside the repo)"
 python -c "import internets, sys; print('internets', internets.__version__); assert internets.__version__"
+
+echo "[verify] every declared top-level module imports from the wheel"
+python - <<'PY'
+import importlib
+import sys
+
+# Anything imported at module scope by the entry path must be in the wheel.
+REQUIRED = [
+    "internets", "config", "botlog", "admin_cmds", "console", "sender",
+    "store", "protocol", "hashpw", "secret_store",
+    "audit_log", "process_lock", "metrics",
+]
+missing = []
+for name in REQUIRED:
+    try:
+        importlib.import_module(name)
+    except ModuleNotFoundError as e:
+        # Only a missing module ITSELF is a packaging failure; a missing
+        # optional third-party dep is a different problem and not this gate's.
+        if e.name == name:
+            missing.append(name)
+    except Exception:
+        # Imported fine, then failed on config/runtime state. Packaging is OK.
+        pass
+if missing:
+    print(f"[verify] NOT PACKAGED: {', '.join(missing)}")
+    print("[verify] add them to [tool.setuptools] py-modules in pyproject.toml")
+    sys.exit(1)
+print(f"[verify] all {len(REQUIRED)} top-level modules present in the wheel")
+PY
 
 echo "[verify] console entry point resolves"
 python -c "import importlib.metadata as md; eps=md.entry_points(group='console_scripts'); names=[e.name for e in eps]; assert 'internets' in names, f'missing entry point; got {names}'"
