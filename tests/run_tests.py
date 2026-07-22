@@ -1199,6 +1199,48 @@ def _():
     assert _backoff(5) == 300.0  # capped
     assert _backoff(10) == 300.0  # still capped
 
+@test("nick: the bot tracks its own nick change even with a bare-nick prefix")
+def _():
+    """A NICK message may carry a nick-only prefix (RFC 2812 makes user@host
+    optional), and some servers send exactly that for a self/services-driven
+    change. If _handle_membership does not update self._nick, the bot stops
+    recognising PMs to its new nick, so a prefix-less PM command (.raw, etc.)
+    silently never dispatches. Observed live: `.raw nick Internets` produced
+    `:Guest43341 NICK :Internets`, the bot kept thinking it was Guest43341,
+    and every later `.raw ...` PM to Internets was dropped - which is how a
+    NickServ password ended up sitting unredacted in the inbound debug log
+    instead of being sent.
+    """
+    from internets import IRCBot
+    bot = IRCBot()
+
+    # Bare-nick prefix (no !user@host) - the case that was dropped.
+    bot._nick = "Guest43341"
+    assert bot._handle_membership(":Guest43341 NICK :Internets") is True
+    assert bot._nick == "Internets", bot._nick
+
+    # Full nick!user@host prefix - must still work.
+    bot._nick = "Internets"
+    assert bot._handle_membership(
+        ":Internets!Internets@host.example NICK :Guest45909") is True
+    assert bot._nick == "Guest45909", bot._nick
+
+    # A NICK change for someone else must not touch the bot's own nick.
+    bot._nick = "Internets"
+    assert bot._handle_membership(":alice!a@h NICK :bob") is True
+    assert bot._nick == "Internets"
+
+@test("nick: a bare-nick change still drops the renamed nick's admin session")
+def _():
+    from internets import IRCBot
+    bot = IRCBot()
+    bot._nick_hosts["oldnick"] = "old@host"
+    bot._authed["oldnick"] = "old@host"
+    # No hostmask in the prefix; the session must still be revoked, fail-closed.
+    assert bot._handle_membership(":oldnick NICK :newnick") is True
+    assert "oldnick" not in bot._authed
+    assert not bot.is_admin("newnick")
+
 @test("admin auth: case-insensitive")
 def _():
     from internets import IRCBot
@@ -1258,15 +1300,22 @@ def _():
     assert m.group(2) == "ident@host.example.com"
     assert m.group(3) == "#channel"
 
-@test("NICK regex captures full user@host as hostmask")
+@test("NICK regex captures full user@host, and tolerates a bare-nick prefix")
 def _():
-    import re
-    line = ":OldNick!ident@host.example.com NICK :NewNick"
-    m = re.match(r":([^!]+)!(\S+) NICK :?(\S+)", line)
+    # Test the SHIPPED regex, not a copy - a copy passes even if the real one
+    # diverges (which is exactly how the bare-nick case shipped broken).
+    from internets import IRCBot
+    m = IRCBot._RE_NICK.match(":OldNick!ident@host.example.com NICK :NewNick")
     assert m is not None
     assert m.group(1) == "OldNick"
     assert m.group(2) == "ident@host.example.com"
     assert m.group(3) == "NewNick"
+    # Bare-nick prefix: user@host is optional per RFC 2812.
+    m2 = IRCBot._RE_NICK.match(":Guest43341 NICK :Internets")
+    assert m2 is not None, "bare-nick NICK prefix must match"
+    assert m2.group(1) == "Guest43341"
+    assert m2.group(2) is None
+    assert m2.group(3) == "Internets"
 
 @test("JOIN error handler matches 403, 405, 476 in addition to 471/474/475")
 def _():

@@ -6,6 +6,16 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bot now tracks its own nick change when the server uses a bare-nick
+  prefix.** `_RE_NICK` required a `nick!user@host` prefix, but RFC 2812 makes
+  the `user@host` half optional and some servers send a bare `:oldnick NICK
+  :newnick` for a self or services-driven change. That line was dropped, so
+  after a `.raw nick <new>` the bot kept thinking it had its old nick, stopped
+  recognising PMs to the new one, and silently ignored every prefix-less PM
+  command (`.raw ...`) thereafter. It looked like `.raw` had stopped working.
+
 ### Security
 
 - **Raised the `weatherkit` / `all` extras to the security floors

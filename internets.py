@@ -206,7 +206,13 @@ class IRCBot(AdminCommandsMixin):
     _RE_PART      = re.compile(r":([^!]+)![^@]+@\S+ PART :?(\S+)")
     _RE_KICK      = re.compile(r":\S+ KICK (\S+) (\S+)")
     _RE_QUIT      = re.compile(r":([^!]+)![^@]+@\S+ QUIT")
-    _RE_NICK      = re.compile(r":([^!]+)!(\S+) NICK :?(\S+)")
+    # The user@host half of the prefix is OPTIONAL (RFC 2812: prefix is
+    # `nick [ [ "!" user ] "@" host ]`).  Some servers send a bare-nick prefix
+    # for a self / services-driven nick change, e.g. `:Guest43341 NICK
+    # :Internets`.  Requiring the `!` dropped exactly that line, so the bot
+    # never learned its own new nick, stopped recognising PMs to it, and
+    # silently ignored every prefix-less PM command (`.raw ...`) thereafter.
+    _RE_NICK      = re.compile(r":([^!\s]+)(?:!(\S+))? NICK :?(\S+)")
     _RE_PRIVMSG   = re.compile(r":([^!]+)!(\S+) PRIVMSG (\S+) :(.*)")
     _RE_MOTD      = re.compile(r":\S+ (?:376|422) ")
     _RE_AUTH_LOG  = re.compile(r"PRIVMSG\s+\S+\s+:\.?AUTH\s", re.IGNORECASE)
@@ -1078,7 +1084,10 @@ class IRCBot(AdminCommandsMixin):
             return True
         m = self._RE_NICK.match(line)
         if m:
-            old, hm, new = m.group(1), m.group(2), m.group(3)
+            # hm is None for a bare-nick prefix; downstream stores it as the
+            # renamed user's host, and an unknown host is fail-closed for
+            # is_admin, so "" is the safe placeholder.
+            old, hm, new = m.group(1), (m.group(2) or ""), m.group(3)
             if old.lower() == self._nick.lower(): self._nick = new
             self._store.user_rename(old, new, hm)
             ol, nl = old.lower(), new.lower()
