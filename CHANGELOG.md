@@ -6,6 +6,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`.pollen <us-location>` now reaches Pollen.com for most US locations.** The
+  provider reverse-geocoded lat/lon to a ZIP at Nominatim `zoom=10` (city),
+  which omits the `postcode` for most places - 3 of 4 sampled US cities had none
+  at that zoom. So Pollen.com silently returned `None` and the command fell
+  through to the Europe-only CAMS provider, reporting "pollen data unavailable".
+  Only a location whose OSM node carries a ZIP at city zoom happened to work
+  (San Dimas did; Pasadena did not). Now uses `zoom=18` (Nominatim's reverse
+  default), which reliably includes the postcode. The misleading
+  "CAMS covers Europe only" failure message, shown for any pollen failure
+  regardless of location, is corrected to "pollen data unavailable for this
+  location."
+
 ### Security
 
 - **A credential passed to `.raw` no longer lands in the logs in plaintext.**

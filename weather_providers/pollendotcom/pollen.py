@@ -17,9 +17,14 @@ _API = "https://www.pollen.com/api/forecast/current/pollen/"
 async def fetch(user_agent, lat, lon, location):
     ua = user_agent or "InternetsBot/1.0 (weather)"
     # 1. lat/lon → US ZIP (Pollen.com is keyed on ZIP and US-only).
+    # zoom=18 (Nominatim's reverse default) - a postcode is only present at
+    # street/building granularity.  zoom=10 (city) omitted it for most US
+    # locations, so Pollen.com silently returned None and the command fell
+    # through to the Europe-only CAMS provider; only a place whose OSM node
+    # carries a ZIP at city zoom (e.g. San Dimas) worked.
     rev = await get_json(_REV, params={
         "format": "jsonv2", "lat": lat, "lon": lon,
-        "zoom": "10", "addressdetails": "1",
+        "zoom": "18", "addressdetails": "1",
     }, headers={"User-Agent": ua})
     addr = rev.get("address", {}) if isinstance(rev, dict) else {}
     if (addr.get("country_code") or "").lower() != "us":

@@ -570,6 +570,27 @@ class TestPollenProviders:
         assert r.category == "Low-Med"
         assert r.triggers == ("Oak", "Sagebrush")
 
+    def test_pollendotcom_reverse_zoom_is_high_enough_for_a_zip(self, monkeypatch):
+        """zoom=10 (city) omits the postcode for most US locations, so
+        Pollen.com silently returned None for them: only a place whose OSM node
+        carries a ZIP at city zoom worked (San Dimas did, Pasadena did not).
+        Nominatim's reverse default is 18 and reliably includes the postcode.
+        Empirically at zoom=10, 3 of 4 sampled US cities had no postcode.
+        """
+        from weather_providers.pollendotcom import pollen
+        seen = {}
+        async def stub(url, **kw):
+            if "nominatim" in url:
+                seen["zoom"] = (kw.get("params") or {}).get("zoom")
+                return {"address": {"country_code": "us", "postcode": "91101"}}
+            return {"Location": {"periods": [
+                {"Type": "Today", "Index": 3.0, "Triggers": []}]}}
+        _patch(monkeypatch, pollen, stub)
+        asyncio.run(pollen.fetch("ua", 34.1476, -118.1441, "Pasadena, CA"))
+        assert seen.get("zoom") is not None, "no reverse-geocode request was made"
+        assert int(seen["zoom"]) >= 18, (
+            f"reverse zoom {seen['zoom']!r} is too coarse to return a ZIP")
+
     def test_pollendotcom_non_us_returns_none(self, monkeypatch):
         from weather_providers.pollendotcom import pollen
         async def stub(url, **kw):

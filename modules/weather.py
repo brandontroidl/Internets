@@ -837,7 +837,7 @@ class WeatherModule(BotModule):
     async def cmd_pollen(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_pollen
         await self._weather_cmd("pollen", "pollen", nick, reply_to, arg,
-            get_pollen, _format_pollen, "pollen data unavailable - CAMS covers Europe only.")
+            get_pollen, _format_pollen, "pollen data unavailable for this location.")
 
     async def cmd_wildfire(self, nick: str, reply_to: str, arg: str | None) -> None:
         from weather_providers import get_wildfire
