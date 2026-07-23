@@ -3,7 +3,8 @@
     .jwt <token>            decode JWT header+payload (NO signature check)
     .semver <a> <b>         compare two semantic versions
     .uuid5 <ns> <name>      deterministic UUIDv5 (or inspect a single UUID)
-    .tz <time> <from> <to>  convert a clock time between IANA zones
+    .tz <time> <from> <to>  convert a clock time between zones (IANA names or
+                            common abbreviations: PST, EST, CST, MST, UTC, GMT, JST, CET, ...)
     .unix <signal|errno>    look up a Unix signal or errno by name/number
     .color <value>          parse #hex / rgb() / hsl() -> hex/rgb/hsl + name
     .cron <expr>            validate + explain a 5-field cron, next fire times
@@ -181,6 +182,42 @@ def _uuid5(ns: str, name: str | None) -> str:
 
 
 # ── .tz ────────────────────────────────────────────────────────────────
+# Common timezone abbreviations -> IANA zone names.  ZoneInfo only accepts IANA
+# names, so a user typing "pst" got "unknown zone".  Abbreviations are formally
+# ambiguous (PST is Pacific, Philippine AND Pakistan time; CST is US Central,
+# China and Cuba), which is why the tz database does not key on them.  This maps
+# the ones a user of a US-operated bot means in practice, plus UTC/GMT and a few
+# unambiguous international zones.  Genuinely ambiguous abbreviations (IST, BST)
+# are deliberately OMITTED - use the IANA name for those.  Daylight/standard
+# variants map to the same region and ZoneInfo applies the correct offset for
+# the date; a bare clock time anchors to January (standard time), matching the
+# "S" forms.
+_TZ_ABBR: dict[str, str] = {
+    "pst": "America/Los_Angeles", "pdt": "America/Los_Angeles", "pt": "America/Los_Angeles",
+    "mst": "America/Denver", "mdt": "America/Denver", "mt": "America/Denver",
+    "cst": "America/Chicago", "cdt": "America/Chicago", "ct": "America/Chicago",
+    "est": "America/New_York", "edt": "America/New_York", "et": "America/New_York",
+    "akst": "America/Anchorage", "akdt": "America/Anchorage",
+    "hst": "Pacific/Honolulu",
+    "utc": "UTC", "gmt": "UTC", "z": "UTC",
+    "jst": "Asia/Tokyo",
+    "cet": "Europe/Paris", "cest": "Europe/Paris",
+    "eet": "Europe/Athens", "eest": "Europe/Athens",
+    "aest": "Australia/Sydney", "aedt": "Australia/Sydney",
+    "nzst": "Pacific/Auckland", "nzdt": "Pacific/Auckland",
+}
+
+
+def _resolve_zone(name: str) -> ZoneInfo | None:
+    """Resolve an IANA name or a common abbreviation to a ZoneInfo, else None."""
+    name = name.strip()
+    iana = _TZ_ABBR.get(name.lower(), name)
+    try:
+        return ZoneInfo(iana)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        return None
+
+
 def _parse_clock(s: str, zone: ZoneInfo) -> _dt.datetime:
     s = s.strip()
     # full ISO datetime first
@@ -202,13 +239,11 @@ def _parse_clock(s: str, zone: ZoneInfo) -> _dt.datetime:
 
 
 def _tz(time_s: str, from_z: str, to_z: str) -> str:
-    try:
-        src = ZoneInfo(from_z.strip())
-    except (ZoneInfoNotFoundError, ValueError, KeyError):
+    src = _resolve_zone(from_z)
+    if src is None:
         return f"unknown zone: {strip_ctrl(from_z.strip(), 40)}"
-    try:
-        dst = ZoneInfo(to_z.strip())
-    except (ZoneInfoNotFoundError, ValueError, KeyError):
+    dst = _resolve_zone(to_z)
+    if dst is None:
         return f"unknown zone: {strip_ctrl(to_z.strip(), 40)}"
     try:
         dt = _parse_clock(time_s, src)
@@ -554,7 +589,7 @@ class DevtoolsModule(BotModule):
             help_row(prefix, "jwt <token>", "Decode JWT header+payload (no sig check)"),
             help_row(prefix, "semver <a> <b>", "Compare two semantic versions"),
             help_row(prefix, "uuid5 <ns> <name>", "Deterministic UUIDv5 / inspect a UUID"),
-            help_row(prefix, "tz <time> <from> <to>", "Convert a clock time between zones"),
+            help_row(prefix, "tz <time> <from> <to>", "Convert a clock time between zones (IANA or PST/EST/UTC/...)"),
             help_row(prefix, "unix <signal|errno>", "Look up a Unix signal or errno"),
             help_row(prefix, "color <value>", "hex/rgb/hsl convert + nearest CSS name"),
             help_row(prefix, "cron <expr>", "Validate/explain cron + next fire times"),

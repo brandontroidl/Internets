@@ -144,6 +144,25 @@ class TestTz:
         out = _tz("2026-07-01T12:00", "UTC", "Asia/Tokyo")
         assert "21:00" in out  # JST = UTC+9
 
+    @_needs_tzdata
+    def test_common_abbreviations_resolve(self):
+        # The exact case a user typed: 06:14 PST (UTC-8) -> 14:14 UTC.
+        assert "14:14" in _tz("06:14", "pst", "utc")
+        # Case-insensitive, and both sides may be abbreviations.
+        # EST 15:00 (UTC-5) -> PST 12:00 (UTC-8), both standard (Jan anchor).
+        assert "12:00" in _tz("15:00", "EST", "PST")
+        # GMT is an alias for UTC; CST resolves (US Central for this bot).
+        assert "unknown zone" not in _tz("12:00", "gmt", "cst")
+
+    @_needs_tzdata
+    def test_abbreviation_and_iana_interoperate(self):
+        # An abbreviation on one side, an IANA name on the other.
+        assert "unknown zone" not in _tz("09:00", "pst", "Asia/Tokyo")
+
+    def test_genuinely_unknown_zone_still_errors(self):
+        # A non-abbreviation, non-IANA string is still rejected.
+        assert "unknown zone" in _tz("15:00", "xyz", "utc")
+
     def test_unknown_from(self):
         assert "unknown zone" in _tz("15:00", "Not/AZone", "UTC")
 

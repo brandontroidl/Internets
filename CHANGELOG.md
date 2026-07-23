@@ -6,6 +6,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`.tz` now accepts common timezone abbreviations, not just IANA names.**
+  `.tz 06:14 pst utc` returned "unknown zone: pst" because `ZoneInfo` keys only
+  on IANA names. A curated map resolves the US zones (PST/PDT/MST/CST/EST and
+  their PT/MT/CT/ET forms), UTC/GMT/Z, and a few unambiguous international zones
+  (JST, CET/CEST, EET/EEST, AEST, NZST) to their IANA regions; ZoneInfo then
+  applies the correct offset for the date. Formally ambiguous abbreviations are
+  a deliberate judgment call: PST/CST resolve to the US zones (this is a
+  US-operated bot), and the genuinely contested ones (IST, BST) are omitted -
+  use the IANA name for those. IANA names continue to work unchanged.
+
 ### Fixed
 
 - **`.pollen <us-location>` now reaches Pollen.com for most US locations.** The
