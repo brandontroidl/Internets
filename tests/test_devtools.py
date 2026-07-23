@@ -163,6 +163,35 @@ class TestTz:
         # A non-abbreviation, non-IANA string is still rejected.
         assert "unknown zone" in _tz("15:00", "xyz", "utc")
 
+    @_needs_tzdata
+    def test_bare_time_output_omits_placeholder_date(self):
+        # A bare clock time has no real date, so the 2000-01-01 anchor must not
+        # leak into the output.
+        out = _tz("06:14", "pst", "utc")
+        assert "2000-01-01" not in out
+        assert "06:14" in out and "14:14" in out
+
+    @_needs_tzdata
+    def test_bare_time_flags_a_day_rollover(self):
+        # 23:30 PST -> 07:30 UTC the NEXT day. Dropping the date must not hide
+        # that the result is on a different calendar day.
+        out = _tz("23:30", "pst", "utc")
+        assert "07:30" in out
+        assert "+1d" in out
+
+    @_needs_tzdata
+    def test_bare_time_flags_a_backward_rollover(self):
+        # 01:00 UTC -> 17:00 PST the PREVIOUS day.
+        out = _tz("01:00", "utc", "pst")
+        assert "17:00" in out
+        assert "-1d" in out
+
+    @_needs_tzdata
+    def test_iso_datetime_keeps_the_full_date(self):
+        # An explicit datetime keeps its date on both sides.
+        out = _tz("2026-07-01T12:00", "UTC", "Asia/Tokyo")
+        assert "2026-07-01" in out and "21:00" in out
+
     def test_unknown_from(self):
         assert "unknown zone" in _tz("15:00", "Not/AZone", "UTC")
 

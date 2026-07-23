@@ -17,6 +17,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a deliberate judgment call: PST/CST resolve to the US zones (this is a
   US-operated bot), and the genuinely contested ones (IST, BST) are omitted -
   use the IANA name for those. IANA names continue to work unchanged.
+  For a bare clock time the output no longer prints the internal `2000-01-01`
+  anchor date (`06:14 pst = 14:14 UTC`); a conversion that crosses midnight
+  is marked `+1d`/`-1d` so the day change is not hidden. A full ISO datetime
+  still shows its date on both sides.
 
 ### Fixed
 

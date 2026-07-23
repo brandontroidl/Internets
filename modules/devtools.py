@@ -218,14 +218,22 @@ def _resolve_zone(name: str) -> ZoneInfo | None:
         return None
 
 
-def _parse_clock(s: str, zone: ZoneInfo) -> _dt.datetime:
+def _parse_clock(s: str, zone: ZoneInfo) -> tuple[_dt.datetime, bool]:
+    """Parse a time into ``(datetime, has_date)``.
+
+    ``has_date`` is True for a full ISO datetime and False for a bare clock time
+    (anchored to a fixed reference date), so the caller can omit the placeholder
+    date from its output.  January is deliberate: it is standard time in the
+    northern hemisphere, so a bare-time abbreviation like ``pst`` resolves to
+    PST rather than PDT.
+    """
     s = s.strip()
     # full ISO datetime first
     try:
         dt = _dt.datetime.fromisoformat(s)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=zone)
-        return dt
+        return dt, True
     except ValueError:
         pass
     # bare clock time HH:MM or HH:MM:SS - anchor to a fixed reference date
@@ -234,7 +242,7 @@ def _parse_clock(s: str, zone: ZoneInfo) -> _dt.datetime:
             t = _dt.datetime.strptime(s, fmt).time()
         except ValueError:
             continue
-        return _dt.datetime(2000, 1, 1, t.hour, t.minute, t.second, tzinfo=zone)
+        return _dt.datetime(2000, 1, 1, t.hour, t.minute, t.second, tzinfo=zone), False
     raise ValueError("unrecognised time")
 
 
@@ -246,12 +254,20 @@ def _tz(time_s: str, from_z: str, to_z: str) -> str:
     if dst is None:
         return f"unknown zone: {strip_ctrl(to_z.strip(), 40)}"
     try:
-        dt = _parse_clock(time_s, src)
+        dt, has_date = _parse_clock(time_s, src)
     except ValueError:
         return "bad time - try 15:00 or 2026-01-02T15:00"
     out = dt.astimezone(dst)
-    return (f"{dt.strftime('%Y-%m-%d %H:%M')} {from_z.strip()} = "
-            f"{out.strftime('%Y-%m-%d %H:%M %Z')} ({to_z.strip()})")
+    if has_date:
+        left = dt.strftime("%Y-%m-%d %H:%M")
+        right = out.strftime("%Y-%m-%d %H:%M %Z")
+    else:
+        # Bare clock time: drop the placeholder date, but flag a day rollover so
+        # e.g. 23:30 PST -> 07:30 UTC does not silently hide the +1 day.
+        left = dt.strftime("%H:%M")
+        delta = (out.date() - dt.date()).days
+        right = out.strftime("%H:%M %Z") + (f" {delta:+d}d" if delta else "")
+    return f"{left} {from_z.strip()} = {right} ({to_z.strip()})"
 
 
 # ── .unix ──────────────────────────────────────────────────────────────
