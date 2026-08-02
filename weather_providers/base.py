@@ -18,7 +18,7 @@ MarineResult                  - wave height, swell, water temperature
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from math import asin, cos, radians, sin, sqrt
+from math import asin, cos, exp, log, radians, sin, sqrt
 from typing import Protocol, runtime_checkable
 
 
@@ -83,6 +83,68 @@ def _missing(v: object) -> bool:
     return v is None or v == ""
 
 
+# ── Derived-field formulas (self-consistent: same observation's inputs) ─
+
+def _magnus_dewpoint(temp_c: float, humidity: float) -> float:
+    """Magnus formula dewpoint (Alduchov & Eskridge 1996 coefficients)."""
+    a, b = 17.625, 243.04
+    alpha = (a * temp_c) / (b + temp_c) + log(humidity / 100.0)
+    return (b * alpha) / (a - alpha)
+
+
+def _heat_index_c(temp_c: float, humidity: float) -> float:
+    """NWS/Rothfusz regression heat index, in Celsius.
+
+    Applied when T >= 27C and RH >= 40%.  Uses the Fahrenheit regression
+    with the Rothfusz adjustments, converted back to Celsius.
+    """
+    t = temp_c * 9 / 5 + 32  # to Fahrenheit
+    rh = humidity
+    hi = (
+        -42.379
+        + 2.04901523 * t
+        + 10.14333127 * rh
+        - 0.22475541 * t * rh
+        - 0.00683783 * t * t
+        - 0.05481717 * rh * rh
+        + 0.00122874 * t * t * rh
+        + 0.00085282 * t * rh * rh
+        - 0.00000199 * t * t * rh * rh
+    )
+    if rh < 13 and 80 <= t <= 112:
+        hi -= ((13 - rh) / 4) * ((17 - abs(t - 95)) / 17) ** 0.5
+    elif rh > 85 and 80 <= t <= 87:
+        hi += ((rh - 85) / 10) * ((87 - t) / 5)
+    return (hi - 32) * 5 / 9
+
+
+def _wind_chill_c(temp_c: float, wind_kph: float) -> float:
+    """Environment Canada / NWS wind chill in Celsius.
+
+    Applied when T <= 10C and wind > 4.8 kph.
+    """
+    return (
+        13.12
+        + 0.6215 * temp_c
+        - 11.37 * wind_kph ** 0.16
+        + 0.3965 * temp_c * wind_kph ** 0.16
+    )
+
+
+def _apparent_temp(temp_c: float, humidity: float | None,
+                   wind_kph: float | None) -> float | None:
+    """Compute apparent temperature from the observation's own values.
+
+    Returns None when the inputs needed for either formula are missing.
+    """
+    w = wind_kph or 0.0
+    if temp_c >= 27.0 and humidity is not None and humidity >= 40.0:
+        return _heat_index_c(temp_c, humidity)
+    if temp_c <= 10.0 and w > 4.8:
+        return _wind_chill_c(temp_c, w)
+    return temp_c
+
+
 # ── Current conditions + daily forecast ──────────────────────────────
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +201,28 @@ class WeatherResult:
             return self
         src = self.source if other.source in self.source else f"{self.source} + {other.source}"
         return replace(self, source=src, **upd)
+
+    def derive_missing(self) -> "WeatherResult":
+        """Compute feels_like_c and dewpoint_c from this result's own
+        temperature + humidity + wind when the provider left them None.
+
+        Called after gap-filling so the inputs (humidity, wind) are as
+        complete as the chain can make them while the derived values still
+        belong to this observation's temperature.  Returns self unchanged
+        if both are already populated or temperature is missing."""
+        if self.temperature is None:
+            return self
+        upd: dict[str, float | None] = {}
+        if self.feels_like_c is None:
+            fl = _apparent_temp(self.temperature, self.humidity, self.wind_kph)
+            if fl is not None:
+                upd["feels_like_c"] = round(fl, 1)
+        if self.dewpoint_c is None and self.humidity is not None:
+            upd["dewpoint_c"] = round(
+                _magnus_dewpoint(self.temperature, self.humidity), 1)
+        if not upd:
+            return self
+        return replace(self, **upd)
 
 
 # ── Hourly forecast ──────────────────────────────────────────────────

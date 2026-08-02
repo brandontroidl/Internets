@@ -438,7 +438,7 @@ class Dispatcher:
                 primary = result if primary is None else primary.fill_gaps(result)
                 merged += 1
                 if not primary.has_gaps() or merged >= 3:
-                    return primary
+                    return primary.derive_missing()
                 continue
             except Exception as e:
                 latency = time.monotonic() - start
@@ -472,7 +472,7 @@ class Dispatcher:
         # Chain exhausted.  A sparse-but-usable current primary we never fully
         # filled still beats nothing.
         if primary is not None:
-            return primary
+            return primary.derive_missing()
         log.error("All providers failed for '%s'", capability)
         return None
 

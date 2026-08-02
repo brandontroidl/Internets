@@ -544,10 +544,11 @@ class TestGapFill:
         assert out.temperature == 24.0 and out.description == "Clear"   # NWS core kept
         assert out.humidity == 48.0 and out.pressure_mb == 1013.0       # filled
         assert out.wind_kph == 11.0 and out.visibility_m == 16000.0     # filled
-        # Derived-from-temperature fields are NOT filled across providers: the
-        # donor measured 22.0C, so its dewpoint/feels-like describe a different
-        # observation than the 24.0C shown on the line.
-        assert out.dewpoint_c is None and out.feels_like_c is None
+        # Derived fields are NOT imported from another provider (the donor
+        # measured 22.0C); instead they're computed from the primary's own
+        # temperature (24.0C) + gap-filled humidity (48.0%) via derive_missing().
+        assert out.dewpoint_c is not None and out.feels_like_c is not None
+        assert out.feels_like_c == 24.0   # 24C, 48% RH, 11 kph: no HI/WC region
         assert "NWS" in out.source and "Open-Meteo" in out.source       # both credited
         assert nws.calls == 1 and om.calls == 1                         # one extra call
 
@@ -604,6 +605,48 @@ class TestGapFill:
                 wind_dir="W", pressure_mb=976.0, visibility_m=17000.0)
         assert r.feels_like_c is None and r.dewpoint_c is None
         assert r.has_gaps() is False
+
+    def test_derive_missing_computes_from_own_observation(self):
+        """derive_missing computes feels-like and dewpoint from the primary's
+        own temperature + gap-filled humidity/wind, not from a donor provider.
+
+        Yosemite scenario: NWS 24.22C, humidity=43.9 (gap-filled), wind=11.1
+        (gap-filled).  The old bug borrowed Open-Meteo's 11.9C feels-like
+        (computed from 13.8C) and displayed it next to 24.22C.  Now the bot
+        computes feels-like from 24.22C itself."""
+        primary = _wr("NWS", 24.22, humidity=43.9)
+        other = _wr("Open-Meteo", 13.8, feels_like_c=11.9, dewpoint_c=4.9,
+                    wind_kph=11.1, pressure_mb=713.9)
+        merged = primary.fill_gaps(other)
+        # fill_gaps still does NOT import derived fields
+        assert merged.feels_like_c is None
+        assert merged.dewpoint_c is None
+        # derive_missing computes them from the primary's own temperature
+        derived = merged.derive_missing()
+        assert derived.feels_like_c == 24.2   # 24.22C in the mild zone
+        assert derived.dewpoint_c is not None
+        # Dewpoint from 24.22C + 43.9% RH should be ~11C, NOT 4.9C (Open-Meteo's)
+        assert abs(derived.dewpoint_c - 11.1) < 1.0
+
+    def test_derive_missing_noop_when_already_populated(self):
+        """derive_missing returns self when both fields are already set."""
+        r = _wr("NWS", 24.0, humidity=48.0, wind_kph=11.0,
+                dewpoint_c=12.0, feels_like_c=23.0)
+        assert r.derive_missing() is r
+
+    def test_derive_missing_heat_index(self):
+        """derive_missing uses heat index when T >= 27C and RH >= 40%."""
+        r = _wr("NWS", 35.0, humidity=60.0, wind_kph=5.0)
+        derived = r.derive_missing()
+        assert derived.feels_like_c is not None
+        assert derived.feels_like_c > 35.0  # heat index always above ambient
+
+    def test_derive_missing_wind_chill(self):
+        """derive_missing uses wind chill when T <= 10C and wind > 4.8 kph."""
+        r = _wr("NWS", 5.0, humidity=70.0, wind_kph=20.0)
+        derived = r.derive_missing()
+        assert derived.feels_like_c is not None
+        assert derived.feels_like_c < 5.0  # wind chill always below ambient
 
     def test_has_gaps_true_when_only_description_empty(self):
         """Empty description counts as a gap so the dispatcher keeps walking the
