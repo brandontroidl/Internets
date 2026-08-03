@@ -53,17 +53,23 @@ _IGNORE_EXTS = frozenset({
 
 
 class _TitleParser(HTMLParser):
-    """Extract the <title> text from an HTML document."""
+    """Extract <title> or og:title from an HTML document."""
 
     def __init__(self) -> None:
         super().__init__()
         self._in_title = False
         self._chunks: list[str] = []
-        self.done = False
+        self._title_done = False
+        self._og_title: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "title" and not self.done:
+        if tag == "title" and not self._title_done:
             self._in_title = True
+        elif tag == "meta" and self._og_title is None:
+            a = {k.lower(): (v or "") for k, v in attrs}
+            key = (a.get("property") or a.get("name") or "").lower()
+            if key == "og:title" and a.get("content"):
+                self._og_title = a["content"]
 
     def handle_data(self, data: str) -> None:
         if self._in_title:
@@ -72,10 +78,12 @@ class _TitleParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "title" and self._in_title:
             self._in_title = False
-            self.done = True
+            self._title_done = True
 
     @property
     def title(self) -> str:
+        if self._og_title:
+            return re.sub(r"\s+", " ", html.unescape(self._og_title)).strip()
         raw = " ".join(self._chunks)
         return re.sub(r"\s+", " ", html.unescape(raw)).strip()
 
@@ -148,26 +156,24 @@ def _fetch_yt_api(vid_id: str, key: str, ua: str) -> str | None:
 
 
 def _fetch_title_sync(url: str, ua: str) -> str | None:
-    """Fetch a page and extract its <title>. Returns None on failure."""
+    """Fetch a page and extract its <title> or og:title. Returns None on failure."""
     try:
         with safe_open("GET", url, ua, follow_redirects=True,
                        timeout=_FETCH_TIMEOUT) as resp:
             ct = resp.headers.get("content-type", "")
             if "text/html" not in ct and "application/xhtml" not in ct:
                 return None
-            raw = resp.raw.read(_TITLE_MAX_BYTES + 1, decode_content=True)
+            raw = resp.raw.read(_TITLE_MAX_BYTES, decode_content=True)
     except SSRFBlocked:
         return None
     except requests.RequestException as e:
         log.debug("linktitle: fetch %s: %s", url, e)
         return None
-    if len(raw) > _TITLE_MAX_BYTES:
-        return None
     parser = _TitleParser()
     try:
         parser.feed(raw.decode("utf-8", errors="replace"))
     except Exception:
-        return None
+        pass
     title = parser.title
     if not title:
         return None
