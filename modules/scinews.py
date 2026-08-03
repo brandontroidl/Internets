@@ -53,7 +53,7 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "arXiv physics": ("https://rss.arxiv.org/rss/physics",                 {"physics"}),
     "Physics World": ("https://physicsworld.com/feed/",                    {"physics"}),
     "APS Physics":   ("https://feeds.aps.org/rss/recent/physics.xml",      {"physics"}),
-    "IEEE Spectrum": ("https://spectrum.ieee.org/feeds/feed.rss",          {"tech", "cs", "physics"}),
+    "IEEE Spectrum": ("https://spectrum.ieee.org/feeds/feed.rss",          {"tech", "physics"}),
     # biology / life sciences
     "arXiv q-bio":   ("https://rss.arxiv.org/rss/q-bio",                   {"bio"}),
     "STAT News":     ("https://www.statnews.com/feed/",                    {"bio"}),
@@ -72,21 +72,19 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "Eng. News":     ("https://www.enr.com/rss/all",                       {"eng"}),
     "IEEE Eng":      ("https://spectrum.ieee.org/feeds/topic/energy.rss",  {"eng"}),
     "Hackaday":      ("https://hackaday.com/feed/",                        {"eng", "tech"}),
-    # computer science
-    "MIT News":      ("https://news.mit.edu/rss/feed",                     {"all", "cs"}),
-    "arXiv cs":      ("https://rss.arxiv.org/rss/cs",                      {"cs"}),
-    "The Register":  ("https://www.theregister.com/headlines.atom",        {"tech", "cs"}),
-    # AI / ML
-    "arXiv cs.AI":   ("https://rss.arxiv.org/rss/cs.AI",                   {"cs", "ai"}),
-    "arXiv cs.LG":   ("https://rss.arxiv.org/rss/cs.LG",                   {"cs", "ai"}),
-    "MIT Tech Rev":  ("https://www.technologyreview.com/feed/",            {"all", "tech", "ai"}),
-    "Simon Willison":("https://simonwillison.net/atom/everything/",        {"ai"}),
-    "Hugging Face":  ("https://huggingface.co/blog/feed.xml",              {"ai"}),
-    "OpenAI":        ("https://openai.com/news/rss.xml",                   {"ai"}),
-    "DeepMind":      ("https://deepmind.google/blog/rss.xml",              {"ai"}),
-    "Import AI":     ("https://importai.substack.com/feed",                {"ai"}),
-    "Latent Space":  ("https://www.latent.space/feed",                     {"ai"}),
-    # tech (general)
+    # tech (CS, AI, general)
+    "MIT News":      ("https://news.mit.edu/rss/feed",                     {"all", "tech"}),
+    "arXiv cs":      ("https://rss.arxiv.org/rss/cs",                      {"tech"}),
+    "arXiv cs.AI":   ("https://rss.arxiv.org/rss/cs.AI",                   {"tech"}),
+    "arXiv cs.LG":   ("https://rss.arxiv.org/rss/cs.LG",                   {"tech"}),
+    "The Register":  ("https://www.theregister.com/headlines.atom",        {"tech"}),
+    "MIT Tech Rev":  ("https://www.technologyreview.com/feed/",            {"all", "tech"}),
+    "Simon Willison":("https://simonwillison.net/atom/everything/",        {"tech"}),
+    "Hugging Face":  ("https://huggingface.co/blog/feed.xml",              {"tech"}),
+    "OpenAI":        ("https://openai.com/news/rss.xml",                   {"tech"}),
+    "DeepMind":      ("https://deepmind.google/blog/rss.xml",              {"tech"}),
+    "Import AI":     ("https://importai.substack.com/feed",                {"tech"}),
+    "Latent Space":  ("https://www.latent.space/feed",                     {"tech"}),
     "Ars Technica":  ("https://feeds.arstechnica.com/arstechnica/index",   {"tech"}),
     # linux
     "LWN":           ("https://lwn.net/headlines/rss",                     {"linux", "tech"}),
