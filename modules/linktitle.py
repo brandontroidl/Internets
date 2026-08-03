@@ -1,8 +1,8 @@
 """Passive URL title announcer - shows page titles when users post links.
 
 Watches channel messages for http/https URLs and announces the page title.
-YouTube links get enriched output (title, duration, views, likes) via the
-Data API when a key is configured; otherwise falls back to the page title.
+YouTube links use the free oembed endpoint for title + channel; when a
+youtube_key is configured, the Data API adds duration/views/likes.
 
 SSRF: every user-posted URL goes through _netsafe.safe_open (DNS-pinned,
 redirect-validated) so the bot cannot be aimed at internal services.
@@ -31,7 +31,7 @@ _RE_YT = re.compile(
     r"([A-Za-z0-9_-]{11})",
 )
 
-_TITLE_MAX_BYTES = 256 * 1024
+_TITLE_MAX_BYTES = 768 * 1024
 _FETCH_TIMEOUT = 8
 _COOLDOWN = 3.0
 _DEDUP_TTL = 300.0
@@ -90,8 +90,30 @@ def _fmt_duration(iso: str) -> str:
     return f"{mi}:{s:02d}"
 
 
-def _fetch_yt_sync(vid_id: str, key: str, ua: str) -> str | None:
-    """Fetch YouTube video details via Data API. Returns formatted string or None."""
+def _fetch_yt_oembed(url: str, ua: str) -> str | None:
+    """Fetch YouTube title + channel via the free oembed endpoint (no key)."""
+    try:
+        data = fetch_json(
+            "https://www.youtube.com/oembed",
+            params={"url": url, "format": "json"},
+            ua=ua,
+            timeout=_FETCH_TIMEOUT,
+        )
+        title = strip_ctrl(data.get("title", ""), _TITLE_MAX_LEN)
+        if not title:
+            return None
+        channel = strip_ctrl(data.get("author_name", ""), 80)
+        parts = [f"\x02YouTube\x02 {title}"]
+        if channel:
+            parts.append(f"by {channel}")
+        return " | ".join(parts)
+    except Exception as e:
+        log.debug("linktitle: yt oembed: %s", e)
+        return None
+
+
+def _fetch_yt_api(vid_id: str, key: str, ua: str) -> str | None:
+    """Fetch YouTube video details via Data API (enriched: duration/views/likes)."""
     try:
         vids = fetch_json(
             "https://www.googleapis.com/youtube/v3/videos",
@@ -227,17 +249,33 @@ class LinkTitleModule(BotModule):
                 return
             for url in urls[:_MAX_URLS_PER_MSG]:
                 if self._should_skip(target, url):
+                    log.info("linktitle: skipping %s (cooldown/dedup)", url)
                     continue
                 self._mark(target, url)
-                asyncio.ensure_future(self._announce(target, url))
+                log.info("linktitle: announcing %s in %s", url, target)
+                task = asyncio.ensure_future(self._announce(target, url))
+                task.add_done_callback(self._task_done)
         except Exception as e:
-            log.debug("linktitle: on_raw: %s", e)
+            log.warning("linktitle: on_raw error: %s", e)
+
+    @staticmethod
+    def _task_done(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            log.warning("linktitle: announce failed: %s", exc)
 
     async def _announce(self, channel: str, url: str) -> None:
         yt_match = _RE_YT.search(url)
-        if yt_match and self._yt_key:
-            result = await asyncio.to_thread(
-                _fetch_yt_sync, yt_match.group(1), self._yt_key, self._ua)
+        if yt_match:
+            if self._yt_key:
+                result = await asyncio.to_thread(
+                    _fetch_yt_api, yt_match.group(1), self._yt_key, self._ua)
+                if result:
+                    self.bot.privmsg(channel, result)
+                    return
+            result = await asyncio.to_thread(_fetch_yt_oembed, url, self._ua)
             if result:
                 self.bot.privmsg(channel, result)
                 return
