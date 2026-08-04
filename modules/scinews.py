@@ -29,7 +29,7 @@ from ._netsafe import SSRFBlocked, safe_open
 log = logging.getLogger("internets.scinews")
 
 _FEED_TIMEOUT = 6
-_FEED_MAX_BYTES = 6 * 1024 * 1024   # arXiv per-archive RSS (cs/math) runs several MB
+_FEED_MAX_BYTES = 12 * 1024 * 1024  # podcast feeds (BSD Now) and arXiv archives can run 8-10 MB
 _ART_MAX_BYTES = 512 * 1024
 _LIST_TTL = 600.0       # per-channel "last list" lifetime (s)
 _CACHE_TTL = 120.0      # aggregate-fetch cache (s)
