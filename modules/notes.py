@@ -201,7 +201,7 @@ class NotesModule(BotModule):
         try:
             n = int(rest.split()[0])
         except ValueError:
-            self.bot.privmsg(reply_to, f"{nick}: '{rest}' is not a number")
+            self.bot.privmsg(reply_to, f"{nick}: '{strip_ctrl(rest, 40)}' is not a number")
             return False
         notes = self._notes.get(key, [])
         if not notes:
@@ -231,7 +231,7 @@ class NotesModule(BotModule):
         try:
             n = int(rest.split()[0])
         except ValueError:
-            self.bot.privmsg(reply_to, f"{nick}: '{rest}' is not a number")
+            self.bot.privmsg(reply_to, f"{nick}: '{strip_ctrl(rest, 40)}' is not a number")
             return
         notes = self._notes.get(key, [])
         if not notes:

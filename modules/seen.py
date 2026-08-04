@@ -150,6 +150,9 @@ class SeenModule(BotModule):
         own = self._own_nick().lower()
         if own and nick.lower() == own:
             return
+        store = getattr(self.bot, "_store", None)
+        if store and store.is_opted_out(nick):
+            return
         entry = {
             "nick": nick,
             "ts": int(time.time()),
@@ -244,10 +247,23 @@ class SeenModule(BotModule):
                      f"{self._max_age_days}d")
         return len(stale)
 
+    def _purge_opted_out(self) -> int:
+        """Remove records for users who have since opted out."""
+        store = getattr(self.bot, "_store", None)
+        if not store:
+            return 0
+        opted = [k for k in self._seen if store.is_opted_out(k)]
+        for k in opted:
+            del self._seen[k]
+        if opted:
+            self._dirty = True
+        return len(opted)
+
     def _flush_sync(self) -> None:
         """Atomic write of self._seen to disk.  Safe to call from any thread."""
         with self._lock:
             self._prune_stale()
+            self._purge_opted_out()
             if not self._dirty:
                 return
             snapshot = dict(self._seen)
@@ -330,6 +346,11 @@ class SeenModule(BotModule):
         if not target:
             p = self.bot.cfg["bot"]["command_prefix"] if "bot" in self.bot.cfg else "."
             self.bot.privmsg(reply_to, f"{nick}: {p}seen <nick>")
+            return
+
+        store = getattr(self.bot, "_store", None)
+        if store and store.is_opted_out(target):
+            self.bot.privmsg(reply_to, f"never seen {target}")
             return
 
         with self._lock:

@@ -136,7 +136,10 @@ class ChannelsModule(BotModule):
         self._start_verify(nick, chan, reply_to, action="part")
 
     async def cmd_users(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Show tracked users in a channel."""
+        """Show tracked users in a channel (admin only - hostmask PII)."""
+        if not self.bot.is_admin(nick):
+            self.bot.notice(nick, f"{nick}: admin only")
+            return
         if arg and arg.startswith(("#", "&", "+", "!")):
             channel = arg.strip()
         elif reply_to.startswith(("#", "&", "+", "!")):

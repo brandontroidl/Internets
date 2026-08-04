@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import quote
 
 from .base import BotModule, fetch_json, help_row, strip_ctrl, ResponseTooLarge
 
@@ -27,7 +28,7 @@ def _fetch_sync(repo: str, ua: str) -> str:
     owner, name = repo.split("/")
     try:
         data = fetch_json(
-            f"https://api.github.com/repos/{owner}/{name}",
+            f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(name, safe='')}",
             ua=ua,
             timeout=10,
             allow_404=True,

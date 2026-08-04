@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,9 +177,29 @@ class SteamModule(BotModule):
     def _save_ids(self) -> None:
         with self._lock:
             try:
-                self._ids_file.write_text(json.dumps(self._ids, indent=2))
+                fd, tmp = tempfile.mkstemp(
+                    dir=str(self._ids_file.parent),
+                    prefix=self._ids_file.name + ".",
+                    suffix=".tmp",
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(self._ids, f, indent=2)
+                os.chmod(tmp, 0o600)
+                os.replace(tmp, self._ids_file)
             except Exception as e:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
                 log.warning(f"steam: failed to save IDs: {e}")
+
+    def forget(self, nick: str) -> int:
+        with self._lock:
+            removed = self._ids.pop(nick.lower(), None)
+        if removed is None:
+            return 0
+        self._save_ids()
+        return 1
 
     def is_configured(self) -> bool:
         return bool(self._key)

@@ -169,6 +169,8 @@ class AdminCommandsMixin:
                 log.warning(f"Auth lockout: {nick} ({hm}) {fails} failures")
                 return
 
+        pre_hostmask = self._nick_hosts.get(k)
+
         try:
             ok = await asyncio.to_thread(verify_password, arg.strip(), h)
         except ValueError as e:
@@ -196,14 +198,15 @@ class AdminCommandsMixin:
         if ok:
             hostmask = self._nick_hosts.get(k)
             if not hostmask or hostmask == "unknown":
-                # Fail closed: never persist a binding we cannot later verify.
-                # If the hostmask is unknown at this instant (e.g. the admin
-                # quit during the verify-password await, which drops it), refuse
-                # rather than store the "unknown" sentinel - that sentinel would
-                # grant nick-only admin that outlives the disconnect.
                 self.preply(nick, reply_to,
                     f"{nick}: can't confirm your hostmask right now - re-send the command.")
                 log.warning("Auth refused for %s: no current hostmask to bind", nick)
+                return
+            if pre_hostmask and hostmask != pre_hostmask:
+                self.preply(nick, reply_to,
+                    f"{nick}: identity changed during auth - re-send the command.")
+                log.warning("Auth refused for %s: hostmask changed mid-verify "
+                            "(%s -> %s)", nick, pre_hostmask, hostmask)
                 return
             with self._auth_lock:
                 self._auth_fails.pop(k, None)

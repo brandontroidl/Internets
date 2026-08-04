@@ -1036,7 +1036,15 @@ class IRCBot(AdminCommandsMixin):
 
     def _handle_membership(self, line: str) -> bool:
         m = self._RE_CHGHOST.match(line)
-        if m: self._store.user_rename(m.group(1), m.group(1), f"{m.group(2)}@{m.group(3)}"); return True
+        if m:
+            chg_nick, new_user, new_host = m.group(1), m.group(2), m.group(3)
+            new_hm = f"{new_user}@{new_host}"
+            self._store.user_rename(chg_nick, chg_nick, new_hm)
+            with self._auth_lock:
+                k = chg_nick.lower()
+                if k in self._nick_hosts:
+                    self._nick_hosts[k] = new_hm
+            return True
         m = self._RE_ACCOUNT.match(line)
         if m:
             # IRCv3 account-notify: ":nick!user@host ACCOUNT <accountname>"

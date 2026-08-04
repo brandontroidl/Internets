@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import logging
+from urllib.parse import quote
 from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.dictionary")
@@ -17,13 +18,13 @@ def _lookup_sync(word: str, index: int, ua: str) -> str:
     """
     try:
         entries = fetch_json(
-            f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}",
+            f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote(word, safe='')}",
             ua=ua,
             timeout=10,
             allow_404=True,
         )
         if entries is None or not entries or not isinstance(entries, list):
-            return f"no definition found for '{word}'"
+            return f"no definition found for '{strip_ctrl(word, 60)}'"
 
         # Flatten all definitions across all meanings
         defs: list[tuple[str, str]] = []  # (part_of_speech, definition)
@@ -36,7 +37,7 @@ def _lookup_sync(word: str, index: int, ua: str) -> str:
                         defs.append((pos, text))
 
         if not defs:
-            return f"no definition found for '{word}'"
+            return f"no definition found for '{strip_ctrl(word, 60)}'"
 
         total = len(defs)
         idx = max(1, min(index, total)) - 1
