@@ -49,6 +49,7 @@ getting-started
 modules
 writing-modules
 providers
+contributing
 ```
 
 ```{toctree}
@@ -68,7 +69,15 @@ knowledge-recovery
 
 ```{toctree}
 :maxdepth: 2
-:caption: VIII. API Reference
+:caption: VIII. Project
+
+changelog
+security-policy
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: IX. API Reference
 
 autoapi/index
 ```
