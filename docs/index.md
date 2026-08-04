@@ -47,6 +47,7 @@ configuration
 
 getting-started
 modules
+writing-modules
 providers
 ```
 

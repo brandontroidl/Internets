@@ -36,7 +36,8 @@ copy-and-fill skeleton that also shows the conventions a real command needs:
 rate limiting, empty-arg usage, `strip_ctrl` on output, the off-loop network
 `_fetch_sync` shape (with error handling and the SSRF caveat), `on_load` /
 `is_configured`, `help_lines`, and the `forget` hook. Start from it, not this
-snippet.
+snippet. For the full step-by-step walkthrough - from creating the file through
+testing and deploying - see `docs/writing-modules.md`.
 
 ### `BotModule` base class (`modules/base.py:196`)
 
