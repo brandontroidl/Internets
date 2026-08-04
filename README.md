@@ -362,7 +362,7 @@ All weather commands accept city names, zip codes, raw `lat,lon`, or `-n nick` t
 | `.expand <url>` / `.unshorten <url>` | Expand a shortened URL |
 | `.privacy` / `.forgetme` / `.optout` / `.optin` | See, erase, or opt out of stored data (PM-only) |
 | `.join` / `.part <#channel>` | Invite or remove the bot (founder or admin) |
-| `.users [#channel]` | Show known users in a channel |
+| `.users [#channel]` | Show known users in a channel (admin only) |
 
 `.forgetme` is right-to-erasure: it purges the invoking nick from every dataset (saved location + per-channel tracking). `.optout` sets a persistent opt-out flag (`store.set_opt_out`, the source of truth) so the bot stops tracking that nick; `.optin` reverses it.
 

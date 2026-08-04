@@ -32,9 +32,10 @@ Two dicts, both guarded by one lock `self._auth_lock` (`internets.py:238`):
   observed hostmask for that nick.
 
 The lock guards BOTH dicts together (the comment at line 225 says so) because `is_admin`
-reads both and must see a consistent pair. `_nick_hosts` is written ONLY on inbound
-PRIVMSG (`internets.py:1108`) and NICK (`1054-1055`); popped on QUIT (`1043`) and cleared
-on reconnect (`1254`). JOIN/CHGHOST/ACCOUNT mutate the persistent Store, not `_nick_hosts`.
+reads both and must see a consistent pair. `_nick_hosts` is written on inbound
+PRIVMSG (`internets.py:1108`), NICK (`1054-1055`), and CHGHOST; popped on QUIT (`1043`)
+and cleared on reconnect (`1254`). JOIN/ACCOUNT mutate the persistent Store, not
+`_nick_hosts`.
 
 ### is_admin re-checks the live binding, fail-closed
 
@@ -87,8 +88,10 @@ if ok:
 Why: the admin can quit during the `verify_password` await (which drops their
 `_nick_hosts` entry, see below). Persisting the `"unknown"` sentinel would grant a
 nick-only session that `is_admin` could not later tie to a hostmask - exactly the hole
-`is_admin`'s fail-closed branch defends. The two checks are belt-and-suspenders: bind
-only a real hostmask, and re-verify it on every use.
+`is_admin`'s fail-closed branch defends. A third guard snapshots the hostmask before the
+await and refuses if it changed during the hash (closing a TOCTOU where a nick-recycling
+attacker could inherit the session). The three checks are defense-in-depth: snapshot
+before await, bind only a real hostmask after, and re-verify on every use.
 
 ### Brute-force lockout
 
@@ -132,10 +135,10 @@ Authorization is therefore re-bound to the hostmask on every `is_admin` call; th
 - NICK (`internets.py:1079-1098`): the session is DROPPED, not migrated to the new nick.
   The comment at 1056-1059 records why: migrating let a malicious server or a
   nick-takeover launder an authed session onto an attacker-chosen nick.
-- CHGHOST / ACCOUNT (`internets.py:1017-1036`): update the persistent Store via
-  `user_rename`; they do NOT write `_nick_hosts`. A host change reaches `is_admin` only
-  after the user's next PRIVMSG (`1076`) or NICK (`1055`); CHGHOST/ACCOUNT alone do not
-  revoke.
+- CHGHOST (`internets.py:1038`): updates the persistent Store via `user_rename` AND
+  writes `_nick_hosts` under `_auth_lock`, so `is_admin` sees the new hostmask
+  immediately and revokes the session if it no longer matches the auth binding.
+  ACCOUNT (`internets.py:1040`): updates the Store only; does not write `_nick_hosts`.
 - Global drops: `_authed.clear()` on reconnect/disconnect paths
   (`internets.py:1281-1285`, `1327-1329`; `admin_cmds.py:519-521`).
 

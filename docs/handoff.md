@@ -192,12 +192,13 @@ The file is not in the config template (`config.ini.example`), and one admin
 can shadow-ban another admin (silently locking them out of every command
 including `.deauth` and `.shutdown`).
 
-### Module `forget()` coverage is incomplete
+### Module `forget()` coverage
 
-`.forgetme` calls `forget()` on every loaded module, but `steam.py` has no
-`forget()` override. Its persisted nick-to-SteamID mapping survives
-`.forgetme`. Saved locations are erased through `privacy.py` ->
-`bot.loc_del()`, not through a module `forget()` hook.
+`.forgetme` calls `forget()` on every loaded module. Five modules override
+it: `seen`, `tell`, `notes`, `remind`, and `steam`. Saved locations are
+erased through `privacy.py` -> `bot.loc_del()`, not through a module
+`forget()` hook. Any new module that persists per-nick data must override
+`forget()` or `.forgetme` will miss it.
 
 ### `sasl_password` secret is defined but never consumed
 
@@ -242,11 +243,7 @@ various callsites regardless of whether the HTTP exporter is running.
 5. **`idlerpg.py` default endpoint is plain HTTP.** The configured default
    `http://idlerpg.rizon.net/xml.php` leaks query params in cleartext.
 
-6. **`dictionary.py` interpolates the raw query word into the URL path**
-   without encoding. Host is fixed (low risk), but inconsistent with the
-   validation/`quote()` discipline in `pkginfo.py`, `translate.py`, etc.
-
-7. **Console `.debug WEATHER` vs IRC `.debug WEATHER` case handling.**
+6. **Console `.debug WEATHER` vs IRC `.debug WEATHER` case handling.**
    The console preserves case but subsystem names are lowercase, so
    uppercase at the console matches no real logger. IRC lowercases the
    entire arg. Use lowercase at the console.
@@ -261,14 +258,11 @@ Priority order, highest value first:
    to `fetch_json`, or factor out the streaming/cap pattern so there is
    genuinely one path.
 
-2. **Add `forget()` to `steam.py`.** Privacy gap: the nick-to-SteamID
-   mapping survives `.forgetme`.
-
-3. **Wire `sasl_password` or remove it.** Either implement the documented
+2. **Wire `sasl_password` or remove it.** Either implement the documented
    "differs from nickserv" behavior or remove the secret from
    `KNOWN_SECRETS` and the template.
 
-4. **Remove the dead `[weather] units` key** from the template and its
+3. **Remove the dead `[weather] units` key** from the template and its
    comment.
 
 ---

@@ -76,9 +76,8 @@ Every module subclasses `BotModule`. Surface:
   `notes` (`notes.py:86`), `remind` (`remind.py:173`). `.forgetme` calls it on
   every loaded module. Saved locations are NOT erased via a module `forget()`:
   `location.py` defines none; `privacy.forgetme` wipes them by calling the core
-  `bot.loc_del(nick)` directly (`privacy.py:132`). `steam.py` likewise defines
-  no `forget()`, so its persisted nick->SteamID mapping survives `.forgetme`
-  (privacy gap, see the steam.py row in Part 2).
+  `bot.loc_del(nick)` directly (`privacy.py:132`). Five command modules override
+  `forget()`: `seen`, `tell`, `notes`, `remind`, and `steam`.
 
 ### Discovery and autoload
 
@@ -310,7 +309,7 @@ Behaviour worth knowing before you touch this module (full detail in
 | `.imdb` | Movie/TV lookup via OMDb. **Hidden without** `omdb_key`. | key `omdb_key` | imdb.py |
 | `.lastfm` | Last.fm profile + now-playing. **Hidden without** `lastfm_key`. | key `lastfm_key` | lastfm.py |
 | `.yt`/`.youtube` | YouTube search with stats. **Hidden without** `youtube_key`. | key `youtube_key` | youtube.py |
-| `.steam` `.regsteam`/`.register_steam` | Steam status/games + nick→SteamID registration. **Hidden without** `steam_key`. Persists nick→SteamID in its own JSON file (`steam.py:166-171`, default `steamids.json`). No `forget()` override, so this per-nick mapping is NOT erased by `.forgetme` (privacy gap: either add a `forget()` override to steam.py or have privacy purge the file). | key `steam_key` | steam.py |
+| `.steam` `.regsteam`/`.register_steam` | Steam status/games + nick→SteamID registration. **Hidden without** `steam_key`. Persists nick→SteamID in its own JSON file (`steam.py:168`, default `steamids.json`, atomic write, 0600). Overrides `forget()` so `.forgetme` erases the mapping. | key `steam_key` | steam.py |
 | `.tw`/`.twitch` | Twitch stream/channel/game via Helix. **Hidden without** `twitch_client_id`+`twitch_client_secret`. | key (id+secret) | twitch.py |
 | `.irpg`/`.idlerpg` | IdleRPG player lookup over the configurable XML endpoint (default Rizon `idlerpg.rizon.net/xml.php`). | UA + endpoint | idlerpg.py |
 | `.qdb` | Quote-DB lookup. Default endpoint baked in (bash-org-archive.com); `[qdb] api_url` overrides. | UA + endpoint | qdb.py |
@@ -355,7 +354,7 @@ Behaviour worth knowing before you touch this module (full detail in
 
 | Command(s) | Does | Needs | File |
 |---|---|---|---|
-| `.join` `.part` `.users` | Founder/admin-gated join/part (async NickServ-account vs ChanServ-founder verification); `.users` lists tracked nicks in a channel. | local | channels.py |
+| `.join` `.part` `.users` | Founder/admin-gated join/part (async NickServ-account vs ChanServ-founder verification); `.users` (admin-only) lists tracked nicks with hostmasks in a channel. | local | channels.py |
 | `.health` `.uptime` | Operator introspection - bot health snapshot and uptime. | local | health.py |
 | `.forgetme` `.privacy` `.optout` `.optin` | Privacy controls (PM-only): erase all stored data (fans `forget()` across every loaded module), show what's stored, opt out/in of tracking. | local | privacy.py |
 
