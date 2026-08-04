@@ -69,6 +69,12 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "phys.org Chem": ("https://phys.org/rss-feed/chemistry-news/",        {"chem"}),
     # earth / environmental
     "Eos":           ("https://eos.org/feed",                              {"all", "earth"}),
+    "SciDaily Earth":("https://www.sciencedaily.com/rss/earth_climate.xml",{"earth"}),
+    "phys.org Earth":("https://phys.org/rss-feed/earth-news/",            {"earth"}),
+    "NASA Earth":    ("https://www.nasa.gov/earth/feed/",                  {"earth", "space"}),
+    "Carbon Brief":  ("https://www.carbonbrief.org/feed/",                 {"earth"}),
+    "USGS":          ("https://www.usgs.gov/news/all/feed",               {"earth"}),
+    "GeoSpace AGU":  ("https://blogs.agu.org/geospace/feed/",             {"earth", "space"}),
     # engineering
     "Interesting Eng":("https://interestingengineering.com/feed",          {"eng", "tech"}),
     "New Atlas":     ("https://newatlas.com/index.rss",                    {"eng", "tech"}),
