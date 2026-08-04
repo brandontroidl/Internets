@@ -57,8 +57,14 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     # biology / life sciences
     "arXiv q-bio":   ("https://rss.arxiv.org/rss/q-bio",                   {"bio"}),
     "STAT News":     ("https://www.statnews.com/feed/",                    {"bio"}),
+    "SciDaily Bio":  ("https://www.sciencedaily.com/rss/plants_animals.xml",{"bio"}),
+    "phys.org Bio":  ("https://phys.org/rss-feed/biology-news/",           {"bio"}),
+    "Nature Biotech":("https://www.nature.com/nbt.rss",                    {"bio"}),
+    "eLife":         ("https://elifesciences.org/rss/recent.xml",           {"bio"}),
     # math
     "arXiv math":    ("https://rss.arxiv.org/rss/math",                    {"math"}),
+    "Math3ma":       ("https://www.math3ma.com/blog/rss.xml",              {"math"}),
+    "SciDaily Math": ("https://www.sciencedaily.com/rss/computers_math/mathematics.xml", {"math"}),
     # space / astronomy
     "arXiv astro":   ("https://rss.arxiv.org/rss/astro-ph",               {"space"}),
     "Space.com":     ("https://www.space.com/feeds/all",                   {"space"}),
@@ -98,9 +104,15 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "LWN":           ("https://lwn.net/headlines/rss",                     {"linux", "tech"}),
     "Phoronix":      ("https://www.phoronix.com/rss.php",                  {"linux", "tech"}),
     "Linux Today":   ("https://www.linuxtoday.com/feed/",                  {"linux"}),
+    "OMG Ubuntu":    ("https://www.omgubuntu.co.uk/feed",                  {"linux"}),
+    "It's FOSS":     ("https://itsfoss.com/feed/",                         {"linux"}),
+    "Fedora Mag":    ("https://fedoramagazine.org/feed/",                  {"linux"}),
     # bsd
     "OpenBSD":       ("https://undeadly.org/cgi?action=rss",               {"bsd"}),
     "FreeBSD":       ("https://www.freebsd.org/news/feed.xml",             {"bsd"}),
+    "FreeBSD Found": ("https://freebsdfoundation.org/feed/",               {"bsd"}),
+    "NetBSD":        ("https://blog.netbsd.org/tnf/feed/entries/atom",     {"bsd"}),
+    "BSD Now":       ("https://feeds.fireside.fm/bsdnow/rss",              {"bsd"}),
     # security
     "TheHackerNews": ("https://feeds.feedburner.com/TheHackersNews",       {"security"}),
     "BleepingComp":  ("https://www.bleepingcomputer.com/feed/",            {"security"}),
