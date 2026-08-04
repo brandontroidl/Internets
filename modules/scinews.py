@@ -64,12 +64,14 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "Space.com":     ("https://www.space.com/feeds/all",                   {"space"}),
     "NASA":          ("https://www.nasa.gov/feed/",                        {"space"}),
     # chemistry
-    "C&EN":          ("https://cen.acs.org/rss/feed.html",                 {"chem"}),
-    "Chemistry World":("https://www.chemistryworld.com/rss/all.xml",       {"chem"}),
+    "Nature Chem":   ("https://www.nature.com/nchem.rss",                  {"chem"}),
+    "SciDaily Chem": ("https://www.sciencedaily.com/rss/matter_energy/chemistry.xml", {"chem"}),
+    "phys.org Chem": ("https://phys.org/rss-feed/chemistry-news/",        {"chem"}),
     # earth / environmental
     "Eos":           ("https://eos.org/feed",                              {"all", "earth"}),
     # engineering
-    "Eng. News":     ("https://www.enr.com/rss/all",                       {"eng"}),
+    "Interesting Eng":("https://interestingengineering.com/feed",          {"eng", "tech"}),
+    "New Atlas":     ("https://newatlas.com/index.rss",                    {"eng", "tech"}),
     "IEEE Eng":      ("https://spectrum.ieee.org/feeds/topic/energy.rss",  {"eng"}),
     "Hackaday":      ("https://hackaday.com/feed/",                        {"eng", "tech"}),
     # tech (CS, AI, general)
