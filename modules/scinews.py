@@ -33,8 +33,8 @@ _FEED_MAX_BYTES = 6 * 1024 * 1024   # arXiv per-archive RSS (cs/math) runs sever
 _ART_MAX_BYTES = 512 * 1024
 _LIST_TTL = 600.0       # per-channel "last list" lifetime (s)
 _CACHE_TTL = 120.0      # aggregate-fetch cache (s)
-_MAX_ITEMS = 6
-_PER_SOURCE = 2         # diversity: at most this many items from one feed
+_MAX_ITEMS = 10
+_PER_SOURCE = 3         # diversity: at most this many items from one feed
 _FETCH_CONCURRENCY = 8  # cap simultaneous feed fetches (protect the thread pool)
 
 # name -> (feed url, {topic tags})
