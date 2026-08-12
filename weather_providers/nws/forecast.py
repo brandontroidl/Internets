@@ -12,19 +12,25 @@ async def fetch(lat: float, lon: float, location: str, days: int = 4) -> Weather
         raise OutOfCoverage("NWS: no forecast URL")
     data = await get_json(fc_url, headers=_HEADERS)
     periods = data.get("properties", {}).get("periods", [])
-    # NWS returns periods for day/night. Pair them up.
     fc = []
-    seen_days = set()
-    for p in periods:
-        name = p.get("name", "")
+    i = 0
+    while i < len(periods) and len(fc) < days:
+        p = periods[i]
         if p.get("isDaytime") is False:
+            i += 1
             continue
-        if len(fc) >= days:
-            break
+        high = _f_to_c(p.get("temperature")) if p.get("temperatureUnit") == "F" else p.get("temperature")
+        low = None
+        if i + 1 < len(periods) and periods[i + 1].get("isDaytime") is False:
+            np = periods[i + 1]
+            low = _f_to_c(np.get("temperature")) if np.get("temperatureUnit") == "F" else np.get("temperature")
+            i += 2
+        else:
+            i += 1
         fc.append(ForecastDay(
-            day_name=name,
-            high_c=_f_to_c(p.get("temperature")) if p.get("temperatureUnit") == "F" else p.get("temperature"),
-            low_c=None,
+            day_name=p.get("name", ""),
+            high_c=high,
+            low_c=low,
             description=p.get("shortForecast", "N/A"),
         ))
     return WeatherResult(
@@ -34,4 +40,4 @@ async def fetch(lat: float, lon: float, location: str, days: int = 4) -> Weather
 
 def _f_to_c(f):
     if f is None: return None
-    return round((f - 32) * 5 / 9, 1)
+    return (f - 32) * 5 / 9

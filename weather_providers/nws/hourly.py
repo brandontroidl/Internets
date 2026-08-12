@@ -20,7 +20,7 @@ async def fetch(lat: float, lon: float, location: str, hours: int = 12) -> Hourl
         except Exception: tm = p.get("startTime", "")
         temp = p.get("temperature")
         if p.get("temperatureUnit") == "F" and temp is not None:
-            temp = round((temp - 32) * 5 / 9, 1)
+            temp = (temp - 32) * 5 / 9
         entries.append(HourlyEntry(
             time=tm, temp_c=temp,
             description=p.get("shortForecast", ""),
