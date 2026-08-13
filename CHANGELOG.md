@@ -24,6 +24,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **NWS forecast showed no overnight lows and misreported Fahrenheit temps.**
+  `.forecast` for US locations displayed "N/A" for every low temperature
+  because nighttime NWS periods were discarded instead of paired with their
+  daytime period. Separately, `_f_to_c()` rounded to 1 decimal before `cf()`
+  converted back, so 103F became 39.4C / 102.9F (the display layer now
+  handles rounding). Same early-rounding fix applied to `hourly.py`.
+
 - **`.pollen <us-location>` now reaches Pollen.com for most US locations.** The
   provider reverse-geocoded lat/lon to a ZIP at Nominatim `zoom=10` (city),
   which omits the `postcode` for most places - 3 of 4 sampled US cities had none
@@ -37,6 +44,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   location."
 
 ### Security
+
+- **aiohttp 3.14.1 -> 3.14.3, cryptography 49.0.0 -> 50.0.0.** Clears
+  PYSEC-2026-3545/3546/3547 (aiohttp) and PYSEC-2026-3552 (cryptography).
 
 - **A credential passed to `.raw` no longer lands in the logs in plaintext.**
   The inbound `<<` debug log redacted only the bot's own `.auth`; anything else
