@@ -299,6 +299,9 @@ All weather commands accept city names, zip codes, raw `lat,lon`, or `-n nick` t
 | `.rtfm <command>` | tldr-pages command reference (Unix/BSD/Linux) |
 | `.arxiv <id\|query>` | arXiv paper lookup |
 | `.element <name\|symbol\|Z>` | Periodic-table entry (offline) |
+| `.papers <orcid\|query> [-oa]` | Papers by ORCID iD or topic (OpenAlex) |
+| `.thesis <query> [-oa]` | Dissertations/theses by topic (OpenAlex) |
+| `.scholar <name\|topic>` | Find researchers + ORCID iDs |
 | `.t [src] <tgt> <text>` / `.translate` | Translate text |
 | `.sw` / `.g <query>` | Web search (DuckDuckGo) |
 | `.si` / `.gi <query>` | Image search (Brave API key required) |
@@ -499,15 +502,15 @@ with no third-party dependency, so it works on a bare checkout before
 `strip_ctrl` enumeration in `docs/security-model.md`) and the geocode/format
 unit checks.
 
-The pytest suite is 39 modules (`tests/test_*.py`) covering protocol parsing,
+The pytest suite is 40 modules (`tests/test_*.py`) covering protocol parsing,
 store CRUD/flush/pruning, calculator sandboxing and DoS guards, dice, weather
 provider registry and capability dispatch, provider health scoring, gap-fill
 merge semantics, NWS coverage handling, config parsing, output formatting, unit
 conversion, sender injection prevention and line limits, password hashing, rate
 limiting, the SSRF/netsafe guard, `fetch_json` size caps, secret store, and
 per-module behavior (ipintel, scinews, secinfo, devtools, mathx, physcalc,
-probe, dnsutils, pkginfo, reflookup, satpass, astro2, crypto-cache, stocks, and
-more).
+probe, dnsutils, pkginfo, reflookup, scholar, satpass, astro2, crypto-cache,
+stocks, and more).
 
 The coverage gate (`fail_under = 75` in `pyproject.toml`) is **core-only**:
 `modules/*` and `weather_providers/*` are omitted from the measured source, so

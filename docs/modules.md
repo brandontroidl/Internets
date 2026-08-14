@@ -288,6 +288,7 @@ Behaviour worth knowing before you touch this module (full detail in
 | `.t`/`.translate` | Translate via the undocumented Google Translate endpoint (no key, no SLA). | network | translate.py |
 | `.sw`/`.g` `.si`/`.gi` | Web search (DuckDuckGo, keyless; Brave upgrade if `brave_key` set) and image search (`.si`/`.gi`, **requires** `brave_key`, else returns an error string). | opt-key `brave_key` | search.py |
 | `.sci` | STEM + infosec news/journal/paper aggregator over curated keyless RSS/Atom feeds, with `.sci read <N>` / `.sci sources`. Article reader fetches through the SSRF guard. | UA + SSRF guard | scinews.py |
+| `.papers` `.thesis` `.scholar` | Keyless scholarly search via OpenAlex (works by ORCID iD or topic; dissertations by topic; `-oa` flag restricts to open access, links prefer the OA PDF) and ORCID expanded search (researchers + their iDs). | UA | scholar.py |
 | `.gh` | GitHub repo info via the public unauthenticated REST API: stars / forks / open issues / language / license / last push. Keyless (60 req/hr); reads its UA via `cred`. `COMMANDS={'gh':'cmd_gh'}` (`ghinfo.py:70`). | UA | ghinfo.py |
 | `.pypi` `.npm` `.crates` | Keyless package-registry lookups: PyPI (version/summary/license/date), npm (version/description/license/last publish), crates.io (max version/downloads/license/docs). Reads UA via `cred`; `is_configured` always True (`pkginfo.py:211`). | UA | pkginfo.py |
 
