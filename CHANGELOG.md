@@ -6,6 +6,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`scholar` module: keyless scholarly search (`.papers` / `.thesis` /
+  `.scholar`).** `.papers` finds works on OpenAlex by author ORCID iD (bare or
+  orcid.org URL, newest first) or by free-text topic; `.thesis` searches
+  OpenAlex's ~11M dissertation-typed works by topic; `.scholar` finds
+  researchers via ORCID expanded search and prints their iDs for feeding back
+  into `.papers`. A positional `-oa` flag restricts `.papers`/`.thesis` to
+  open-access works, and result links prefer the open-access PDF over the
+  landing page over the DOI. Both APIs are keyless; all calls go through the
+  size-capped `fetch_json` with OpenAlex `select=` field-trimming so five
+  full work records cannot approach the byte cap.
+
 ### Changed
 
 - **`.tz` now accepts common timezone abbreviations, not just IANA names.**
@@ -23,6 +36,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still shows its date on both sides.
 
 ### Fixed
+
+- **pyproject extras floors lagged the requirements.txt security policy.**
+  The aiohttp 3.14.3 / cryptography 50.0.0 bumps landed in requirements.txt
+  only, so `pip install internets-irc[async]` / `[weatherkit]` / `[all]` could
+  still resolve versions the project's own security floors reject. The extras
+  now match (aiohttp>=3.14.3, cryptography>=50.0.0), and the run_tests.py
+  DEPS floor-parity gate is green again.
 
 - **NWS forecast showed no overnight lows and misreported Fahrenheit temps.**
   `.forecast` for US locations displayed "N/A" for every low temperature
