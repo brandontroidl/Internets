@@ -220,9 +220,9 @@ class ScholarModule(BotModule):
     def help_lines(self, prefix: str) -> list[str]:
         return [
             help_row(prefix, "papers <orcid|query> [-oa]",
-                     "Papers by ORCID iD or topic (OpenAlex)"),
+                     "Papers by ORCID iD or topic (OpenAlex); -oa = open-access only"),
             help_row(prefix, "thesis <query> [-oa]",
-                     "Dissertations/theses by topic (OpenAlex)"),
+                     "Dissertations/theses by topic (OpenAlex); -oa = open-access only"),
             help_row(prefix, "scholar <name|topic>",
                      "Find researchers + ORCID iDs"),
         ]

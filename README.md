@@ -299,8 +299,8 @@ All weather commands accept city names, zip codes, raw `lat,lon`, or `-n nick` t
 | `.rtfm <command>` | tldr-pages command reference (Unix/BSD/Linux) |
 | `.arxiv <id\|query>` | arXiv paper lookup |
 | `.element <name\|symbol\|Z>` | Periodic-table entry (offline) |
-| `.papers <orcid\|query> [-oa]` | Papers by ORCID iD or topic (OpenAlex) |
-| `.thesis <query> [-oa]` | Dissertations/theses by topic (OpenAlex) |
+| `.papers <orcid\|query> [-oa]` | Papers by ORCID iD or topic (OpenAlex); `-oa` = open-access only |
+| `.thesis <query> [-oa]` | Dissertations/theses by topic (OpenAlex); `-oa` = open-access only |
 | `.scholar <name\|topic>` | Find researchers + ORCID iDs |
 | `.t [src] <tgt> <text>` / `.translate` | Translate text |
 | `.sw` / `.g <query>` | Web search (DuckDuckGo) |
