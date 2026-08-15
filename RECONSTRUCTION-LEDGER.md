@@ -203,3 +203,26 @@ negative-age branch and Meeus-not-Fliegel docstring; scinews topic list drift
 fetch media enclosures; all-feeds-failed cached 120s; iss unguarded float() on
 upstream coords escapes to dispatcher catch-all; iss plain-HTTP endpoints.
 Test gaps: no tests at all for iss/apod/spacex/hn/xkcd/reddit.
+
+Implementation defect (VERIFIED by orchestrator): mathx cmd_isprime runs
+_isprime synchronously on the event loop (mathx.py:503; cmd_bignum uses
+to_thread) and composites surviving 2^20 trial division fall into unbounded
+_pollard_rho - a pasted 100-digit semiprime hangs the entire bot. Any-user DoS.
+
+Agent-verified (batch D, by direct call): physcalc _rc_from_bands computes
+5-band resistor codes wrongly (tolerance band consumed as multiplier;
+first tolerance-pop condition provably dead) AND tests/test_physcalc.py
+test_five_band asserts the defective value - change-detector locking a bug in.
+calc reinterprets 1e10 as 1*e*10 (Euler); physcalc year divisor mixes sidereal
+and Julian years (.ly self-inconsistent); encode .unicode ! unreachable;
+mathx _bignum int_max_str_digits set/restore races process-global.
+
+Agent-verified (batch H, social/util): privacy cmd_forgetme clears opt-out
+before user_purge so an untracked user gets a false "tracking in 1 channel(s)
+(erased now)" (the "*" sentinel row is counted); privacy docstring claims
+PM-only but optout/optin never require PM; NO privacy command is rate-limited.
+linktitle logs every announced/skipped URL with channel at INFO - user browsing
+activity in the bot log (pairs with regloc PII log finding). notes mutates dict
+unlocked while to_thread save iterates it; channels founder attribution can
+misattribute overlapping verifications in the 15s window.
+Test gaps: ALL TEN social/util modules have no test files.

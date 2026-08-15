@@ -111,8 +111,8 @@ Nothing retries; there is nothing to retry.
   Two regexes insert `*` between a digit and a letter in either order (`2pi` ->
   `2*pi`). Function names that themselves contain digits (`log2`, `log10`,
   `atan2`) would be mangled by those regexes, so `_calc()` first swaps each such
-  name (longest first) for a sentinel tag built from Unicode noncharacters
-  (`﷐{i}﷐`), applies the regexes, then swaps the names back. The
+  name (longest first) for a sentinel tag delimited by the Unicode
+  noncharacter U+FDD0, applies the regexes, then swaps the names back. The
   earlier `\x01` strip exists because CTCP bytes could otherwise collide with
   this placeholder logic (per the in-code comment).
 - `_safe_eval()` (calc.py:60-99): the walker described above; depth incremented
