@@ -375,3 +375,42 @@ truthiness-guard bugs dropping legitimate 0 values (nws pressure, wwo
 visibility, weatherbit high/low, tomorrowio weather code); quota docstring
 conflicts (weatherstack 250 vs 1000/mo, pirateweather 20k vs 10k, weatherbit
 500/day vs 50).
+
+LEDGER SELF-CORRECTION (agent caught orchestrator error): earlier entry said
+"two code comments claim fsync". Verified: exactly ONE (admin_cmds.py:270).
+The second stale claim is different - audit_log.py module docstring says
+"append-binary mode" while record() opens text mode "a". Both real, distinct.
+
+Implementation defect (VERIFIED by orchestrator): modules/health.py registers
+"uptime", which is also in AdminCommandsMixin._CORE. _dispatch() resolves _CORE
+first, so health's public .uptime is permanently unreachable while its
+help_lines() still advertises it. Only shadowed name across the whole command
+set (checked programmatically against every module's COMMANDS).
+
+Implementation defect (VERIFIED): internets.py _save_shadow_bans passes
+_shadow_bans/_shadow_ban_reasons to json.dump in a to_thread worker with NO
+lock, while cmd_shadow_ban/cmd_shadow_unban mutate them on the loop. Same
+family as notes.py/steam.py. Repo-wide: os.fsync appears NOWHERE (verified) -
+no writer fsyncs, including all six module JSON stores.
+
+Agent-reported (state/logging/metrics): module stores (seen/tells/notes/
+reminders/steamids/shadow_bans) have no checksum envelope and no quarantine -
+corrupt file is loaded as empty then overwritten; only store.py's three
+datasets are recoverable. config.ini.example omits [tell]/[notes]/[remind]
+file keys and [bot] shadow_bans_file though code reads them. config.ini is
+fail-closed at 0600 while internets.log - which holds the location/URL privacy
+leaks - gets umask default with no check. .forgetme cannot reach .bak,
+.corrupt.*, rotated audit segments, or rotated logs. cmd_rehash's `if lvl:`
+guard silently skips the entire logging reset AND the reply on an invalid
+level (or NOTSET==0). audit_log docstring names the key sidecar audit.key;
+code derives <path>.key i.e. audit.log.key. commands_total counts dispatch
+attempts, not completions. linktitle logs URL+channel but NOT nick (ledger
+wording refined: per-channel, not per-user).
+
+Agent-reported (irc-protocol/command-reference): inbound PING matched with
+startswith("PING") so a prefixed PING would go unanswered (asymmetric with
+PONG handling); _CHAN_RE hard-codes #&+! instead of reading ISUPPORT
+CHANTYPES (only CHANMODES and PREFIX are consumed from 005); channels.cmd_users
+is admin-gated for hostmask PII but its help entry advertises it as public;
+config.py CLI epilog implies --debug takes multiple subsystems, apply_debug
+takes exactly one.
