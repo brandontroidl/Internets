@@ -195,3 +195,11 @@ in dnsutils/netcalc/secinfo replies - conflicts with owner no-dash preference;
 weather_user_agent secret doubles as bot-wide HTTP UA across five modules (naming
 drift). Test gaps: secinfo .pwn PM-only refusal unpinned (the guard against password
 amplification into a channel), HIBP/Tor size-cap branches, no test_ipinfo/netcalc.
+
+Agent-reported (batch F, science/space; moon math spot-checked live): reddit
+rate-gate after replies (same ordering class as batch E group); astro2 dead
+negative-age branch and Meeus-not-Fliegel docstring; scinews topic list drift
+(no cs/astro tags, six others undocumented) and last-link-wins Atom parsing can
+fetch media enclosures; all-feeds-failed cached 120s; iss unguarded float() on
+upstream coords escapes to dispatcher catch-all; iss plain-HTTP endpoints.
+Test gaps: no tests at all for iss/apod/spacex/hn/xkcd/reddit.
