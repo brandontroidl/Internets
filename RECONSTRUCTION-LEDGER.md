@@ -176,3 +176,13 @@ Nominatim throttle (per-user gates only); location.cmd_regloc logs nick-to-locat
 pairs into the bot log where .forgetme cannot purge them (PRIVACY concern - surface);
 regloc/myloc skip rate_limited() before geocoding. Test gaps: -n opt-out refusal,
 pollen flag aliases, geocode cache TTL/LRU/negative round-trip, location handlers.
+
+Agent-reported (batch E, reference/lookup): arXiv fetched over plain http (only
+cleartext URL in module); rate-limit gate AFTER usage reply in dictionary/
+urbandictionary/translate/search (empty-arg spam bypasses limiter; other modules
+gate first - inconsistent ordering); translate rides unofficial gtx endpoint;
+search keyless path regex-scrapes unversioned DDG HTML; scholar split_flags
+silently eats any -word token; pkginfo eager requests import contra lazy-import
+pattern; ghinfo lacks the traversal guard pkginfo has and 403 rate-exhaustion is
+unmessaged. Test gaps: dictionary/urbandictionary/translate/search fully
+untested; scholar handler layer; reflookup rtfm parser.
