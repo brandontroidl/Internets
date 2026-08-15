@@ -273,3 +273,23 @@ hand-enumerates py_compile files (same shape as the v3/v4 broken-wheel
 py-modules omission); 44 of ~90 modules without behavioral tests; no
 end-to-end dispatch test; console.py untested; both entry points excluded
 from the coverage gate.
+
+RECON GAP (orchestrator's own error, corrected): initial recon globbed
+weather_providers/*.py and counted 5 files. The 32 provider implementations
+live in sub-packages weather_providers/<id>/ - 135 files, 4427 lines, NOT
+covered by the first assignment. Assigned separately (batches WP1-WP4).
+
+Agent-reported (weather_providers core): record_call docstring contradicts
+Dispatcher.dispatch (which calls it every attempt); record_call counts attempts
+not HTTP requests so multi-hop providers under-count quota; _f_pollendotcom
+reads [weather_providers].weather_user_agent while modules/weather.py reads
+[weather].user_agent (ini-only installs send empty UA); weatherapi/weatherstack
+monthly caps stored in per-day limit field; derive_missing humidity==0 hits
+log(0) ValueError and is mis-scored as provider failure; DEFAULT_RELIABILITY
+ranks meteomatics for nowcast (not implemented) and omits stormglass from
+current (silent rank 99 - the exact shape the metno test exists to catch);
+test_every_registered_capability_is_ranked uses an empty ConfigParser so keyed
+providers never register and that gap escapes; _session_cache keyed by id(loop)
+never evicted with one module-level lock shared across loops; two independent
+stream-and-cap implementations with different defaults (1MiB vs 256KiB).
+Provider count 32 verified three ways (dirs, _reg() calls, pinned test).
