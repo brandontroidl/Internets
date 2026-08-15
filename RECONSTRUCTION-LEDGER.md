@@ -327,3 +327,51 @@ parameter while claiming local times, and an empty results object counts as a
 dispatch success. Naming corrections: capability methods are
 get_space_weather/get_astronomy; nasapower implements get_historical (met means
 only, no irradiance); gdacs implements generic get_alerts.
+
+=====================================================================
+ARCHITECTURAL DEFECT - CROSS-CUTTING (VERIFIED by orchestrator)
+Dispatcher fallback is silently disabled for 11 of 13 capabilities.
+=====================================================================
+_dispatch.py:417 decides "provider returned nothing, try the next one" with:
+    if result is None or (hasattr(result, "is_empty") and result.is_empty())
+Only WeatherResult and HourlyResult implement is_empty(). Enumerated live:
+
+  has is_empty : WeatherResult, HourlyResult
+  LACKS it     : AlertsResult, AirQualityResult, AstronomyResult,
+                 HistoricalResult, MarineResult, NowcastResult, UVResult,
+                 PollenResult, WildfireResult, SpaceWeatherResult, TideResult
+
+For those 11 capabilities a hollow result counts as SUCCESS, ends the chain,
+and no lower-ranked provider is ever tried. Each provider looks correct in
+isolation; the defect lives in the interaction, which is why per-file review
+kept reporting it as separate bugs. Independently-reported symptoms that are
+all THIS one cause:
+  - tomorrowio alerts returns empty AlertsResult on 401/403 (free tier) and
+    thereby suppresses nws/gdacs/eccc alerts  <- SAFETY RELEVANT: severe
+    weather warnings silently not shown
+  - nws marine returns all-None MarineResult, suppressing openmeteo waves
+  - openweathermap air_quality returns hollow result on empty list
+  - openmeteo astronomy has no moon fields, shadowing weatherapi (rank 3)
+  - nifc empty outside US coverage stops fallback to firms
+  - sunrisesunset status OK with empty results counts as success
+Note the codebase already KNOWS this shape: tests/test_provider_fixes.py pins
+a tomorrowio air_quality fix that raises instead of returning empty. The fix
+was applied per-provider instead of at the contract.
+Fix shape (OWNER DECISION, not applied): give every *Result an is_empty(), or
+invert the dispatcher guard to require an explicit non-empty signal. Either is
+a behavior change to a live weather path - not a documentation edit.
+=====================================================================
+
+Agent-reported (WP1/WP2 forecast providers): metno hour labels UTC while other
+providers are location-local; weatherkit sends its Apple bearer JWT to a
+detailsUrl taken from the response body with no host allowlist; weatherkit
+signs ES256 + reads the .p8 key synchronously on the event loop; weatherstack
+invalid-key envelope returns status=None so mark_auth_failure never fires and a
+dead key costs a request per dispatch; meteomatics/stormglass literal "Current"
+description permanently blocks fill_gaps; accuweather _LOC_CACHE has no TTL so
+a wrong key is permanent; worldweatheronline raises on no-data (trips breaker)
+where stormglass was already fixed away from that pattern; multiple
+truthiness-guard bugs dropping legitimate 0 values (nws pressure, wwo
+visibility, weatherbit high/low, tomorrowio weather code); quota docstring
+conflicts (weatherstack 250 vs 1000/mo, pirateweather 20k vs 10k, weatherbit
+500/day vs 50).

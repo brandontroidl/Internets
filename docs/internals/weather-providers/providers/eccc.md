@@ -21,7 +21,7 @@ alert collection is all this package consumes.
 | Registered id | `eccc` (`_reg("eccc", _f_eccc)`) |
 | Class | `ECCCProvider()` (no constructor arguments) |
 | `name` / `requires_key` | `"ECCC"` / `False` |
-| Quota limit | none: absent from `_DEFAULT_QUOTA_LIMITS`, so `quota_status()` reports `limit=None` |
+| Quota limit | none: absent from `_DEFAULT_QUOTA_LIMITS`, so the limit is `None` |
 
 Keyless: `_f_eccc()` imports and instantiates unconditionally, so the provider
 is always registered. It still consumes one `record_call()` increment per
@@ -60,6 +60,9 @@ Iterates `features[]`, reading each feature's `properties`:
 | `start` | `validity_datetime`, then `publication_datetime` |
 | `end` | `event_end_datetime`, then `expiration_datetime` |
 | `description` | `alert_text_en`, truncated to 300 characters |
+
+`_SEVERITY` maps ECCC's `alert_type` to the CAP buckets: warning to `severe`,
+watch and advisory to `moderate`, statement to `minor`.
 
 Features whose `status_en` is ended, cancelled or canceled are skipped. Only
 the English fields are read; the collection's French equivalents are ignored,

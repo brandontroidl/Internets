@@ -127,6 +127,17 @@ None.
   `watch` is ever considered; the classification is a best-effort heuristic
   and is documented as such, but its result is presented as a severity equal
   in weight to NWS's CAP severity.
+- questionable | `openweathermap/forecast.py - fetch()`,
+  `openweathermap/hourly.py - fetch()` | Both key off `dt_txt` - the daily
+  grouping uses `dt_txt[:10]` as the day bucket and the hourly label is
+  `strftime("%I %p")` on the parsed naive string - while the response's
+  `city.timezone` offset is never read. The implementation implies these
+  timestamps are treated as location-local; if `dt_txt` is UTC, day
+  boundaries and hour labels are shifted for locations far from UTC.
+  [unverified - the upstream semantics of `dt_txt` were not checked against
+  OpenWeatherMap's docs in this session] Contrast `openmeteo/hourly.py`,
+  which aligns on `utc_offset_seconds`, and `weatherapi/hourly.py`, which
+  filters on `time_epoch`; both have regression tests for exactly this.
 - questionable | `openweathermap/air_quality.py - fetch()` | `AQI_MAP` labels
   a 1-5 European-style index with US EPA AQI numbers and categories, which
   makes an OWM answer look directly comparable to AirNow's real EPA AQI.
