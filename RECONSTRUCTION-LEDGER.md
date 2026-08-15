@@ -293,3 +293,14 @@ providers never register and that gap escapes; _session_cache keyed by id(loop)
 never evicted with one module-level lock shared across loops; two independent
 stream-and-cap implementations with different defaults (1MiB vs 256KiB).
 Provider count 32 verified three ways (dirs, _reg() calls, pinned test).
+
+Count drift (orchestrator-verified, to fix in Layer 1 rewrite):
+- README.md:42 says "72 command modules"; actual = 70 modules registering
+  commands (75 .py files in modules/, minus __init__, base, geocode, units,
+  _netsafe which register none). Verified by instantiating BotModule subclasses.
+- README.md:505 "pytest suite is 40 modules" is CORRECT (40 tests/test_*.py).
+- docs/modules.md:221 "~20 of 32 providers are key-gated" - verify against the
+  provider factories during the modules.md rewrite.
+Ground truth for this reconstruction: 70 command modules, 165 primary module
+commands, 4 core public + 23 core admin commands, 32 weather providers,
+40 pytest files (1738 passed / 3 skipped) + run_tests.py (213 passed).
