@@ -253,3 +253,23 @@ into "no match"; crypto/fx rate-gate BEFORE usage reply (inverse of the batch
 E/F ordering drift - both directions exist); lastfm discards profile on
 recenttracks failure. Test gaps: steam registry, twitch token lifecycle,
 stocks failover order and its key-leaking aggregation.
+
+OPERATIONAL DEFECT (VERIFIED by orchestrator via gh + lock header): CI Tests
+workflow RED on main since 2026-08-13 (runs 31669351519, 31848012132,
+31848249036). requirements.lock header says "pip-compile with Python 3.14" -
+violates scripts/regen-lockfile.sh resolve-on-3.10 contract; marker-gated
+typing_extensions>=4.4 absent, so every Python <3.13 CI leg fails the
+--require-hashes install. Fix: regenerate lock on 3.10 per the script (owner
+decision - dependency surface, not doc work). Related pre-existing memory item:
+bcrypt 4.3.0-installed vs 5.0.0-pinned env drift.
+Secondary: tests.yml Windows legs swallow the install failure (three pip
+commands in one pwsh run: block, no fail-fast) and fail later confusingly.
+
+Agent-reported (tests/CI batch): pyproject asyncio_mode=auto + pytest-asyncio
+dev extra contradicts the suite's manual-loop convention (async tests would
+no-op locally, run in CI); FakeBot re-declared in 7 places with no fidelity
+check; pip-audit covers lock only (extras floors unchecked); lint job
+hand-enumerates py_compile files (same shape as the v3/v4 broken-wheel
+py-modules omission); 44 of ~90 modules without behavioral tests; no
+end-to-end dispatch test; console.py untested; both entry points excluded
+from the coverage gate.
