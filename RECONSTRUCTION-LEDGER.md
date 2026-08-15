@@ -23,10 +23,10 @@ flip statuses in place. Findings accumulate at the bottom and must not disappear
 
 Root files (13):
 - [ ] internets.py
-- [ ] admin_cmds.py
-- [ ] sender.py
-- [ ] protocol.py
-- [ ] console.py
+- [x] admin_cmds.py
+- [x] sender.py
+- [x] protocol.py
+- [x] console.py
 - [ ] config.py
 - [ ] botlog.py
 - [x] store.py
@@ -83,3 +83,21 @@ Questionable (agent-reported, spot-plausible, not independently re-verified yet)
 Test gap:
 - tests/test_store.py: no coverage for corruption quarantine, v1->v2 upgrade, opt-out
   API, user_purge, user_rename collision, RateLimiter.channel_check/_cleanup.
+
+Fixed during reconstruction (orchestrator, verified):
+- admin_cmds.py cmd_mode docstring (added 2026-08-15 same session) claimed
+  ".mode <target> <modes>"; handler only sets modes on the bot itself. Corrected.
+
+Agent-reported (admin_cmds batch): cmd_auth comment overstates fsync (record() does not
+fsync); shadow-ban save iterates set in worker thread without lock (silent skip on
+concurrent mutation); cmd_rehash bad-hash abort leaves partial rehash unaudited;
+cmd_audit reads up-to-5MB log synchronously on the loop; _clean_actor truncation and
+cmd_help fallback branches untested.
+
+Agent-reported (sender/protocol/console batch): sender pri-0 eviction can drop pri-0
+(docstring overclaims), relies on private PriorityQueue._queue (no canary test),
+closing-writer discards spend tokens with no drop accounting, 50ms token poll;
+protocol parse_isupport_prefix() return value discarded by its only caller while
+parse_names_entry hard-codes prefix sets (non-standard PREFIX desyncs chanop tracking);
+console: no test file at all, _print_status reaches into private fields, console
+events not routable by the per-subsystem debug facility it controls.

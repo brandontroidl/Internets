@@ -579,7 +579,7 @@ class AdminCommandsMixin:
     # ── IRC oper / modes ─────────────────────────────────────────────
 
     async def cmd_mode(self, nick: str, reply_to: str, arg: str | None) -> None:
-        """Set a user or channel mode.  Usage: .mode <target> <modes>.  Admin only."""
+        """Set modes on the bot itself.  Usage: .mode <+/-modes>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}mode <+/-modes>"); return
