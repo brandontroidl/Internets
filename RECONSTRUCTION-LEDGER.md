@@ -445,3 +445,25 @@ unclean restart silently un-bans everyone.
 CONFLICT resolved (source wins): internals/internets.md claimed the ACCOUNT
 branch writes an audit record; no audit_log.record() call exists in
 internets.py at all (only admin_cmds.py writes audit records). To fix in P3.
+
+Agent-reported (WP3 air quality/pollen/UV; all 32 providers now documented):
+purpleair applies EPA/Barkjohn correction coefficients (defined on pm2.5_cf_1)
+to the ATM variant the API returns for the generic pm2.5 field - wrong variant,
+worst during smoke episodes (agent cited Barkjohn 2021 + PurpleAir API docs);
+openaq never reads parameter.units so gas readings in ppm/ppb are labelled
+ug/m3 by weather.py; pollendotcom makes an uncached direct Nominatim reverse
+call per invocation, bypassing the geocode cache that exists for Nominatim's
+policy; airnow quota 500 is per-HOUR stored in a per-day counter (~24x
+understated); waqi/iqair signal bad key inside a 200 body so the dispatcher's
+401/403 auth fast-trip never fires and a dead credential burns a request per
+dispatch forever; airnow/waqi raise on no-coverage (health failure, breaker
+trips) while pollen providers return None for the same condition; waqi
+interpolates lat/lon into the URL path rather than params; currentuvindex
+"today" is the UTC day so peak-UV is wrong for offset users.
+TWO MORE INSTANCES of the is_empty() defect class: openaq (station without
+PM2.5 -> aqi=None accepted as success, stops chain, prints "AQI N/A" while
+openmeteo/iqair behind it are never tried) and pollendotcom (non-coercible
+index -> chain stops, prints "No pollen data" with openmeteo untried).
+REFINEMENT of my earlier UA finding: the two ini sections do diverge, but
+pollen.fetch() fails OPEN with a hardcoded non-identifying UA while
+weather.py fails CLOSED - not "sends an empty UA" as first recorded.

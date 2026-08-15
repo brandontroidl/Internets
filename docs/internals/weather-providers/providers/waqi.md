@@ -86,8 +86,9 @@ kwargs (asserted in `tests/test_new_weather_capabilities.py`).
 
 Async; returns `AirQualityResult`, raises `HTTPError`. Formats the geo URL,
 GETs it with `token`, unwraps the `{"status": ..., "data": ...}` envelope,
-coerces `data.aqi` to `int`, reads `data.city.name` for provenance, and returns
-`AirQualityResult(source=..., location=..., aqi=..., category=aqi_category(aqi))`.
+coerces `data.aqi` to `int`, reads `data.city.name` for provenance, and returns an `AirQualityResult`
+carrying that source label, the passed `location`, the parsed `aqi`, and
+`category=aqi_category(aqi)`.
 `tests/test_new_weather_capabilities.py - TestWAQI.test_ok` pins the happy path
 (AQI 42 to category "Good", `"WAQI"` present in the source label).
 

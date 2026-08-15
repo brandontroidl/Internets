@@ -16,7 +16,7 @@ selection, retry (see [../dispatch.md](../dispatch.md)), and HTTP mechanics (see
 This is a **single-capability specialist**. It implements `get_air_quality`
 only - no `get_weather`, `get_forecast`, `get_hourly`, or anything else. The
 dispatcher discovers that by `hasattr` over `CAPABILITY_METHODS`, and
-`tests/test_airnow_purpleair.py - TestCapabilityDiscovery.test_airnow_exposes_only_air_quality`
+`tests/test_airnow_purpleair.py` - `TestCapabilityDiscovery.test_airnow_exposes_only_air_quality`
 asserts the discovered set is exactly `{"air_quality"}`.
 
 ## Dependencies and dependents
@@ -66,7 +66,7 @@ Everything raises `HTTPError`; nothing returns `None`. Three raise sites in
 Raising (rather than returning `None`) is deliberate: the module comment says it
 mirrors the US-only NWS behavior so the dispatcher falls through to a global
 provider instead of printing "AQI N/A".
-`tests/test_airnow_purpleair.py - TestAirNowFetch.test_empty_list_raises_for_fallback`
+`tests/test_airnow_purpleair.py` - `TestAirNowFetch.test_empty_list_raises_for_fallback`
 pins the empty-list case.
 
 ## Security
@@ -85,7 +85,7 @@ bot's geocoder, not raw user text.
 ### `AirNowProvider` (`airnow/__init__.py`)
 
 Thin adapter. `name = "AirNow"`, `requires_key = True` (asserted by
-`tests/test_airnow_purpleair.py - TestCapabilityDiscovery.test_both_require_a_key`).
+`tests/test_airnow_purpleair.py` - `TestCapabilityDiscovery.test_both_require_a_key`).
 Constructor takes the API key and stores it as `_key`. The only method is
 `get_air_quality(lat, lon, location, **kw)`, which delegates to
 `air_quality.fetch()`. The `**kw` is required - the dispatcher forwards caller
@@ -113,7 +113,7 @@ upstream values are already sub-indices, `pm25`/`pm10`/`o3`/`no2`/`so2`/`co` on
 the result stay `None` - the dominant pollutant is instead surfaced in the
 source label, e.g. `AirNow (PM2.5)`. The category prefers the upstream
 `Category.Name` and falls back to `base.aqi_category()` when absent
-(`tests/test_airnow_purpleair.py - TestAirNowFetch.test_falls_back_to_computed_category`).
+(`tests/test_airnow_purpleair.py` - `TestAirNowFetch.test_falls_back_to_computed_category`).
 
 ## Coverage and quota
 

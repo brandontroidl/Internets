@@ -85,8 +85,8 @@ kwargs (asserted in `tests/test_new_weather_capabilities.py`).
 Async; returns `AirQualityResult`, raises `HTTPError`. GETs `_BASE` with
 `lat`, `lon`, `key`; checks `status == "success"`; walks
 `data -> current -> pollution -> aqius` with `or {}` at each level; coerces to
-`int`; returns
-`AirQualityResult(source="IQAir", location=location, aqi=..., category=aqi_category(aqi))`.
+`int`; returns an `AirQualityResult` with `source="IQAir"`, the passed
+`location`, the parsed `aqi`, and `category=aqi_category(aqi)`.
 
 ## AQI scale semantics
 

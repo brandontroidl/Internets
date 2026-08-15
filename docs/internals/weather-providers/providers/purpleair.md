@@ -18,7 +18,7 @@ formatting, or provider ordering (see [../dispatch.md](../dispatch.md),
 [../base.md](../base.md)).
 
 Single-capability specialist: implements `get_air_quality` **only**.
-`tests/test_airnow_purpleair.py - TestCapabilityDiscovery.test_purpleair_exposes_only_air_quality`
+`tests/test_airnow_purpleair.py` - `TestCapabilityDiscovery.test_purpleair_exposes_only_air_quality`
 asserts the discovered set is exactly `{"air_quality"}`.
 
 ## Dependencies and dependents
@@ -58,7 +58,7 @@ over a response that is normally a few dozen rows and is bounded by `_http.py`'s
 Two `HTTPError` raise sites, both `status=None`, `provider_hint="purpleair"`:
 
 - `fields` or `data` empty - "no nearby sensor"
-  (`tests/test_airnow_purpleair.py - TestPurpleAirFetch.test_no_sensors_raises_for_fallback`)
+  (`tests/test_airnow_purpleair.py` - `TestPurpleAirFetch.test_no_sensors_raises_for_fallback`)
 - every row lacks latitude, longitude, or `pm2.5` - "no nearby sensor with
   PM2.5"
 
@@ -85,7 +85,7 @@ code execution.
 ### `PurpleAirProvider` (`purpleair/__init__.py`)
 
 `name = "PurpleAir"`, `requires_key = True` (asserted by
-`tests/test_airnow_purpleair.py - TestCapabilityDiscovery.test_both_require_a_key`).
+`tests/test_airnow_purpleair.py` - `TestCapabilityDiscovery.test_both_require_a_key`).
 Constructor stores the READ key as `_key`. Sole method
 `get_air_quality(lat, lon, location, **kw)` delegates to `air_quality.fetch()`.
 
@@ -107,7 +107,7 @@ missing column rather than an `IndexError`.
 
 Selection is a linear scan keeping the minimum `haversine_km` among rows that
 carry all three of latitude, longitude, and PM2.5.
-`tests/test_airnow_purpleair.py - TestPurpleAirFetch.test_picks_nearest_sensor_and_corrects`
+`tests/test_airnow_purpleair.py` - `TestPurpleAirFetch.test_picks_nearest_sensor_and_corrects`
 pins it: given a 1 km sensor at 8.0 ug/m3 / 50 %RH and a 15 km sensor at
 30.0 ug/m3, the result is the near sensor's corrected 5.6 ug/m3 and AQI 31.
 
@@ -123,7 +123,7 @@ piecewise-linear interpolation over `_PM25_BREAKPOINTS`. Returns `None` for
 Pure. Applies `PM2.5 = 0.524 * PA - 0.0862 * RH + 5.75`, clamped at 0. Returns
 the raw value unchanged when humidity is missing and `None` when the reading is
 `None`. All four behaviors are pinned by
-`tests/test_airnow_purpleair.py - TestEpaCorrect`.
+`tests/test_airnow_purpleair.py` - `TestEpaCorrect`.
 
 ## AQI scale semantics
 
@@ -132,7 +132,7 @@ publishes no index of its own. The breakpoints in `_codes.py` are the **EPA 2024
 revision** (effective 2024-05-06): AQI 50 moved from 12.0 to 9.0 ug/m3, and the
 200/300/500 boundaries dropped to 125.4/225.4/325.4. The module docstring marks
 them frozen on purpose - a regulatory standard, not a tunable.
-`tests/test_airnow_purpleair.py - TestPm25ToAqi` anchors all six boundaries,
+`tests/test_airnow_purpleair.py` - `TestPm25ToAqi` anchors all six boundaries,
 the 500 cap, the `None`/negative contract, monotonicity, and specifically that
 12.0 ug/m3 is now Moderate rather than Good.
 
@@ -201,13 +201,16 @@ reports `limit=None` and tracks only the raw call count.
   concentrations and diverge as concentration rises, so the correction is
   applied to the wrong input exactly when it matters most - smoke episodes.
   Fix is one string: request `pm2.5_cf_1` in `_FIELDS` and read that column.
-  (Sources: [EPA correction equation, Barkjohn et al.](https://amt.copernicus.org/articles/14/4617/2021/);
-  [PurpleAir API field default, ATM for outdoor sensors](https://community.purpleair.com/t/contradictory-cf-information-in-api-docs/9827).)
+  Verified against the EPA / Barkjohn US-wide correction paper
+  (`amt.copernicus.org/articles/14/4617/2021/`, which defines the equation on
+  `PA_cf_1`) and the PurpleAir API documentation thread confirming the generic
+  `pm2.5` field defaults to ATM for outdoor sensors
+  (`community.purpleair.com/t/contradictory-cf-information-in-api-docs/9827`).
 - questionable | `_codes.epa_correct()` | The single linear form is applied at
   every concentration. EPA scopes that equation to uncorrected readings below
   roughly 570 ug/m3 and publishes a piecewise extension for extreme smoke, where
-  the sensor response goes nonlinear
-  ([Barkjohn et al. 2022 wildfire-smoke correction](https://www.mdpi.com/1424-8220/22/24/9669)).
+  the sensor response goes nonlinear (Barkjohn et al. 2022 wildfire-smoke
+  correction, `mdpi.com/1424-8220/22/24/9669`).
   Practical impact is capped by `pm25_to_aqi()` returning 500 above 325.4 ug/m3,
   but the reported concentration itself stays biased.
 - questionable | `air_quality.fetch()` | No maximum-distance rejection. The only
