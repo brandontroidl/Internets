@@ -186,3 +186,12 @@ silently eats any -word token; pkginfo eager requests import contra lazy-import
 pattern; ghinfo lacks the traversal guard pkginfo has and 403 rate-exhaustion is
 unmessaged. Test gaps: dictionary/urbandictionary/translate/search fully
 untested; scholar handler layer; reflookup rtfm parser.
+
+Agent-reported (batch C, net/sec): probe .ssl mangles bare IPv6 literals (partition
+at first colon); probe docstring states stale guard mechanism; ipinfo rides cleartext
+http to ip-api.com (free-tier constraint, on-path forgeable); dnsutils accepts ten
+record types but advertises six; non-ASCII dash/arrow glyphs (U+2013/U+00D7/U+2192)
+in dnsutils/netcalc/secinfo replies - conflicts with owner no-dash preference;
+weather_user_agent secret doubles as bot-wide HTTP UA across five modules (naming
+drift). Test gaps: secinfo .pwn PM-only refusal unpinned (the guard against password
+amplification into a channel), HIBP/Tor size-cap branches, no test_ipinfo/netcalc.

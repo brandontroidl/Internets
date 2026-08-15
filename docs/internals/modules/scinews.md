@@ -17,7 +17,7 @@ attacker-influenceable URLs, and it does so through the SSRF-pinned fetch.
 
 | Command | Args | Behavior |
 |---|---|---|
-| `.sci` | `[topic]` (default `all`) | Fetch all feeds tagged with the topic, merge, reply with a numbered 10-item list. Topics: all, astro is absent - actual set is derived from `_FEEDS` tags (all, bio, bsd, chem, earth, eng, linux, math, physics, security, space, tech). |
+| `.sci` | `[topic]` (default `all`) | Fetch all feeds tagged with the topic, merge, reply with a numbered 10-item list. The topic set is derived from `_FEEDS` tags: all, bio, bsd, chem, earth, eng, linux, math, physics, security, space, tech. |
 | `.sci read <N>` | 1-based index | Re-print item N from the channel's last list plus a lead paragraph and the URL (3 lines). |
 | `.sci sources` | - | List the topic names and the feed count. |
 
