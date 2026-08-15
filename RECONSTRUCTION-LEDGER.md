@@ -414,3 +414,34 @@ CHANTYPES (only CHANMODES and PREFIX are consumed from 005); channels.cmd_users
 is admin-gated for hostmask PII but its help entry advertises it as public;
 config.py CLI epilog implies --debug takes multiple subsystems, apply_debug
 takes exactly one.
+
+Internals-doc corrections applied (conflicts found by Layer 1 agents, verified
+by orchestrator, source wins): tests.md 41->40 test files, ~90->75 modules
+denominator, 2706->2705 run_tests lines; scinews.md ~130->173 feed URLs;
+health.md now documents .uptime as unreachable instead of public.
+
+Agent-reported (integrations/testing): nasa_api_key is read by apod.py and
+astro2.py but registered in NEITHER KNOWN_SECRETS nor CONFIG_LOCATIONS
+(verified) - works via get() and INTERNETS_NASA_API_KEY but is invisible to
+`secret_store list`/status() and migrate will not relocate it. weather_user_agent
+is read by 49 of 75 module files as the global UA and is a FAIL-CLOSED gate:
+geocode._ua_has_contact() disables all Nominatim geocoding when it lacks an
+@domain or http(s):// - so .w/.regloc/.myloc fail with no obvious cause;
+in the providers layer it reaches exactly one provider and _http.py injects no
+UA at all. config.ini.example defines none of [imdb][lastfm][youtube][stocks]
+[twitch][search][ipintel][satpass][apod], so every per-module ini fallback in
+the code is unreachable on a fresh install. weatherstack docstring still calls
+it plaintext HTTP - the modules were fixed to https (comments confirm the old
+access_key-in-cleartext leak). pirateweather/_codes.py safe_get_json ALREADY
+implements the key-redaction shape that stocks.py needs - fix precedent exists
+in-repo. CONTRIBUTING.md says tests.yml has three jobs; it has four.
+
+Agent-reported (operations/admin/troubleshooting): numerics 403/405/471/474/
+475/476 drop a channel from active_channels and rewrite channels.json with NO
+log line (473 does log) - channels vanish across restarts with only the file as
+evidence; corrupt shadow_bans.json degrades to empty with a warning, so an
+unclean restart silently un-bans everyone.
+
+CONFLICT resolved (source wins): internals/internets.md claimed the ACCOUNT
+branch writes an audit record; no audit_log.record() call exists in
+internets.py at all (only admin_cmds.py writes audit records). To fix in P3.

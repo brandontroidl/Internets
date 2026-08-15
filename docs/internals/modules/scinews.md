@@ -1,6 +1,6 @@
 # scinews.py - STEM news aggregator and article reader (`.sci`)
 
-Curated keyless RSS/Atom aggregation: ~130 hardcoded feeds across 12 topics, fetched
+Curated keyless RSS/Atom aggregation: 173 hardcoded feed URLs across 12 topics, fetched
 concurrently, merged newest-first with a per-source diversity cap, plus a follow-up
 reader that fetches a listed article and extracts its lead paragraph. The only module
 in the batch with two-step interaction state (a per-channel "last list"). Base

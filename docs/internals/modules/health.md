@@ -1,4 +1,4 @@
-# health.py - operator self-check (.health) and public uptime (.uptime)
+# health.py - operator self-check (.health); its .uptime is unreachable
 
 ## Purpose
 
@@ -12,7 +12,7 @@ command. Base contract: [base](base.md).
 | Command | Handler | Usage |
 |---|---|---|
 | `.health` | `modules/health.py - HealthModule.cmd_health()` | admin-only subsystem snapshot, one line per item, delivered privately via `bot.preply()` (NOTICE when invoked in a channel) so quotas/counters never spill publicly |
-| `.uptime` | `HealthModule.cmd_uptime()` | public; `nick: uptime 3d 4h 12m 9s` |
+| `.uptime` | `HealthModule.cmd_uptime()` | UNREACHABLE - shadowed by the admin `.uptime` in `admin_cmds.py - AdminCommandsMixin._CORE`, which `IRCBot._dispatch()` resolves first. See Findings. |
 
 Uptime is measured from the MODULE's own load time (`on_load` stores
 `time.time()`), deliberately not the process start - the comment notes the
@@ -65,3 +65,16 @@ rather than erroring.
 - test-gap | health.py - HealthModule | no `tests/test_health*` exists; the
   dirty-flag defect above is exactly the class of bug a probe-name test would
   have caught.
+
+## Finding: `.uptime` is registered but never runs
+
+`HealthModule.COMMANDS` maps `uptime` to `HealthModule.cmd_uptime()`, but
+`admin_cmds.py - AdminCommandsMixin._CORE` also maps `uptime`, to the
+admin-gated `cmd_uptime`. `IRCBot._dispatch()` consults `_CORE` before the
+module command registry, so the module's handler is unreachable and a
+non-admin `.uptime` receives the authentication prompt rather than the public
+uptime line this module intends. `IRCBot.load_module()` only checks for
+collisions between modules, so nothing warns at load time. A secondary effect:
+`_dispatch` derives the metric's `module` label from the module registry, so
+the command metric records `module="health"` for an invocation the core
+handler served.
