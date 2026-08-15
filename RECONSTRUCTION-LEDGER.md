@@ -235,3 +235,21 @@ rate-gate inconsistency family); dice en-dash output pinned by tests;
 nine modules carry a dead local _strip_ctrl alias; fml scraper coupled to a
 Tailwind class string. Test gaps: entire batch except dice untested; games.py
 absent from the async-handler contract test.
+
+SECURITY DEFECT (VERIFIED empirically by orchestrator, reproduced): stocks.py
+_try_providers appends str(exception) to the IRC "all providers failed" reply;
+urllib3 transport errors embed the full request query including token=/apikey=,
+so a network outage while keys are configured publishes every finance API key
+to the channel. sender.redact_secrets is log-only and does not scrub PRIVMSG.
+Fix shape (owner decision): errors.append name + exception class only, never
+str(e); same class-only rule for the log.warning URL-bearing pattern the agent
+found across imdb/lastfm/youtube/steam/twitch (log-only leak, lower severity).
+
+Agent-reported (batch G, media/finance): steam _save_ids unbound-local masks
+mkstemp errors; twitch search_streams dead code; twitch client_secret as URL
+query params on OAuth POST [unverified vs current Twitch docs]; steam regsteam
+mutates dict outside lock during to_thread save; dnd/crypto collapse outages
+into "no match"; crypto/fx rate-gate BEFORE usage reply (inverse of the batch
+E/F ordering drift - both directions exist); lastfm discards profile on
+recenttracks failure. Test gaps: steam registry, twitch token lifecycle,
+stocks failover order and its key-leaking aggregation.
