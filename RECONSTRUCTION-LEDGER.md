@@ -150,3 +150,9 @@ blocks; get_hash() lives in botlog (placement); apply_loglevel does not clear
 subsystem debug sets (rehash does); reload_config() skips import-time validation
 (empty command_prefix hazard live after rehash); CONFIG_PATH resolves against
 CWD; parse_args() at import exits during import (argv-pinning convention).
+
+Owner requirement (STATED 2026-08-15): docs must be PRINTABLE - everything,
+including docs/internals/, wired into the Sphinx toctree so it lands in the
+xelatex PDF build. P3 gate: scripts/build-docs.sh must produce BOTH HTML and
+PDF green; check the PDF for overflowing tables/code blocks (LaTeX-specific
+failure HTML never shows).
