@@ -38,7 +38,7 @@ Root files (13):
 
 Packages:
 - [ ] weather_providers/ (5 files)
-- [ ] modules/ (75 files, batched by help-menu category)
+- [~] modules/ (75 files): A,B done; C-I in flight/queued
 - [ ] tests/ (behavior map, test-gap inventory)
 - [ ] scripts/ + .github/ + packaging (pyproject, requirements, CI workflows)
 
@@ -166,3 +166,13 @@ have zero production callers (provider tree carries its own deg_to_card);
 example.py teaches an admin-bypass on API cooldown that does not exist and
 overstates input bounding; _netsafe docstring understates its dependents.
 Test gaps: safe_open hop-limit + no-Location branches; compressed-body cap.
+
+Agent-reported (batch B, weather/geocode/location): weather docstrings undercount
+commands (8 listed vs 15 registered; "Seven lines" vs 8); cmd_alerts double-resolves;
+-n <nick> flag only matches as the entire arg; geocode Nominatim paths run blocking
+r.raw.read() on the event loop (only _get offloaded; _zippo shows the right pattern);
+transport failures cached as 24h negatives same as not-found; no process-wide 1req/s
+Nominatim throttle (per-user gates only); location.cmd_regloc logs nick-to-location
+pairs into the bot log where .forgetme cannot purge them (PRIVACY concern - surface);
+regloc/myloc skip rate_limited() before geocoding. Test gaps: -n opt-out refusal,
+pollen flag aliases, geocode cache TTL/LRU/negative round-trip, location handlers.
