@@ -27,14 +27,14 @@ Root files (13):
 - [x] sender.py
 - [x] protocol.py
 - [x] console.py
-- [ ] config.py
-- [ ] botlog.py
+- [x] config.py
+- [x] botlog.py
 - [x] store.py
 - [x] secret_store.py
 - [x] hashpw.py
 - [x] audit_log.py
 - [x] process_lock.py
-- [ ] metrics.py
+- [x] metrics.py
 
 Packages:
 - [ ] weather_providers/ (5 files)
@@ -139,3 +139,14 @@ Test gaps: no end-to-end dispatch test (tests/test_dispatcher.py actually tests
 weather_providers/_dispatch.py, not bot dispatch); _handle_cap, shadow-ban
 filter, keepalive timeout, reconnect loop untested; no multi-thread record()
 test; no concurrent stale-reclaim test.
+
+Owner policy (STATED 2026-08-15): superseded docs -> docs-archive/ (git mv, same
+commit as the replacement), destined offsite; no parallel old/new doc sets.
+
+Agent-reported (metrics/botlog/config batch): six of ten default metrics have no
+update call site (constant 0 - built-but-not-wired); expose() "loopback-only"
+claim vs actual unspecified-only guard; single-threaded exporter, stalled scraper
+blocks; get_hash() lives in botlog (placement); apply_loglevel does not clear
+subsystem debug sets (rehash does); reload_config() skips import-time validation
+(empty command_prefix hazard live after rehash); CONFIG_PATH resolves against
+CWD; parse_args() at import exits during import (argv-pinning convention).
