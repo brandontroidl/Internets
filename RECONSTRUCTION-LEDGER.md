@@ -304,3 +304,26 @@ Count drift (orchestrator-verified, to fix in Layer 1 rewrite):
 Ground truth for this reconstruction: 70 command modules, 165 primary module
 commands, 4 core public + 23 core admin commands, 32 weather providers,
 40 pytest files (1738 passed / 3 skipped) + run_tests.py (213 passed).
+
+Implementation defect (VERIFIED by orchestrator): noaa_coops/tides.py fetch()
+requests date=today and takes the FIRST "H" and FIRST "L" of the day with no
+time filtering, populating next_high_time/next_low_time. For most of the day
+".tides" reports extremes that already passed. Same pattern in tidecheck
+(trusts undeclared upstream ordering, never filters past extremes).
+
+Agent-reported (WP4 government/specialist providers): noaa_coops re-downloads
+the ~3500-station list (8MB cap) per call, no cache; nearest-station is
+great-circle only so inland points resolve to coastal stations; swpc takes
+data[-1] as latest Kp without checking time_tag and downloads the ~2MB OVATION
+grid per request; swpc aurora distance ignores the 0/359 longitude seam;
+nifc counts non-wildfire categories as active fires (requested fields never
+read), ignores exceededTransferLimit so busy regions truncate silently, and
+returning empty outside US coverage STOPS the dispatch chain so non-US queries
+never fall through to firms; firms counts detection pixels not fires and
+discards the confidence column; gdacs prefers htmldescription so raw HTML can
+reach an IRC line, and its Green/Orange/Red level fills a CAP-severity field
+making severity ranking a no-op; sunrisesunset sends no timezone or date
+parameter while claiming local times, and an empty results object counts as a
+dispatch success. Naming corrections: capability methods are
+get_space_weather/get_astronomy; nasapower implements get_historical (met means
+only, no irradiance); gdacs implements generic get_alerts.
