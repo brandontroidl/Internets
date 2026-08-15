@@ -156,3 +156,13 @@ including docs/internals/, wired into the Sphinx toctree so it lands in the
 xelatex PDF build. P3 gate: scripts/build-docs.sh must produce BOTH HTML and
 PDF green; check the PDF for overflowing tables/code blocks (LaTeX-specific
 failure HTML never shows).
+
+Agent-reported (batch A, module contract; fec0 check done on live interpreter):
+base.resolve_public() passes IPv6 site-local fec0::/10 while _netsafe.ip_is_blocked
+blocks it - the two SSRF guards disagree (security concern, surface to owner);
+fetch_json scalar timeout bounds per-read not wall time (slow-drip holds a worker
+past cancel); cred() catches only ImportError; units.deg_to_card/fmt_dt/fmt_short
+have zero production callers (provider tree carries its own deg_to_card);
+example.py teaches an admin-bypass on API cooldown that does not exist and
+overstates input bounding; _netsafe docstring understates its dependents.
+Test gaps: safe_open hop-limit + no-Location branches; compressed-body cap.
