@@ -22,7 +22,7 @@ flip statuses in place. Findings accumulate at the bottom and must not disappear
 ## P1 internals coverage checklist
 
 Root files (13):
-- [ ] internets.py
+- [x] internets.py
 - [x] admin_cmds.py
 - [x] sender.py
 - [x] protocol.py
@@ -32,8 +32,8 @@ Root files (13):
 - [x] store.py
 - [x] secret_store.py
 - [x] hashpw.py
-- [ ] audit_log.py
-- [ ] process_lock.py
+- [x] audit_log.py
+- [x] process_lock.py
 - [ ] metrics.py
 
 Packages:
@@ -112,3 +112,30 @@ not enforce MAX_PASSWORD_BYTES in-function; _verify_scrypt maps MemoryError to s
 False; botlog _VALID_HASH_PREFIXES is a hand-maintained duplicate of verify_password's
 set; tests/test_hashpw.py has a stale "DOCUMENTED RESIDUAL" docstring contradicting the
 implemented verify-side guard; secret_store CLI handlers largely untested.
+
+Security concern (VERIFIED by orchestrator): audit_log.py - AuditLog.verify()
+dispatches hash scheme on the record's own `v` field; records rewritten as
+legacy (no `v`) verify with plain keyless SHA-256, so a writer to audit.log can
+rewrite the chain from any position and verify() reports intact. Downgrade
+attack on tamper evidence. Caveat: requires write access to audit.log (0600);
+severity depends on where the HMAC key lives relative to the log. FINDING ONLY -
+no unilateral fix; owner decides (e.g. reject legacy records after first v2, or
+a cutover index pin).
+
+Implementation defect (agent-verified, regex probe): internets.py _handle_cap /
+_RE_CAP mishandles multiline CAP LS 302 (the `*` continuation marker parsed as a
+cap token, leading colon kept on first cap, each LS line answered independently
+- premature CAP REQ/END can fire mid-list) despite the bot requesting 302.
+Also: CAP ACK branch replaces _caps instead of unioning (second ACK discards
+prior grants); request_shutdown() before run() strands _shutdown_initiated with
+no event so signals are ignored.
+
+Agent-reported (audit/process_lock batch): rotation stamp 1s granularity +
+silent rename overwrite can destroy a rotated segment; record() never fsyncs
+(two code comments claim otherwise - both stale); verify/.audit never read
+rotated segments; process_lock stale-reclaim (read/unlink/O_EXCL) not atomic -
+two starters can interleave and both acquire; start_time recorded but unused.
+Test gaps: no end-to-end dispatch test (tests/test_dispatcher.py actually tests
+weather_providers/_dispatch.py, not bot dispatch); _handle_cap, shadow-ban
+filter, keepalive timeout, reconnect loop untested; no multi-thread record()
+test; no concurrent stale-reclaim test.
