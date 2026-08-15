@@ -223,7 +223,7 @@ at the top, elevating per-job only where a SARIF upload needs
 
 ## After editing a source file: re-point the doc citations
 
-The docs cite source by line number throughout (`internets.py:357`). **Editing a
+The docs cite source by line number throughout (`internets.py:343`). **Editing a
 source file silently invalidates every citation below the edit**, and nothing
 catches it for you: the cited line still exists, it just describes something
 else now. A Sphinx build is happy, a range check is happy, and the doc quietly

@@ -17,7 +17,7 @@ each as its own containment boundary.
 
 ## 1. Admin / auth boundary
 
-The authorization decision is `IRCBot.is_admin(nick)` (`internets.py:357`). It is the
+The authorization decision is `IRCBot.is_admin(nick)` (`internets.py:343`). It is the
 single privileged-boundary check; `admin_cmds.py:_require_admin` (line 76) just wraps it
 with a user-facing "auth first" message. Every privileged `cmd_*` calls `_require_admin`
 first.
@@ -33,14 +33,14 @@ Two dicts, both guarded by one lock `self._auth_lock` (`internets.py:238`):
 
 The lock guards BOTH dicts together (the comment at line 225 says so) because `is_admin`
 reads both and must see a consistent pair. `_nick_hosts` is written on inbound
-PRIVMSG (`internets.py:1108`), NICK (`1054-1055`), and CHGHOST; popped on QUIT (`1043`)
+PRIVMSG (`internets.py:1094`), NICK (`1054-1055`), and CHGHOST; popped on QUIT (`1043`)
 and cleared on reconnect (`1254`). JOIN/ACCOUNT mutate the persistent Store, not
 `_nick_hosts`.
 
 ### is_admin re-checks the live binding, fail-closed
 
 `is_admin` does NOT just test membership in `_authed`. It re-derives authorization from
-the CURRENT hostmask on every call (`internets.py:357-377`):
+the CURRENT hostmask on every call (`internets.py:343-363`):
 
 ```
 if k not in self._authed:                       return False
@@ -71,7 +71,7 @@ inherited it. Do not reintroduce a "missing hostmask -> allow" path.
 `admin_cmds.py:cmd_auth` (line 98), PM-only, password checked with
 `verify_password` in a worker thread (line 148). On a correct password it still refuses
 to create a session unless a concrete hostmask is currently known
-(`admin_cmds.py:196-210`):
+(`admin_cmds.py:231-245`):
 
 ```
 if ok:
@@ -100,11 +100,11 @@ Constants on the class: `_AUTH_MAX_FAILS = 5`, `_AUTH_LOCKOUT = 300` (seconds),
 `self._auth_fails: dict[str, tuple[int, float]]` = nick -> (fail_count, last_ts).
 
 - After 5 failures within the window, attempts are refused for the remaining lockout
-  time (`admin_cmds.py:159-169`). The lockout is a SLIDING window: a refused attempt
+  time (`admin_cmds.py:194-204`). The lockout is a SLIDING window: a refused attempt
   rewrites `last_t = now` (line 140), so trickling one attempt per window cannot bypass
   the rate limit.
 - The fail counter is re-read INSIDE the lock after the verify await before incrementing
-  (`admin_cmds.py:188-192` for the unexpected-backend-error path, `191-197` for the
+  (`admin_cmds.py:223-227` for the unexpected-backend-error path, `191-197` for the
   wrong-password path). The count was snapshotted before the await; a concurrent attempt
   could have bumped it, so re-reading avoids under-counting failures.
 - `_auth_fails` is opportunistically pruned when it exceeds `_AUTH_CLEANUP_THRESHOLD`
@@ -114,13 +114,13 @@ Constants on the class: `_AUTH_MAX_FAILS = 5`, `_AUTH_LOCKOUT = 300` (seconds),
 
 - Password value is never logged; only presence/length. The dispatch log line redacts
   `auth`/`deauth` args entirely: `log_arg = "[REDACTED]" if cmd in ("auth","deauth")`
-  (`internets.py:1128`).
-- `verify_password` exceptions are handled in two tiers (`admin_cmds.py:173-194`): a
+  (`internets.py:1114`).
+- `verify_password` exceptions are handled in two tiers (`admin_cmds.py:208-229`): a
   `ValueError` (known hashpw config error, no password content) is logged with its
   message; ANY other backend exception is logged as `type(e).__name__` only, because
   argon2/bcrypt/scrypt backends occasionally echo input or hash fragments in exception
   text. The unexpected-exception path also counts as a failed attempt.
-- The audit record for a successful auth passes `None` as args (`admin_cmds.py:213`),
+- The audit record for a successful auth passes `None` as args (`admin_cmds.py:248`),
   never the password or a derivative.
 
 ### A session is a routing handle, not an authz boundary
@@ -128,23 +128,23 @@ Constants on the class: `_AUTH_MAX_FAILS = 5`, `_AUTH_LOCKOUT = 300` (seconds),
 The session keys on nick, but nick is a routing handle that the network can reassign.
 Authorization is therefore re-bound to the hostmask on every `is_admin` call; the session
 (`_authed`) is popped only by QUIT (`1044`) and NICK (`1060`). Handled in
-`_handle_membership` (`internets.py:1016`):
+`_handle_membership` (`internets.py:1002`):
 
-- QUIT (`internets.py:1065-1078`): drop the cached hostmask AND pop any `_authed` entry -
+- QUIT (`internets.py:1051-1064`): drop the cached hostmask AND pop any `_authed` entry -
   a reconnector reusing the nick must re-auth.
-- NICK (`internets.py:1079-1098`): the session is DROPPED, not migrated to the new nick.
+- NICK (`internets.py:1065-1084`): the session is DROPPED, not migrated to the new nick.
   The comment at 1056-1059 records why: migrating let a malicious server or a
   nick-takeover launder an authed session onto an attacker-chosen nick.
-- CHGHOST (`internets.py:1038`): updates the persistent Store via `user_rename` AND
+- CHGHOST (`internets.py:1024`): updates the persistent Store via `user_rename` AND
   writes `_nick_hosts` under `_auth_lock`, so `is_admin` sees the new hostmask
   immediately and revokes the session if it no longer matches the auth binding.
-  ACCOUNT (`internets.py:1040`): updates the Store only; does not write `_nick_hosts`.
+  ACCOUNT (`internets.py:1026`): updates the Store only; does not write `_nick_hosts`.
 - Global drops: `_authed.clear()` on reconnect/disconnect paths
-  (`internets.py:1281-1285`, `1327-1329`; `admin_cmds.py:519-521`).
+  (`internets.py:1267-1271`, `1327-1329`; `admin_cmds.py:567-569`).
 
 Concurrency note: the `_auth_lock` guards `_authed`/`_nick_hosts` against a torn read of
 the pair. Today both `is_admin` and the membership mutators run on the event-loop thread
-(`flood_limited` -> `flood_check` -> `is_admin`, `internets.py:387`), so the lock is
+(`flood_limited` -> `flood_check` -> `is_admin`, `internets.py:373`), so the lock is
 defensive - load-bearing only if a future free-threaded / GIL-free build moves `is_admin`
 onto a worker thread.
 
@@ -408,7 +408,7 @@ full forever by spamming after the limit trips.
 Append-only, HMAC-SHA256-chained, tamper-evident record of privileged actions. Separate
 from the main botlog. Every privileged handler in `admin_cmds.py` calls
 `audit_log.default().record(nick, host, action, args)` via the `_audit` helper
-(`admin_cmds.py:92-111`), which resolves the actor's hostmask from `_nick_hosts` and
+(`admin_cmds.py:127-146`), which resolves the actor's hostmask from `_nick_hosts` and
 catches all exceptions so an audit failure never breaks the admin command.
 
 ### The HMAC chain (lines 99-104, 236-294)
@@ -419,7 +419,7 @@ means a value containing the literal separator cannot collide with a different f
 layout). The record stores `prev_hash` (the previous record's `this_hash`) and its own
 `this_hash`, forming a chain. Editing, reordering, or deleting any non-tail record breaks
 the `prev_hash` link and the HMAC, which `verify` (line 296) reports as
-`(False, first_broken_index)`. Exposed via `.audit verify` (`admin_cmds.py:739-747`).
+`(False, first_broken_index)`. Exposed via `.audit verify` (`admin_cmds.py:789-797`).
 
 ### Why HMAC, not plain SHA-256
 
@@ -473,7 +473,7 @@ write (lines 274-284) - it may contain hostmasks, which are PII.
 
 The Prometheus exporter is disabled by default and imposes zero network footprint until
 someone calls `registry.enable()` then `registry.expose(host, port)` (module docstring
-lines 1-9). It IS wired into startup, config-gated: `internets.py:1377-1384` reads
+lines 1-9). It IS wired into startup, config-gated: `internets.py:1363-1370` reads
 config.ini `[metrics]` and, only when `enable = true` (default false), does
 `from metrics import registry as _mreg; _mreg.enable(); _mreg.expose(host, port)` with
 `host = [metrics] host` (default `127.0.0.1`) and `port = [metrics] port` (default
@@ -595,7 +595,7 @@ storage; cross-referenced in Section 2). Hashing a transmitted credential does n
 "harden" it; it breaks the auth that needs the original value back.
 
 One qualifier: the admin password is not wire-free either. `cmd_auth`'s own usage string
-is `/MSG <bot> AUTH <password>` (`admin_cmds.py:135`) - the plaintext password crosses the
+is `/MSG <bot> AUTH <password>` (`admin_cmds.py:170`) - the plaintext password crosses the
 IRC link in the clear on every login, same as any other command argument. "LOCAL,
 verify-only" describes what the bot does with the value after receipt (hash comparison,
 never stored or replayed anywhere else); it does not mean the value never transits a wire.
@@ -659,10 +659,10 @@ Each outcome has its own dedicated test:
   raises. `tests/test_hashpw.py:262-273` (`TestVerifyDispatch`) pins this for empty
   string, `None`, and `"md5$deadbeef"`. `admin_cmds.py:cmd_auth` treats this ValueError
   as a config error, not a login failure - it does NOT count against the brute-force
-  lockout (`admin_cmds.py:173-180`), because an unrecognised format means the operator
+  lockout (`admin_cmds.py:208-215`), because an unrecognised format means the operator
   misconfigured `config.ini`, not that an attacker guessed wrong. In practice only the
   unknown-prefix half of this branch is reachable from `cmd_auth`: it already returns
-  early on `if not h` (`admin_cmds.py:130-133`) before ever calling `verify_password`, so
+  early on `if not h` (`admin_cmds.py:165-168`) before ever calling `verify_password`, so
   the empty/`None`-stored raise (`hashpw.py:287-288`) fires only when `verify_password` is
   called directly with an empty or `None` argument - as
   `tests/test_hashpw.py:263-269` does (`TestVerifyDispatch.test_empty_stored_raises` /
@@ -683,14 +683,14 @@ Each outcome has its own dedicated test:
   `test_cross_algo_wrong_password_is_false_not_error`
   (`tests/test_hashpw.py:275-279`) pins that a wrong password is `False`, never an
   exception. This path DOES count as a failed login attempt in `cmd_auth`
-  (`admin_cmds.py:214-221`).
+  (`admin_cmds.py:249-256`).
 
 `cmd_auth` also has a third outcome the split above does not cover: any exception other
 than `ValueError` escaping `verify_password` - a bug in `hashpw.py` or one of its backends,
 not a documented condition - is caught by a catch-all `except Exception`
-(`admin_cmds.py:181-194`). It logs only `type(e).__name__`, never the exception text, and
+(`admin_cmds.py:216-229`). It logs only `type(e).__name__`, never the exception text, and
 counts the attempt against the brute-force lockout, the same as a wrong password
-(`admin_cmds.py:187-192`). This is deliberate defence in depth, not a config-error path.
+(`admin_cmds.py:222-227`). This is deliberate defence in depth, not a config-error path.
 
 Why the split matters operationally: `botlog.py:_validate_hash` (line 180) calls
 `sys.exit(1)` at startup if the configured `password_hash` prefix is invalid (lines
@@ -703,7 +703,7 @@ disabled, which is the expected first-run state before an operator has run `hash
 This startup guard is not continuously enforced, though: `_validate_hash` runs exactly
 once, at import (`botlog.py:210`), while `get_hash()` calls `reload_config()` and re-reads
 `password_hash` from disk on every `.auth` attempt (`botlog.py:164-174`, called from
-`admin_cmds.py:130`). Editing `config.ini` to an unrecognised prefix after startup bypasses
+`admin_cmds.py:165`). Editing `config.ini` to an unrecognised prefix after startup bypasses
 the `sys.exit(1)` guard entirely - the bot keeps running, and every subsequent `.auth`
 falls into the unrecognised-prefix `ValueError` branch above instead of failing at startup.
 
@@ -727,9 +727,9 @@ fully functional with zero extra packages. On `ImportError`:
   `SystemExit` test failure, not a process abort - pytest catches `SystemExit` in the
   call phase and the rest of the suite still runs.
 - The **verify** functions instead raise `ValueError` (lines 249-250, 261-262) - `_verify_*`
-  runs inside `cmd_auth`'s live auth path (`admin_cmds.py:172`, on a worker thread via
+  runs inside `cmd_auth`'s live auth path (`admin_cmds.py:207`, on a worker thread via
   `asyncio.to_thread`), where `sys.exit` would kill the whole bot process over one admin's
-  auth attempt. The caller's `except ValueError` (`admin_cmds.py:173-180`) turns this into
+  auth attempt. The caller's `except ValueError` (`admin_cmds.py:208-215`) turns this into
   a "config error, see log" reply instead. Net effect: an admin whose stored hash is
   `bcrypt$...` but who removed the `bcrypt` package from the venv gets a clean error
   message on `.auth`, not a bot crash - but they also cannot authenticate until the
@@ -872,19 +872,19 @@ replace `password_hash` in `config.ini`.
 `AdminCommandsMixin` (`admin_cmds.py:59`) supplies every `cmd_*` handler mixed into
 `IRCBot`. It owns no state of its own - `_authed` (`internets.py:240`), `_auth_fails`
 (`internets.py:241`), the shadow-ban set `_shadow_bans`/`_shadow_ban_reasons`
-(`internets.py:267-268`), the module registry `_modules` (`internets.py:235`), and
-`_nick_hosts` (`internets.py:281`, declared separately later in `__init__`, not part of
+(`internets.py:253-254`), the module registry `_modules` (`internets.py:235`), and
+`_nick_hosts` (`internets.py:267`, declared separately later in `__init__`, not part of
 that same block) all live on `IRCBot`. The mixin declares its own type-checker stub
 block for most of that state and for the `IRCBot` methods it calls
-(`admin_cmds.py:62-82`), but the stub block is incomplete: it covers `_nick`, `_authed`,
+(`admin_cmds.py:62-117`), but the stub block is incomplete: it covers `_nick`, `_authed`,
 `_auth_fails`, `_auth_lock`, `_mod_lock`, `_nick_hosts`, `_modules`, `_commands`, the
 three `_AUTH_*` constants, and 7 method stubs (`preply`, `send`, `is_admin`,
 `load_module`, `unload_module`, `reload_module`, `request_shutdown`). It omits
 `_shadow_bans`/`_shadow_ban_reasons` entirely. Only `_shadow_bans` is guarded with
-`hasattr`, in `cmd_shadow_ban` and `cmd_shadow_unban` (`admin_cmds.py:872`, `846`);
+`hasattr`, in `cmd_shadow_ban` and `cmd_shadow_unban` (`admin_cmds.py:922`, `846`);
 `_shadow_ban_reasons` is written and popped via a plain attribute access with no guard
-of its own (`admin_cmds.py:880`, `850`), and `_shadow_bans` itself is mutated directly
-at `admin_cmds.py:878`, `849` - it also omits `privmsg`, `cfg`,
+of its own (`admin_cmds.py:930`, `850`), and `_shadow_bans` itself is mutated directly
+at `admin_cmds.py:928`, `849` - it also omits `privmsg`, `cfg`,
 `_store`, `active_channels`, and `_save_shadow_bans`, all of which handlers call
 directly with no stub backing them. This section inventories the commands and their
 blast radius; for the `is_admin` authorization mechanism itself (fail-closed hostmask
@@ -894,52 +894,52 @@ here.
 ### Command inventory
 
 Most privileged handlers open with `if not self._require_admin(nick, reply_to): return`
-(`admin_cmds.py:86-90`), which is a thin wrapper over `is_admin`. `.auth`, `.help`,
+(`admin_cmds.py:121-125`), which is a thin wrapper over `is_admin`. `.auth`, `.help`,
 `.version`, and `.modules` are reachable without an admin session, and so is `.deauth`:
-`cmd_deauth` (`admin_cmds.py:251-262`) contains no `_require_admin` call at all. It is
+`cmd_deauth` (`admin_cmds.py:286-297`) contains no `_require_admin` call at all. It is
 self-limiting rather than gated - an unauthenticated nick can invoke it and simply gets
 "not authenticated" back, since there is no session in `_authed` to delete
-(`admin_cmds.py:254-257`). `tests/test_admin_cmds.py:479-503` parametrizes the
+(`admin_cmds.py:289-292`). `tests/test_admin_cmds.py:527-551` parametrizes the
 non-admin-refused check over 22 handlers and deliberately excludes `cmd_deauth`.
 
 Dispatch still keeps `.deauth` PM-only, same as `.auth`: `_dispatch` refuses either
 command with a "must be used in PM" notice before a task is ever created for the handler
-(`internets.py:620-621`), so a channel invocation of `.deauth` never reaches
+(`internets.py:606-607`), so a channel invocation of `.deauth` never reaches
 `cmd_deauth` at all, even though the handler has no PM check of its own.
 
 | Command | Gate | Audit-logged | Blast radius |
 | --- | --- | --- | --- |
 | `.auth <pw>` | none (grants admin) | yes - `auth` on success (`args=None`), `auth_failed` per failure and `auth_lockout` once at the transition, all carrying the counter only; see below. | Brute-forceable only up to the lockout; see below. |
 | `.deauth` | none - self-limiting, not `_require_admin`-gated | yes, only if a session existed | Ends own session; no-op with "not authenticated" otherwise. Low. |
-| `.help` / `.help <x>` / `.help all` / `.help admin` | public | no | Read-only. `.help admin` and hidden-module names are gated on `is_admin` for visibility only (`admin_cmds.py:309-312`, `290`). |
+| `.help` / `.help <x>` / `.help all` / `.help admin` | public | no | Read-only. `.help admin` and hidden-module names are gated on `is_admin` for visibility only (`admin_cmds.py:346-349`, `290`). |
 | `.version` | public | no | Read-only. |
-| `.modules` | public | no | Read-only, unauthenticated - anyone can enumerate every loaded module and, via a `MODULES_DIR` glob filtered only for `__init__`/`base`/`geocode`/`units` (`admin_cmds.py:419-423`), every on-disk-but-unloaded module too. Minor information-disclosure surface. |
-| `.load <mod>` | admin | yes (unconditionally - see below) | **High.** `exec_module`s `modules/<name>.py` (`internets.py:476-478`) - arbitrary Python runs with the bot's full process privileges. Name is regex-constrained (`^[a-z][a-z0-9_]*$`) and path-traversal-checked (`internets.py:464-474`), but anything already sitting in `MODULES_DIR` is trusted to run unsandboxed. |
+| `.modules` | public | no | Read-only, unauthenticated - anyone can enumerate every loaded module and, via a `MODULES_DIR` glob filtered only for `__init__`/`base`/`geocode`/`units` (`admin_cmds.py:462-466`), every on-disk-but-unloaded module too. Minor information-disclosure surface. |
+| `.load <mod>` | admin | yes (unconditionally - see below) | **High.** `exec_module`s `modules/<name>.py` (`internets.py:462-464`) - arbitrary Python runs with the bot's full process privileges. Name is regex-constrained (`^[a-z][a-z0-9_]*$`) and path-traversal-checked (`internets.py:450-460`), but anything already sitting in `MODULES_DIR` is trusted to run unsandboxed. |
 | `.unload <mod>` | admin | yes (unconditionally) | Medium. Drops a module and its commands; reversible via `.load`. |
 | `.reload <mod>` | admin | yes (unconditionally) | **High**, same as `.load` - it unloads then re-`exec_module`s the file from disk, so an admin (or anyone who can write into `MODULES_DIR` between load and reload) gets a second arbitrary-code-execution point. |
 | `.reloadall` | admin | yes | Same as `.reload`, fanned out over every loaded module. |
-| `.restart` | admin | yes | High. Full process restart via `request_shutdown` + `_restart_flag` (`admin_cmds.py:480-481`). Denial of service if abused. |
-| `.rehash` | admin | yes | Medium. Re-reads `config.ini` + `config.local.ini`; on success, `lvl = getattr(logging, new_level, None)` (`admin_cmds.py:498`) is checked with no validation against botlog's `VALID_LEVELS` - only when `lvl` is truthy (`NOTSET` resolves to `0` and is silently skipped) does it reset the log-filter base level, set `log_filter.global_debug = False`, and call `clear_subsystems()` (`admin_cmds.py:500-502`), wiping every per-subsystem debug override. Clears every admin session (`admin_cmds.py:519-521`) only if it reaches that line - see below for the two error paths that return first and leave sessions intact. |
-| `.mode <+/-modes>` | admin | yes | Medium. Sends `MODE <bot-nick> <modes>` after a charset check (`^[a-zA-Z+\- ]+$`, `admin_cmds.py:534`); no semantic validation of the mode letters, so a bogus string just bounces off the server. |
-| `.snomask <+/-flags>` | admin | yes | Medium, hardcoded to `+s`; charset check is stricter than `.mode`'s - no spaces allowed (`^[a-zA-Z+\-]+$`, `admin_cmds.py:546`, vs. `.mode`'s `^[a-zA-Z+\- ]+$`, `485`), so a multi-flag snomask with a space is refused. |
-| `.raw <IRC line>` | admin | yes | **High - flagged.** Injects a raw, otherwise-unvalidated IRC protocol line straight onto the wire (`admin_cmds.py:553-570`). Only CR/LF/NUL and the 510-byte line cap are enforced (`512-517`); the *command* itself (WHOIS, KILL, OPER, SAMODE, ...) is whatever the admin types and whatever the ircd will accept from this connection. |
+| `.restart` | admin | yes | High. Full process restart via `request_shutdown` + `_restart_flag` (`admin_cmds.py:528-529`). Denial of service if abused. |
+| `.rehash` | admin | yes | Medium. Re-reads `config.ini` + `config.local.ini`; on success, `lvl = getattr(logging, new_level, None)` (`admin_cmds.py:546`) is checked with no validation against botlog's `VALID_LEVELS` - only when `lvl` is truthy (`NOTSET` resolves to `0` and is silently skipped) does it reset the log-filter base level, set `log_filter.global_debug = False`, and call `clear_subsystems()` (`admin_cmds.py:548-550`), wiping every per-subsystem debug override. Clears every admin session (`admin_cmds.py:567-569`) only if it reaches that line - see below for the two error paths that return first and leave sessions intact. |
+| `.mode <+/-modes>` | admin | yes | Medium. Sends `MODE <bot-nick> <modes>` after a charset check (`^[a-zA-Z+\- ]+$`, `admin_cmds.py:583`); no semantic validation of the mode letters, so a bogus string just bounces off the server. |
+| `.snomask <+/-flags>` | admin | yes | Medium, hardcoded to `+s`; charset check is stricter than `.mode`'s - no spaces allowed (`^[a-zA-Z+\-]+$`, `admin_cmds.py:596`, vs. `.mode`'s `^[a-zA-Z+\- ]+$`, `485`), so a multi-flag snomask with a space is refused. |
+| `.raw <IRC line>` | admin | yes | **High - flagged.** Injects a raw, otherwise-unvalidated IRC protocol line straight onto the wire (`admin_cmds.py:603-620`). Only CR/LF/NUL and the 510-byte line cap are enforced (`512-517`); the *command* itself (WHOIS, KILL, OPER, SAMODE, ...) is whatever the admin types and whatever the ircd will accept from this connection. |
 | `.say [target] <text>` | admin | yes | Medium/high - impersonation. Speaks as the bot to any target; see "Reply path" below for what is and is not sanitized. |
 | `.act [target] <text>` | admin | yes | Same as `.say`, wrapped as CTCP ACTION. |
-| `.nick <newnick>` | admin | yes | Medium. Requests a nick change; the local `_nick` is updated only on server confirmation, in the `_RE_NICK` handler when the server's own NICK echo names the bot's current nick (`internets.py:1079-1082`), not pre-emptively. |
+| `.nick <newnick>` | admin | yes | Medium. Requests a nick change; the local `_nick` is updated only on server confirmation, in the `_RE_NICK` handler when the server's own NICK echo names the bot's current nick (`internets.py:1065-1068`), not pre-emptively. |
 | `.uptime` | admin | no | Read-only. |
 | `.stats` | admin | no | Read-only; exposes queue depth, memory RSS, audit record count. |
-| `.audit [N \| grep <pat> \| tail \| verify]` | admin | no | Read-only viewer over the audit log, including the HMAC-chain `verify` check (`admin_cmds.py:739-747`). See ".audit: argument grammar and failure modes" below for the full grammar. |
-| `.fingerprint <nick>` | admin | no | Read-only but privacy-sensitive - aggregates hostmask, channel presence, shadow-ban status, `.seen`/`.tell`/`.notes` data, and audit-log mentions for one nick into a single reply (`admin_cmds.py:780-852`). See "Audit log split" below for why this one is not itself logged. |
-| `.shadow-ban <nick> [reason]` | admin | yes | **High - flagged.** Silently drops all of a nick's commands and excludes them from module `on_raw` fanout, with no signal to the target that anything changed (`admin_cmds.py:854-885`, dispatch-side enforcement `internets.py:617-619`, `846-862`). Refuses to target only the bot itself or the calling admin (`admin_cmds.py:866-871`) - another admin is a valid target, and because the drop happens in `_dispatch` ahead of every admin gate, one admin can silently lock another out of every command including `.deauth` and `.shutdown`; persisted to disk, see below. |
+| `.audit [N \| grep <pat> \| tail \| verify]` | admin | no | Read-only viewer over the audit log, including the HMAC-chain `verify` check (`admin_cmds.py:789-797`). See ".audit: argument grammar and failure modes" below for the full grammar. |
+| `.fingerprint <nick>` | admin | no | Read-only but privacy-sensitive - aggregates hostmask, channel presence, shadow-ban status, `.seen`/`.tell`/`.notes` data, and audit-log mentions for one nick into a single reply (`admin_cmds.py:830-902`). See "Audit log split" below for why this one is not itself logged. |
+| `.shadow-ban <nick> [reason]` | admin | yes | **High - flagged.** Silently drops all of a nick's commands and excludes them from module `on_raw` fanout, with no signal to the target that anything changed (`admin_cmds.py:904-935`, dispatch-side enforcement `internets.py:603-605`, `846-862`). Refuses to target only the bot itself or the calling admin (`admin_cmds.py:916-921`) - another admin is a valid target, and because the drop happens in `_dispatch` ahead of every admin gate, one admin can silently lock another out of every command including `.deauth` and `.shutdown`; persisted to disk, see below. |
 | `.shadow-unban <nick>` | admin | yes | Lifts a shadow-ban; persisted to disk, see below. |
 | `.shadow-list` | admin | no | Read-only listing of active bans. |
 | `.loglevel [LEVEL \| <logger> LEVEL]` | admin | yes, only when a change was actually applied | Runtime log-level/subsystem change. Low. |
 | `.debug [args]` | admin | yes | Toggles debug logging. Low. |
-| `.shutdown` / `.die` | admin | yes | **High - flagged.** Terminates the process via `request_shutdown` (`admin_cmds.py:945-954`). Denial of service if abused; no confirmation step. |
+| `.shutdown` / `.die` | admin | yes | **High - flagged.** Terminates the process via `request_shutdown` (`admin_cmds.py:996-1006`). Denial of service if abused; no confirmation step. |
 
 `.load`/`.unload`/`.reload` all discard the success flag returned by their underlying
 `load_module`/`unload_module`/`reload_module` calls - `_, msg = self.load_module(mod)`
-(`admin_cmds.py:436`, `396`, `405`) - and audit unconditionally regardless of outcome.
+(`admin_cmds.py:480`, `396`, `405`) - and audit unconditionally regardless of outcome.
 An audit record for `load`/`unload`/`reload` therefore does not imply the operation
 succeeded; the reply text (`msg`) is the only place the actual result is visible.
 
@@ -952,51 +952,51 @@ cannot itself become the denial-of-service.
 
 ### Authorization path
 
-Every gated handler calls `_require_admin` (`admin_cmds.py:86-90`), which calls
+Every gated handler calls `_require_admin` (`admin_cmds.py:121-125`), which calls
 `self.is_admin(nick)` and, on failure, replies with the auth hint - it adds no logic of
-its own. `is_admin` is `internets.py:357`, fully covered in section 1: it re-derives
+its own. `is_admin` is `internets.py:343`, fully covered in section 1: it re-derives
 authorization from the *current* hostmask on every call and is fail-closed on an
 unverifiable binding. Nothing in `admin_cmds.py` caches or shortcuts that check.
 
 ### `cmd_auth`: input guards, rate limiting, and the refuse-unknown-hostmask rule
 
-`cmd_auth` (`admin_cmds.py:115`) is PM-only (enforced at dispatch, `internets.py:620-621`,
+`cmd_auth` (`admin_cmds.py:150`) is PM-only (enforced at dispatch, `internets.py:606-607`,
 not in the handler itself). Ahead of the lockout logic it applies three input guards:
 
 - If `get_hash()` returns empty - no `password_hash` configured - it replies "no
   password_hash configured - run hashpw.py" and returns immediately
-  (`admin_cmds.py:130-132`); there is nothing to check the password against.
-- A bare `.auth` with no password (`admin_cmds.py:134-136`) replies the usage hint and
+  (`admin_cmds.py:165-167`); there is nothing to check the password against.
+- A bare `.auth` with no password (`admin_cmds.py:169-171`) replies the usage hint and
   returns; it is counted as neither a failure nor an audited event, which makes it the
   one way to confirm a `password_hash` is configured without consuming a lockout attempt.
 - A supplied password longer than 128 characters is rejected before it ever reaches
-  `verify_password` (`admin_cmds.py:120-122`).
+  `verify_password` (`admin_cmds.py:155-157`).
 
 The password is then checked with `verify_password` run in a worker thread
-(`admin_cmds.py:172`).
+(`admin_cmds.py:207`).
 
 Lockout state is `self._auth_fails: dict[str, tuple[int, float]]` keyed on lowercased
 nick, guarded by `self._auth_lock`:
 
 - 5 failures (`_AUTH_MAX_FAILS`) within a 300s window (`_AUTH_LOCKOUT`,
   `internets.py:170-172`) locks further attempts out for the remaining window
-  (`admin_cmds.py:159-169`).
+  (`admin_cmds.py:194-204`).
 - The window is a **sliding** lockout: a refused attempt while locked rewrites
-  `last_t = now` (`admin_cmds.py:164`), so an attacker trickling one guess per window
+  `last_t = now` (`admin_cmds.py:199`), so an attacker trickling one guess per window
   can never let the lockout expire mid-attempt.
 - The fail counter is re-read *inside* the lock immediately before incrementing
-  (`admin_cmds.py:188-192`, `191-197`), because it was snapshotted before the
+  (`admin_cmds.py:223-227`, `191-197`), because it was snapshotted before the
   `await asyncio.to_thread(verify_password, ...)` call; a second attempt racing in
   during that await must not have its failure silently dropped.
 - `_auth_fails` is opportunistically pruned past `_AUTH_CLEANUP_THRESHOLD = 50` entries
-  (`admin_cmds.py:151-155`), but the prune only discards entries whose last failure is
+  (`admin_cmds.py:186-190`), but the prune only discards entries whose last failure is
   older than `_AUTH_LOCKOUT` (300s) - it bounds long-term accumulation across many
   lockout windows, not burst growth. A flood of distinct attacker-controlled nicks, each
   making one attempt within the same 300s window, all stay in the dict at once; nothing
   in `cmd_auth` caps the dict size within a single window.
 
 On a **correct** password, `cmd_auth` still refuses to create a session unless a live
-hostmask is currently known for that nick (`admin_cmds.py:196-210`):
+hostmask is currently known for that nick (`admin_cmds.py:231-245`):
 
 ```
 hostmask = self._nick_hosts.get(k)
@@ -1013,17 +1013,17 @@ Why: the admin can quit mid-`verify_password` (the await point), which drops the
 `_nick_hosts` entry. If `cmd_auth` persisted the `"unknown"` sentinel instead of refusing,
 it would hand `is_admin` a session it can never re-verify against a live hostmask -
 `is_admin`'s own fail-closed branch treats a stored `"unknown"` as an active revoke
-(`internets.py:373-374`), so the two checks are redundant on purpose: `cmd_auth` refuses
+(`internets.py:359-360`), so the two checks are redundant on purpose: `cmd_auth` refuses
 to *create* an unverifiable binding, `is_admin` refuses to *honor* one if it ever got
 created some other way. Do not "simplify" `cmd_auth` to fall back to the sentinel - that
-reopens the nick-only-admin-outlives-disconnect hole documented at `internets.py:367-370`.
+reopens the nick-only-admin-outlives-disconnect hole documented at `internets.py:353-356`.
 
 The password itself never appears in a log line or an audit record: `verify_password`'s
 own `ValueError` (known config error) is logged with its message (safe - no password
 content); any other backend exception is logged as `type(e).__name__` only
-(`admin_cmds.py:181-187`), because argon2/bcrypt/scrypt backends can echo input or hash
+(`admin_cmds.py:216-222`), because argon2/bcrypt/scrypt backends can echo input or hash
 fragments in their exception text. The audit record for a successful auth passes `None`
-as `args` (`admin_cmds.py:213`).
+as `args` (`admin_cmds.py:248`).
 
 Failures are audited too, not only successes. The failure branch records an
 `auth_failed` action, and the transition into lockout records `auth_lockout`
@@ -1053,28 +1053,28 @@ accumulates in `audit.log`.
 
 ### `.rehash`: config reload, log-filter reset, and session clearing
 
-`cmd_rehash` (`admin_cmds.py:483`) does three things in sequence, and the last one - the
+`cmd_rehash` (`admin_cmds.py:531`) does three things in sequence, and the last one - the
 admin-session clear - is **not unconditional**. Two earlier paths return before reaching
 it, and existing sessions survive both:
 
 - Config reload failure: `reload_config()` raises, the handler logs and replies "failed
-  to read config", and returns (`admin_cmds.py:492-495`).
+  to read config", and returns (`admin_cmds.py:540-543`).
 - An unrecognized `password_hash` prefix: after a successful reload, the new hash's
   prefix must split to exactly `scrypt`, `bcrypt`, or `argon2` before the first `$`
-  (`admin_cmds.py:512-513`); anything else replies "Bad password_hash format" - logging
+  (`admin_cmds.py:560-561`); anything else replies "Bad password_hash format" - logging
   only the prefix length, never the (possibly attacker-supplied) value
-  (`admin_cmds.py:512-517`) - and returns. `tests/test_admin_cmds.py:670-674` exercises
+  (`admin_cmds.py:560-565`) - and returns. `tests/test_admin_cmds.py:720-724` exercises
   this path.
 
-Only past both of those does it reach `self._authed.clear()` (`admin_cmds.py:519-521`),
+Only past both of those does it reach `self._authed.clear()` (`admin_cmds.py:567-569`),
 deauthenticating every admin including the caller. Before that, the reload's level
 name is resolved with a bare `lvl = getattr(logging, new_level, None)`
-(`admin_cmds.py:498`) - there is no check against botlog's `VALID_LEVELS`, so any
+(`admin_cmds.py:546`) - there is no check against botlog's `VALID_LEVELS`, so any
 truthy attribute name found on the `logging` module passes through, while the
 legitimate level name `NOTSET` resolves to `0`, is falsy, and is silently skipped along
 with the rest of this step. Only when `lvl` is truthy does `.rehash` reset the
 log-filter base level, set `log_filter.global_debug = False`, and call
-`clear_subsystems()` (`admin_cmds.py:500-502`), which wipes every per-subsystem debug
+`clear_subsystems()` (`admin_cmds.py:548-550`), which wipes every per-subsystem debug
 override set by prior `.debug`/`.loglevel` calls - not just the base level.
 
 ### `.loglevel`: argument order
@@ -1086,94 +1086,101 @@ The command's own usage string is `loglevel [LEVEL | <logger> LEVEL]`
 alone, with no config reload involved. Two arguments are `<logger> LEVEL`, in that
 order - `target, level = args[0], args[1].upper()` (`botlog.py:282-283`) - and the logger name
 must start with `"internets"` (`botlog.py:284-285`) or the call returns an error string
-and `cmd_loglevel` never reaches the audit call (`admin_cmds.py:926-933`), so no audit
+and `cmd_loglevel` never reaches the audit call (`admin_cmds.py:976-984`), so no audit
 record is written for a rejected logger name. Three or more arguments fall through to
 the same usage string, returned as an error (`botlog.py:303`) and replied as
 `{nick}: usage: ...` - also never audited, for the same reason. No arguments prints the
 current base level, global-debug flag, and active per-subsystem overrides
-(`botlog.py:261-271`) and is also not audited (`admin_cmds.py:924-925` replies
+(`botlog.py:261-271`) and is also not audited (`admin_cmds.py:974-975` replies
 directly, bypassing the `if parts:` audit branch).
 
 ### Shadow-ban persistence
 
 `.shadow-ban` and `.shadow-unban` are not pure in-memory state: both flush the set to
 the configured shadow-ban file (0600) via `await asyncio.to_thread(self._save_shadow_bans)`
-(`admin_cmds.py:881`, `851`; writer `internets.py:428-453`), so bans survive a restart.
+(`admin_cmds.py:931`, `851`; writer `internets.py:414-439`), so bans survive a restart.
 The path is `cfg["bot"]["shadow_bans_file"]`, defaulting to `shadow_bans.json`
-(`internets.py:269-270`), not a hardcoded filename.
-`IRCBot.__init__` loads the file back via `_load_shadow_bans()` (`internets.py:271`,
+(`internets.py:255-256`), not a hardcoded filename.
+`IRCBot.__init__` loads the file back via `_load_shadow_bans()` (`internets.py:257`,
 implementation `396-415`), tolerant of a missing or corrupt file - load failure just
 leaves the set empty rather than blocking startup.
 
 `cmd_shadow_ban` has two guards ahead of the add:
 
 - "shadow-ban store not initialised" if `_shadow_bans` is absent from the instance at
-  all (`admin_cmds.py:872-874`) - defensive, since the attribute is declared on
+  all (`admin_cmds.py:922-924`) - defensive, since the attribute is declared on
   `IRCBot.__init__` and not in the mixin's stub block (see the top of this section).
 - A no-op with "is already shadow-banned" if the target is already in the set
-  (`admin_cmds.py:875-877`), which also means a second `.shadow-ban` on an already-banned
+  (`admin_cmds.py:925-927`), which also means a second `.shadow-ban` on an already-banned
   nick does not overwrite an existing reason.
 
 Neither guard checks whether the target is itself an admin - only the bot's own nick and
-the calling admin are refused (`admin_cmds.py:866-871`). Combined with the dispatch-side
-drop running ahead of the flood limiter and `_require_admin` (`internets.py:617`), one
+the calling admin are refused (`admin_cmds.py:916-921`). Combined with the dispatch-side
+drop running ahead of the flood limiter and `_require_admin` (`internets.py:603`), one
 admin can shadow-ban another and silently lock them out of every command, `.deauth` and
 `.shutdown` included, with the ban persisted to disk across a restart.
 
 ### `.audit`: argument grammar and failure modes
 
-`cmd_audit` (`admin_cmds.py:714`) has three distinct failure replies before it gets to
+`cmd_audit` (`admin_cmds.py:764`) has three distinct failure replies before it gets to
 formatting anything:
 
 - Audit backend unavailable: constructing the audit object raises, replied as
-  `audit log unavailable: {e!r}` (`admin_cmds.py:717-721`).
+  `audit log unavailable: {e!r}` (`admin_cmds.py:767-771`).
 - Missing log file: reported as "audit log is empty (no records yet)"
-  (`admin_cmds.py:723-725`) - indistinguishable from "no records were ever written" by
+  (`admin_cmds.py:773-775`) - indistinguishable from "no records were ever written" by
   design, since the log is only created on first record.
 - Read failure once the file exists: an `OSError` during the read is reported as
-  `type(e).__name__` only, never `str(e)` (`admin_cmds.py:757-759`), matching the same
+  `type(e).__name__` only, never `str(e)` (`admin_cmds.py:807-809`), matching the same
   no-exception-text-to-IRC pattern used for `cmd_auth`'s backend errors.
 
-Argument handling (`admin_cmds.py:727-751`): the bare-digit form clamps `N` to `1..200`
-(`admin_cmds.py:736`); `grep <pattern>` widens the default tail window from 10 to 50
-matches before filtering (`admin_cmds.py:732-734`); `tail` narrows it to 5
-(`admin_cmds.py:738`); `verify` runs the HMAC-chain check and returns without touching
-the tail logic at all (`admin_cmds.py:739-747`); any other first token prints the usage
-string and returns without reading the file (`admin_cmds.py:748-751`).
+Argument handling (`admin_cmds.py:777-801`): the bare-digit form clamps `N` to `1..200`
+(`admin_cmds.py:786`); `grep <pattern>` widens the default tail window from 10 to 50
+matches before filtering (`admin_cmds.py:782-784`); `tail` narrows it to 5
+(`admin_cmds.py:788`); `verify` runs the HMAC-chain check and returns without touching
+the tail logic at all (`admin_cmds.py:789-797`); any other first token prints the usage
+string and returns without reading the file (`admin_cmds.py:798-801`).
 
 Once past argument handling, `cmd_audit` reads the entire audit log file into memory in
 one pass - `entries = [_audit_parse(line) for line in f if line.strip()]`
-(`admin_cmds.py:753-756`) - before any tail or grep slicing runs. The comment at that
+(`admin_cmds.py:803-806`) - before any tail or grep slicing runs. The comment at that
 line ("audit log files are small - append-only admin ops") is the only thing keeping
 this bounded; there is no size or line cap enforced in code.
 
 ### `.nick`: validation
 
 The new nick must match an RFC-2812-shaped pattern capped at 30 characters (regex at
-`admin_cmds.py:631`: first char a letter or one of the IRC special chars, then up to 29
+`admin_cmds.py:691`: first char a letter or one of the IRC special chars, then up to 29
 more of letter/digit/special/hyphen) or the command refuses with "invalid nick". A
 request for the nick the bot is already using is also refused, before anything is sent
-to the server (`admin_cmds.py:635-637`).
+to the server (`admin_cmds.py:695-697`).
 
-### `.help admin`: hardcoded command list
+### `.help admin`: derived from the dispatch table
 
-The admin command grid shown by `.help admin` is a literal, hand-maintained list
-(`admin_cmds.py:313-320`), not derived from `IRCBot._CORE` (the actual dispatch table).
-It omits the `die` alias for `.shutdown` and can silently drift from the real command
-set if a new admin `cmd_*` handler is added to `_CORE` without also updating this list.
+The admin command grid shown by `.help admin` is derived from `_CORE` (the actual
+dispatch table, which lives on `AdminCommandsMixin` beside the handlers) via
+`_core_admin_cmds()` (`admin_cmds.py:103`): every non-public command, one entry per
+handler method so aliases collapse (`die` folds into `shutdown`'s slot). The same
+derivation feeds the admin half of `.help all` (`admin_cmds.py:329`), and
+`.help <corecmd>` answers with the handler's docstring first line
+(`admin_cmds.py:383`) - for admins only, unless the command is in `_CORE_PUBLIC`
+(`admin_cmds.py:100`); unauthed callers still get the generic "no command" reply, so
+admin commands stay unenumerable without auth. Adding a handler to `_CORE` therefore
+surfaces it in help automatically; a regression test reconciles the grid against
+`_CORE` membership.
 
 ### Module grouping and the default `.help` output
 
 The no-arg `.help` output groups modules by category using `_MODULE_GROUPS`
 (`admin_cmds.py:43-56`), a fixed tuple of `(label, module names)` pairs. Any loaded
 module not named in any group falls into a "More" bucket instead of being dropped
-(`admin_cmds.py:387-390`), so a newly added module still shows up in `.help` with zero
+(`admin_cmds.py:430-433`), so a newly added module still shows up in `.help` with zero
 doc changes required; categorizing it into `_MODULE_GROUPS` is a cosmetic follow-up, not
 a correctness requirement. This holds only for a module that is both configured and
 declares at least one command: `cmd_help` skips any module whose `COMMANDS` dict is
-empty before grouping ever runs (`admin_cmds.py:277-278`), and an unconfigured module is
+empty before grouping ever runs (`admin_cmds.py:312-313`), and an unconfigured module is
 folded into `visible` only when the caller is an admin - `visible = set(configured +
-(hidden if admin else []))` (`admin_cmds.py:377`) - so it stays hidden from everyone
+(hidden if admin else []))` (`admin_cmds.py:420`) - so it stays hidden from everyone
 else.
 
 ### Module-level helpers
@@ -1181,35 +1188,35 @@ else.
 The command handlers above are backed by a set of module-level helper functions with no
 `cmd_*` entry point of their own:
 
-- `_wrap_list` (`admin_cmds.py:959`) - hanging-indent word wrap for the default `.help`
+- `_wrap_list` (`admin_cmds.py:1012`) - hanging-indent word wrap for the default `.help`
   module roster.
-- `_help_grid` (`admin_cmds.py:984`) - fixed-column uppercase grid used by `.help all`
+- `_help_grid` (`admin_cmds.py:1037`) - fixed-column uppercase grid used by `.help all`
   and `.help admin`.
-- `_humanize_delta` (`admin_cmds.py:1006`) - compact duration formatting for `.uptime`,
-  `.stats`, and `.fingerprint`'s "last seen" age (`admin_cmds.py:823`).
-- `_read_rss_kb` (`admin_cmds.py:1019`) - reads `/proc/self/status` for `.stats`'
+- `_humanize_delta` (`admin_cmds.py:1059`) - compact duration formatting for `.uptime`,
+  `.stats`, and `.fingerprint`'s "last seen" age (`admin_cmds.py:873`).
+- `_read_rss_kb` (`admin_cmds.py:1072`) - reads `/proc/self/status` for `.stats`'
   memory line; returns `None` on any non-POSIX platform or read failure, which is why
   the `.stats` table above renders "n/a" rather than a number in that case.
-- `_audit_parse` (`admin_cmds.py:1035`), `_audit_haystack` (`admin_cmds.py:1045`), and
-  `_audit_format` (`admin_cmds.py:1057`) - JSON-line parsing, grep-target flattening, and
+- `_audit_parse` (`admin_cmds.py:1088`), `_audit_haystack` (`admin_cmds.py:1098`), and
+  `_audit_format` (`admin_cmds.py:1110`) - JSON-line parsing, grep-target flattening, and
   IRC-line rendering for `.audit`; `_audit_format` truncates the `args` field to 160
-  characters (`admin_cmds.py:1071-1072`) purely for display compactness. This is
+  characters (`admin_cmds.py:1124-1125`) purely for display compactness. This is
   unrelated to reply splitting, which is handled unconditionally for any outbound
-  message by `_split_msg` (`internets.py:341-353`) once it exceeds `_MAX_BODY`
+  message by `_split_msg` (`internets.py:327-339`) once it exceeds `_MAX_BODY`
   (400 bytes, `internets.py:165`).
-- `_state_file` (`admin_cmds.py:1076`) and `_read_json_dict` (`admin_cmds.py:1089`) -
+- `_state_file` (`admin_cmds.py:1129`) and `_read_json_dict` (`admin_cmds.py:1142`) -
   resolve a module's configured state-file path and load it as a JSON dict, defaulting
   and failing safe (`{}`) on any error. These two are the read path behind
-  `.fingerprint`'s cross-module aggregation (`admin_cmds.py:816-817`, `781-782`,
+  `.fingerprint`'s cross-module aggregation (`admin_cmds.py:866-867`, `781-782`,
   `792-793`) - the same functions that make `.fingerprint` privacy-sensitive (see below)
   are what let it read another module's on-disk state without that module's cooperation.
-- `_count_audit_mentions` (`admin_cmds.py:1104-1132`) - walks the audit log counting a
+- `_count_audit_mentions` (`admin_cmds.py:1157-1185`) - walks the audit log counting a
   target nick as actor vs. as a substring of `args`; backs the "audit mentions" line in
   `.fingerprint`.
 
 ### Audit log split: what gets recorded and why
 
-`_audit` (`admin_cmds.py:92-111`) wraps `audit_log.default().record(...)`, resolving the
+`_audit` (`admin_cmds.py:127-146`) wraps `audit_log.default().record(...)`, resolving the
 actor's hostmask from `_nick_hosts` and swallowing every exception (audit failure must
 never break the admin action it is trying to log). See section 6 for the HMAC-chain
 mechanics.
@@ -1226,7 +1233,7 @@ command that grants admin.
   `auth_lockout`, `deauth` (only when a session actually existed), `load`, `unload`,
   `reload`, `reloadall`, `restart`, `rehash`, `mode`, `snomask`, `raw`, `say`, `act`,
   `nick`, `shadow-ban`, `shadow-unban`, `loglevel` (only when a change actually applied,
-  `admin_cmds.py:929-933`), `debug`, `shutdown`.
+  `admin_cmds.py:979-984`), `debug`, `shutdown`.
 - Not logged: `help`, `version`, `modules`, `uptime`, `stats`, `audit`, `shadow-list`,
   `fingerprint` - all pure reads with no side effect on bot or IRC state.
 
@@ -1234,8 +1241,8 @@ command that grants admin.
 that rule, but it aggregates PII (hostmask, channel presence, `.seen`/`.tell`/`.notes`
 data) about a *third party* who never consented to being looked up, and that lookup
 itself leaves no trace in the audit log - only mentions of the target nick *elsewhere* in
-the log are counted (`admin_cmds.py:847-849`, via `_count_audit_mentions`,
-`admin_cmds.py:1104-1132`). There is no record of which admin ran `.fingerprint` on whom.
+the log are counted (`admin_cmds.py:897-899`, via `_count_audit_mentions`,
+`admin_cmds.py:1157-1185`). There is no record of which admin ran `.fingerprint` on whom.
 This is an honest gap, not a bug: closing it would mean auditing every read, including
 `.stats`/`.uptime`, which carries no privacy content. If `.fingerprint` usage ever needs
 accountability, it is the one read-only command that should move into the logged set.
@@ -1243,54 +1250,54 @@ accountability, it is the one read-only command that should move into the logged
 ### Reply path and output sanitization
 
 Every handler replies via `self.preply(nick, reply_to, msg)` (declared as a stub at
-`admin_cmds.py:76`, implemented `internets.py:338-339`), which calls `reply(...,
+`admin_cmds.py:111`, implemented `internets.py:324-325`), which calls `reply(...,
 privileged=True)`: to a channel it sends a NOTICE to the caller rather than a channel
-PRIVMSG (`internets.py:329-336`), so admin-command output never appears in the channel
+PRIVMSG (`internets.py:315-322`), so admin-command output never appears in the channel
 itself. `.say`/`.act` are the deliberate exception - they call `self.privmsg(target,
-text)` directly (`admin_cmds.py:602`, `569`) to put the admin's text onto the wire as the
+text)` directly (`admin_cmds.py:652`, `569`) to put the admin's text onto the wire as the
 bot's own public speech, which is the entire point of the command.
 
 Sanitization is layered, and `admin_cmds.py` does **not** call `strip_ctrl`
 (`modules/base.py:strip_ctrl`, section 8) anywhere - that sanitizer exists for
 *third-party/upstream* text spliced into a reply. That holds for every command below
 except `.fingerprint`, which renders `seen.json`'s `detail` field
-(`admin_cmds.py:816-825`) - third-party text such as a PART/QUIT reason or a PRIVMSG
+(`admin_cmds.py:866-875`) - third-party text such as a PART/QUIT reason or a PRIVMSG
 body, with no sanitization on this read path. It stays safe only because
 `modules/seen.py:161` runs `strip_ctrl` on `detail` at write time, before it ever
 reaches disk - not because of any property of the admin path itself. What actually runs
 on the wire:
 
-- `_split_target_and_text` (`admin_cmds.py:574-589`) decides whether the first token of
+- `_split_target_and_text` (`admin_cmds.py:624-639`) decides whether the first token of
   `.say`/`.act`'s argument is a target or the start of the message text: a token -
   whether a channel sigil (`#`/`&`/`+`/`!`) or nick-shaped - counts as a target only if a
   second token follows it (the final gate is `looks_like_target and len(parts) > 1`,
-  `admin_cmds.py:587`); a lone token with nothing after it is not a target, so the whole
+  `admin_cmds.py:637`); a lone token with nothing after it is not a target, so the whole
   argument is treated as text and `target` falls back to `reply_to`
-  (`admin_cmds.py:589`). So `.say #chan` with no message text does not target `#chan` -
+  (`admin_cmds.py:639`). So `.say #chan` with no message text does not target `#chan` -
   it speaks the literal string `#chan` into `reply_to`. This is the entire reason both
   `.say #chan hi` and `.say hi` work as the same command.
 - Once a target is chosen, `.say`/`.act` each reject it if it contains a comma or a
-  space (`admin_cmds.py:599-601`, `565-567`). This specifically blocks the IRC
+  space (`admin_cmds.py:649-651`, `565-567`). This specifically blocks the IRC
   multi-target `PRIVMSG a,b,c` broadcast form - a single `.say` call can only ever speak
   to one target, never fan out to several at once.
 - `.raw` rejects CR, LF, and NUL and caps the line at 510 bytes before calling `send`
-  (`admin_cmds.py:561-566`) - this is a protocol-framing guard (one line, one command),
+  (`admin_cmds.py:611-616`) - this is a protocol-framing guard (one line, one command),
   not a content filter.
 - `.say`/`.act`/`.mode`/`.nick` perform no IRC-formatting-code (`\x02`/`\x03`/...)
   stripping, so an admin's bold/color codes reach the channel intact - this is correct
   for `.say`/`.act` (an admin may want to format their message) and irrelevant for `.mode`
   and `.nick`.
 - `.act` does not strip `\x01` from the admin's text before wrapping it as
-  `\x01ACTION {text}\x01` (`admin_cmds.py:618`), so an embedded `\x01` in the admin's own
+  `\x01ACTION {text}\x01` (`admin_cmds.py:668`), so an embedded `\x01` in the admin's own
   input terminates the CTCP framing early.
 - The universal transport backstop is in `sender.py:184`: every outbound line has `\r`,
   `\n`, and `\x00` stripped in `_write_line` immediately before it hits the socket,
   regardless of which command produced it. This makes `.raw`'s own CR/LF/NUL check
-  (`admin_cmds.py:561-562`) a redundant guard rather than the only line of defense - even
+  (`admin_cmds.py:611-612`) a redundant guard rather than the only line of defense - even
   a future admin command that forgot the check could not inject a second protocol line
   through the Sender.
 - `preply`/`privmsg`/`notice` split any message exceeding the wire body limit into
-  multiple lines on UTF-8 boundaries (`_split_msg`, `internets.py:341-353`); this is a
+  multiple lines on UTF-8 boundaries (`_split_msg`, `internets.py:327-339`); this is a
   framing concern, not a security one.
 
 Net effect: admin-command *output text* is trusted (it comes from an authenticated

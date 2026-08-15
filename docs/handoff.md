@@ -66,13 +66,13 @@ starts.
 
 ### Code execution surfaces
 
-1. **`.load <module>`** (`admin_cmds.py:432`, `internets.py:462`).
+1. **`.load <module>`** (`admin_cmds.py:475`, `internets.py:448`).
    `exec_module` runs arbitrary Python from any `.py` file in `MODULES_DIR`
    with the bot's full process privileges. The name is regex-constrained and
    path-traversal-checked, but anything already sitting in `modules/` is
    trusted. A compromised file in that directory is full code execution.
 
-2. **`.raw <line>`** (`admin_cmds.py:553`). Injects an unvalidated IRC
+2. **`.raw <line>`** (`admin_cmds.py:603`). Injects an unvalidated IRC
    protocol line onto the wire. Only CR/LF/NUL and the 510-byte cap are
    enforced; the command itself (KILL, OPER, SAMODE) is whatever the admin
    types. The audit log records it (with credential redaction), but the
@@ -96,7 +96,7 @@ starts.
 
 ### Security invariants that look like simplifications
 
-6. **`is_admin()` hostmask re-check.** (`internets.py:357`). Looks like it
+6. **`is_admin()` hostmask re-check.** (`internets.py:343`). Looks like it
    could be simplified to a set membership test. It cannot. The hostmask
    re-derivation on every call prevents nick-grab session inheritance. The
    `"unknown"` sentinel denial prevents a TOCTOU where the admin quits during
@@ -105,7 +105,7 @@ starts.
 
 7. **Auth session drop on NICK/QUIT.** Sessions are dropped, not migrated.
    Migrating would let a malicious server or nick-takeover launder an authed
-   session onto an attacker-chosen nick. See `internets.py:1079-1098`.
+   session onto an attacker-chosen nick. See `internets.py:1065-1084`.
 
 8. **DNS pinning in `_netsafe.py`.** The global `getaddrinfo` wrapper looks
    invasive. It is the SSRF defense. See ADR-003 in `docs/design-decisions.md`.
@@ -162,7 +162,7 @@ placeholders. Every reload path must go through `reload_config()`.
 
 `os.execv` preserves the PID. The restart path releases the process lock
 before `execv`; otherwise the new process image would see its own old PID as
-a live holder and refuse to start. See `internets.py:1458-1468`.
+a live holder and refuse to start. See `internets.py:1444-1454`.
 
 ### Password length is bytes, not characters
 
@@ -216,7 +216,7 @@ is driven by per-provider API params, not this key. See
 ### Metrics endpoint wiring
 
 `metrics.py` defines a full Prometheus exporter. It IS wired into
-`internets.py:1377-1384`, gated by `[metrics] enable = true`. The TODO
+`internets.py:1363-1370`, gated by `[metrics] enable = true`. The TODO
 comment in `metrics.py:9` is stale. The counters/gauges are incremented from
 various callsites regardless of whether the HTTP exporter is running.
 

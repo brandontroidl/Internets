@@ -198,6 +198,83 @@ class TestHelpGrid:
         assert rows[1] == "E"
 
 
+class TestCoreCommandHelp:
+    """The .help surface must cover every _CORE command - derived, not
+    hand-enumerated, so adding a core command can't silently skip help."""
+
+    @staticmethod
+    def _core_admin_primaries() -> set[str]:
+        """One command per admin handler method (aliases collapse)."""
+        prim: dict[str, str] = {}
+        for cmd, method in AdminCommandsMixin._CORE.items():
+            if cmd in AdminCommandsMixin._CORE_PUBLIC:
+                continue
+            prim.setdefault(method, cmd)
+        return set(prim.values())
+
+    @staticmethod
+    def _grid_tokens(msgs: list[str]) -> set[str]:
+        """Uppercase names from grid rows (skip the header line)."""
+        return {t for m in msgs[1:] for t in m.split() if not t.startswith("(")}
+
+    def test_core_moved_to_mixin(self):
+        assert isinstance(getattr(AdminCommandsMixin, "_CORE", None), dict)
+        assert "help" in AdminCommandsMixin._CORE_PUBLIC
+
+    def test_every_core_handler_has_docstring(self):
+        for method in set(AdminCommandsMixin._CORE.values()):
+            doc = getattr(AdminCommandsMixin, method).__doc__
+            assert doc and doc.strip(), f"{method} has no docstring for .help"
+
+    def test_help_admin_grid_matches_core(self, bot):
+        run(bot.cmd_help("op", "op", "admin"))
+        expected = {c.upper() for c in self._core_admin_primaries()}
+        assert self._grid_tokens(bot.msgs) == expected
+
+    def test_help_admin_collapses_aliases(self, bot):
+        run(bot.cmd_help("op", "op", "admin"))
+        toks = self._grid_tokens(bot.msgs)
+        assert "SHUTDOWN" in toks and "DIE" not in toks
+
+    def test_help_all_includes_admin_core_for_admin(self, bot):
+        run(bot.cmd_help("op", "op", "all"))
+        toks = self._grid_tokens(bot.msgs)
+        assert {"LOAD", "REHASH", "RELOADALL", "HELP"} <= toks
+
+    def test_help_all_excludes_admin_core_for_non_admin(self, bot):
+        bot._admin = False
+        run(bot.cmd_help("joe", "#chan", "all"))
+        toks = self._grid_tokens(bot.msgs)
+        assert "HELP" in toks and "LOAD" not in toks
+
+    def test_help_named_core_command_shows_description(self, bot):
+        run(bot.cmd_help("op", "op", "load"))
+        text = bot.text()
+        assert "no command" not in text
+        assert ".load" in text
+
+    def test_help_named_core_admin_command_hidden_from_non_admin(self, bot):
+        bot._admin = False
+        run(bot.cmd_help("joe", "#chan", "load"))
+        assert "no command 'load' loaded" in bot.text()
+
+    def test_help_named_public_core_command_for_non_admin(self, bot):
+        bot._admin = False
+        run(bot.cmd_help("joe", "#chan", "modules"))
+        text = bot.text()
+        assert "no command" not in text
+        assert ".modules" in text
+
+    def test_help_named_core_prefers_module_name_match(self, bot):
+        # A module whose NAME equals a core command must keep winning the
+        # .help lookup (the roster-over-single-line rule in cmd_help).
+        bot._modules["stats"] = FakeModule(
+            commands={"statcmd": "cmd_statcmd"},
+            help_lines=["  .statcmd - fake"])
+        run(bot.cmd_help("op", "op", "stats"))
+        assert "[stats]" in bot.text()
+
+
 class TestWrapList:
     def test_empty_returns_lead(self):
         assert admin_cmds._wrap_list([], "  Lead: ") == ["  Lead:"]

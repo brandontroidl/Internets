@@ -74,6 +74,41 @@ class AdminCommandsMixin:
     _AUTH_MAX_FAILS: int
     _AUTH_LOCKOUT: int
 
+    # Core command -> handler method.  Lives HERE (with the handlers) so the
+    # .help branches below can derive their listings from it - the old
+    # hand-copied grid in cmd_help drifted from the dispatch table.
+    # IRCBot dispatches from this same table via inheritance.
+    _CORE: dict[str, str] = {
+        "help": "cmd_help", "modules": "cmd_modules", "version": "cmd_version",
+        "auth": "cmd_auth", "deauth": "cmd_deauth",
+        "load": "cmd_load", "unload": "cmd_unload",
+        "reload": "cmd_reload", "reloadall": "cmd_reloadall",
+        "restart": "cmd_restart", "rehash": "cmd_rehash",
+        "mode": "cmd_mode", "snomask": "cmd_snomask", "raw": "cmd_raw",
+        "say": "cmd_say", "act": "cmd_act", "audit": "cmd_audit",
+        "uptime": "cmd_uptime", "nick": "cmd_nick", "stats": "cmd_stats",
+        "fingerprint": "cmd_fingerprint",
+        "shadow-ban":   "cmd_shadow_ban",
+        "shadow-unban": "cmd_shadow_unban",
+        "shadow-list":  "cmd_shadow_list",
+        "shutdown": "cmd_shutdown", "die": "cmd_shutdown",
+        "loglevel": "cmd_loglevel", "debug": "cmd_debug",
+    }
+    # Usable (and listed) without admin auth; everything else is admin-only
+    # in the help surface.  deauth stays admin-side: it only means anything
+    # to an authed session.
+    _CORE_PUBLIC: frozenset[str] = frozenset({"help", "modules", "version", "auth"})
+
+    @classmethod
+    def _core_admin_cmds(cls) -> list[str]:
+        """Admin core commands, one per handler (aliases collapse), sorted."""
+        prim: dict[str, str] = {}
+        for cmd, method in cls._CORE.items():
+            if cmd in cls._CORE_PUBLIC:
+                continue
+            prim.setdefault(method, cmd)
+        return sorted(prim.values())
+
     def preply(self, nick: str, reply_to: str, msg: str) -> None: ...
     def send(self, msg: str, priority: int = 1) -> None: ...
     def is_admin(self, nick: str) -> bool: ...
@@ -289,7 +324,9 @@ class AdminCommandsMixin:
 
             # ── .help all - full alphabetical grid of every command ─────
             if target == "all":
-                all_cmds: list[str] = ["help", "modules", "version", "auth"]
+                all_cmds: list[str] = sorted(self._CORE_PUBLIC)
+                if admin:
+                    all_cmds.extend(self._core_admin_cmds())
                 for name, inst in module_items:
                     if not inst.is_configured() and not admin:
                         continue
@@ -314,14 +351,7 @@ class AdminCommandsMixin:
                     self.preply(nick, reply_to,
                         f"no command 'admin' loaded - try {p}help")
                     return
-                adm = sorted([
-                    "deauth", "load", "unload", "reload", "reloadall",
-                    "restart", "rehash",
-                    "mode", "snomask", "raw", "nick", "say", "act",
-                    "shutdown", "loglevel", "debug",
-                    "uptime", "stats", "audit", "fingerprint",
-                    "shadow-ban", "shadow-unban", "shadow-list",
-                ])
+                adm = self._core_admin_cmds()
                 self.preply(nick, reply_to,
                     f"── Internets v{__version__} - admin commands ──")
                 for row in _help_grid(adm):
@@ -349,6 +379,19 @@ class AdminCommandsMixin:
                     for ln in hl:
                         self.preply(nick, reply_to, ln)
                     return
+
+            # ── .help <corecmd> - core command docstring line ───────────
+            # Admin core commands stay invisible to non-admins (fall through
+            # to the generic "no command" reply, same as before).
+            if target in self._CORE and (admin or target in self._CORE_PUBLIC):
+                method = self._CORE[target]
+                doc = (getattr(self, method).__doc__ or "").strip()
+                first = doc.split("\n", 1)[0].strip()
+                aliases = sorted(c for c, m in self._CORE.items()
+                                 if m == method and c != target)
+                names = "/".join([f"{p}{target}"] + [f"{p}{a}" for a in aliases])
+                self.preply(nick, reply_to, f"  {names} - {first}")
+                return
 
             # ── .help <cmd> - find module owning <cmd>; show its line ───
             for name, inst in module_items:
@@ -433,6 +476,7 @@ class AdminCommandsMixin:
     # ── Module management ────────────────────────────────────────────
 
     async def cmd_load(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Load a module by name.  Usage: .load <module>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}load <module>"); return
@@ -442,6 +486,7 @@ class AdminCommandsMixin:
         self._audit(nick, "load", mod)
 
     async def cmd_unload(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Unload a module and its commands.  Usage: .unload <module>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}unload <module>"); return
@@ -451,6 +496,7 @@ class AdminCommandsMixin:
         self._audit(nick, "unload", mod)
 
     async def cmd_reload(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Reload one module from disk.  Usage: .reload <module>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}reload <module>"); return
@@ -460,6 +506,7 @@ class AdminCommandsMixin:
         self._audit(nick, "reload", mod)
 
     async def cmd_reloadall(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Reload every loaded module from disk.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         with self._mod_lock:
             names = list(self._modules)
@@ -475,6 +522,7 @@ class AdminCommandsMixin:
         self._audit(nick, "reloadall", None)
 
     async def cmd_restart(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Restart the bot process.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         self.preply(nick, reply_to, "Restarting ...")
         log.info(f"Restart by {nick}")
@@ -531,6 +579,7 @@ class AdminCommandsMixin:
     # ── IRC oper / modes ─────────────────────────────────────────────
 
     async def cmd_mode(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Set a user or channel mode.  Usage: .mode <target> <modes>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}mode <+/-modes>"); return
@@ -543,6 +592,7 @@ class AdminCommandsMixin:
         self._audit(nick, "mode", mode_str)
 
     async def cmd_snomask(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Set the server-notice mask on the bot.  Usage: .snomask <mask>.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}snomask <+/-flags>"); return
@@ -928,6 +978,7 @@ class AdminCommandsMixin:
     # ── Logging ──────────────────────────────────────────────────────
 
     async def cmd_loglevel(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Get or set the log level.  Usage: .loglevel [DEBUG|INFO|WARNING|ERROR].  Admin only."""
         if not self._require_admin(nick, reply_to): return
         parts = arg.strip().split() if arg else []
         reply_fn = lambda msg: self.preply(nick, reply_to, msg)
@@ -943,6 +994,7 @@ class AdminCommandsMixin:
             self._audit(nick, "loglevel", " ".join(parts))
 
     async def cmd_debug(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Toggle DEBUG logging.  Usage: .debug on|off.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         parts = arg.strip().lower().split() if arg else []
         reply_fn = lambda msg: self.preply(nick, reply_to, msg)
@@ -953,6 +1005,7 @@ class AdminCommandsMixin:
     # ── Shutdown ─────────────────────────────────────────────────────
 
     async def cmd_shutdown(self, nick: str, reply_to: str, arg: str | None) -> None:
+        """Shut the bot down cleanly.  Admin only."""
         if not self._require_admin(nick, reply_to): return
         reason = arg.strip() if arg else "Shutting down"
         self.preply(nick, reply_to, f"Shutting down: {reason}")

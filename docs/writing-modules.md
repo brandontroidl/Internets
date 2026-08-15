@@ -17,7 +17,7 @@ cp modules/example.py modules/mymod.py
 ```
 
 Module names must match `^[a-z][a-z0-9_]*$`. A file named `MyMod.py` or
-`my-mod.py` is rejected by the loader (`internets.py:464`).
+`my-mod.py` is rejected by the loader (`internets.py:450`).
 
 ---
 

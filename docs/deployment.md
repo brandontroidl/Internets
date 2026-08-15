@@ -13,7 +13,7 @@ python internets.py            # run from a checkout
 internets                       # console_script (pyproject [project.scripts]: internets = "internets:_entry")
 ```
 
-Both land in `_entry()` (`internets.py:1485`). `_entry()` does, in order:
+Both land in `_entry()` (`internets.py:1471`). `_entry()` does, in order:
 
 1. **Drop-root guard** (POSIX). If `os.geteuid() == 0` and `INTERNETS_ALLOW_ROOT != "1"`,
    it logs `event=refused_root_start` and `sys.exit(1)`. Set `INTERNETS_ALLOW_ROOT=1`
@@ -50,7 +50,7 @@ start with `internets`.
 ### The interactive console
 
 When stdin is an interactive TTY and `--no-console` is not set, `_main` starts a console
-task (`internets.py:1396`). It runs the dispatch loop on a **daemon thread**
+task (`internets.py:1382`). It runs the dispatch loop on a **daemon thread**
 (`console.py:140`), not `asyncio.to_thread`, because `input()` parks on a blocking
 `read(0)` that nothing short of process death interrupts; a non-daemon thread would hang
 `asyncio.run()`'s `shutdown_default_executor()` forever on exit (`console.py:101` docstring).
@@ -97,7 +97,7 @@ channels / users / shadow_bans), whose tmp-and-rename writes would clobber each 
   idempotent.
 
 **Restart interaction:** `os.execv` preserves the PID. The restart path releases the lock
-*before* `execv` (`internets.py:1465`); otherwise the new image would see its own
+*before* `execv` (`internets.py:1451`); otherwise the new image would see its own
 preserved PID as a live holder and refuse to start. See [Restart](#restart-execv).
 
 **Recovering a stuck lock:** if the bot was `kill -9`'d on the same host, the next start
@@ -142,7 +142,7 @@ filter instance:
 
 Setting a base level via `.loglevel LEVEL` also forces `global_debug` off
 (`botlog.py:278`). `.rehash` resets the base level from `[logging] level` and clears all
-debug subsystems (`admin_cmds.py:500`).
+debug subsystems (`admin_cmds.py:548`).
 
 (startup-validation)=
 ### Startup validation (can refuse to boot)
@@ -208,8 +208,8 @@ classic gotcha.
 
 ### `.reload` / `.reloadall` - command modules only
 
-`reload_module` = `unload_module` then `load_module` (`internets.py:514`). `load_module`
-(`internets.py:462`) builds a *fresh* module object every time via
+`reload_module` = `unload_module` then `load_module` (`internets.py:500`). `load_module`
+(`internets.py:448`) builds a *fresh* module object every time via
 `importlib.util.spec_from_file_location` + `module_from_spec` + `exec_module`. It does NOT
 populate or consult `sys.modules` for the `modules.<name>` entry, so editing a command
 module file and running `.reload <name>` picks up the new source immediately. All module
@@ -230,10 +230,10 @@ loser, not the incumbent). Failures return a generic "see log for details" to IR
 
 ### `.rehash` / SIGHUP - config only, no link drop
 
-`.rehash` (`admin_cmds.py:483`) and SIGHUP (`_on_sighup`, `internets.py:1341`) both call
+`.rehash` (`admin_cmds.py:531`) and SIGHUP (`_on_sighup`, `internets.py:1327`) both call
 `reload_config()` to re-read `config.ini` + `config.local.ini` into the live `cfg`, then
 clear all admin sessions defensively. What this refreshes: values read at use-time, e.g.
-`command_prefix` via `_cmd_prefix()` (`internets.py:599`), which is why the core reads the
+`command_prefix` via `_cmd_prefix()` (`internets.py:585`), which is why the core reads the
 prefix live instead of the frozen import-time `CMD_PREFIX`.
 
 What it does **NOT** refresh: the import-time credential constants `NS_PW`/`OPER_PW`/
@@ -244,8 +244,8 @@ full restart. `.rehash` also re-validates the hash prefix and resets the log bas
 
 ### Restart (execv)
 
-`.restart` (`admin_cmds.py:473`) sets `bot._restart_flag = True` then `request_shutdown`.
-After `graceful_shutdown` completes and tasks drain, `_main` (`internets.py:1451`) closes
+`.restart` (`admin_cmds.py:520`) sets `bot._restart_flag = True` then `request_shutdown`.
+After `graceful_shutdown` completes and tasks drain, `_main` (`internets.py:1437`) closes
 logging file handlers (clean rotation across the restart), **releases the process lock**
 (PID survives `execv`, see [Process lock](#process-lock-single-instance-enforcement)),
 then re-execs:
@@ -260,10 +260,10 @@ files, dependency upgrades.
 
 ### Graceful restart from the shell
 
-Send SIGINT or SIGTERM (`_on_signal`, `internets.py:1326`) and relaunch. Both trigger
+Send SIGINT or SIGTERM (`_on_signal`, `internets.py:1312`) and relaunch. Both trigger
 `request_shutdown`; the handler is idempotent (a second signal during shutdown is logged
 and ignored). SIGHUP is rehash, not shutdown - do not use it to restart. On POSIX the
-handlers are installed via `loop.add_signal_handler` (`internets.py:1144`/`1116`); Windows has no
+handlers are installed via `loop.add_signal_handler` (`internets.py:1130`/`1116`); Windows has no
 such API and relies on `KeyboardInterrupt`.
 
 ```
@@ -272,7 +272,7 @@ kill -INT "$(cat internets.pid | cut -d'|' -f1)"   # graceful; sender drains QUI
 python internets.py
 ```
 
-`graceful_shutdown` (`internets.py:537`) order: save channels -> unload all modules (each
+`graceful_shutdown` (`internets.py:523`) order: save channels -> unload all modules (each
 gets `on_unload` to flush its own state) -> stop the store flush thread with a final write
 -> enqueue `QUIT` at priority 0 -> sleep `_SHUTDOWN_DRAIN_S` (2.0s) for the sender to drain
 -> stop sender -> close socket -> cancel background tasks -> stop the metrics server if
@@ -284,7 +284,7 @@ running -> flush logging handlers.
 registry singleton accepts increments regardless, but starts no listener until
 `enable()` + `expose()`.
 
-Enable in `config.ini` / `config.local.ini` (`internets.py:1377`):
+Enable in `config.ini` / `config.local.ini` (`internets.py:1363`):
 
 ```ini
 [metrics]
@@ -330,7 +330,7 @@ location changes are also flushed on shutdown/restart/signal.
 | `locations.json` | `locations_file` | per-nick saved locations | written 0600 (POSIX); user-supplied data |
 | `channels.json` | `channels_file` | joined channel list | restored on reconnect; saved first in shutdown |
 | `users.json` | `users_file` | per-channel nick/hostmask/seen (PII) | written 0600; pruned > `user_max_age_days` (default 90) on flush |
-| `shadow_bans.json` | `shadow_bans_file` | shadow-banned nicks (lowercased) | loaded at init (`internets.py:271`) |
+| `shadow_bans.json` | `shadow_bans_file` | shadow-banned nicks (lowercased) | loaded at init (`internets.py:257`) |
 | `steamids.json` | `[steam] steamids_file` | steam nick->ID map | module-managed |
 | `internets.pid` | (fixed) | process lock | see [Process lock](#process-lock-single-instance-enforcement) |
 

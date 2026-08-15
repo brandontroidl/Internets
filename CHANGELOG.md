@@ -37,7 +37,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **pyproject extras floors lagged the requirements.txt security policy.**
+- **Core commands were invisible to `.help <cmd>` and `.help all`.**
+  `.help load` / `.help rehash` / even `.help modules` replied "no command
+  loaded" because the per-command lookup only searched module command tables,
+  and `.help all` hard-coded four public names, so an authed admin's "full
+  grid" never listed the 23 admin commands. The `_CORE` dispatch table now
+  lives on `AdminCommandsMixin` next to the handlers, and every help branch
+  derives from it: `.help admin` and the admin half of `.help all` are
+  generated (aliases collapsed, so `die` no longer hides behind `shutdown`'s
+  grid slot), and `.help <corecmd>` prints the handler's docstring line with
+  its aliases (`.shutdown/.die - ...`). Admin commands stay hidden from
+  unauthed users, module names still win a name collision, and the ten core
+  handlers that had no docstring got one. A regression test reconciles the
+  `.help admin` grid against `_CORE` membership so the hand-copied-list drift
+  class is closed, not just this instance.
   The aiohttp 3.14.3 / cryptography 50.0.0 bumps landed in requirements.txt
   only, so `pip install internets-irc[async]` / `[weatherkit]` / `[all]` could
   still resolve versions the project's own security floors reject. The extras

@@ -121,23 +121,23 @@ not parsed into a `config.py` constant. Each is cited at its real reader.
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `ssl` | bool | `true` | `internets.py:715` | `getboolean("ssl", fallback=True)`. `true`=TLS (6697), `false`=plain TCP (6667). |
-| `ssl_verify` | bool | `true` | `internets.py:716` | `getboolean("ssl_verify", fallback=True)`. Set `false` for self-signed certs. |
+| `ssl` | bool | `true` | `internets.py:701` | `getboolean("ssl", fallback=True)`. `true`=TLS (6697), `false`=plain TCP (6667). |
+| `ssl_verify` | bool | `true` | `internets.py:702` | `getboolean("ssl_verify", fallback=True)`. Set `false` for self-signed certs. |
 
 `config.py` never reads `ssl`/`ssl_verify`; the connection layer does. Credential sends are
-gated on TLS being live regardless of these (`_tls_or_refuse`, `internets.py:696`): on a plaintext
+gated on TLS being live regardless of these (`_tls_or_refuse`, `internets.py:682`): on a plaintext
 connection the bot logs CRITICAL and refuses to send NickServ/SASL/server/oper credentials.
 
 ### [bot] - state file paths and tracking
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `locations_file` | str | `locations.json` | `internets.py:253` | Store backing file. |
-| `channels_file` | str | `channels.json` | `internets.py:254` | Joined channels, rejoined on restart. |
-| `users_file` | str | `users.json` | `internets.py:255` | User tracking store. |
-| `user_max_age_days` | int | `90` | `internets.py:256` | `int(cfg["bot"].get(...,"90"))`. Prune age for user-tracking entries. |
-| `services_nick` | str | `ChanServ` | `internets.py:249`, `modules/channels.py:52` | Services bot used for channel-ownership verification. |
-| `shadow_bans_file` | str | `shadow_bans.json` | `internets.py:269` | **Not in the template** - see Audit findings. Nicks whose traffic is silently dropped. |
+| `locations_file` | str | `locations.json` | `internets.py:239` | Store backing file. |
+| `channels_file` | str | `channels.json` | `internets.py:240` | Joined channels, rejoined on restart. |
+| `users_file` | str | `users.json` | `internets.py:241` | User tracking store. |
+| `user_max_age_days` | int | `90` | `internets.py:242` | `int(cfg["bot"].get(...,"90"))`. Prune age for user-tracking entries. |
+| `services_nick` | str | `ChanServ` | `internets.py:256`, `modules/channels.py:52` | Services bot used for channel-ownership verification. |
+| `shadow_bans_file` | str | `shadow_bans.json` | `internets.py:255` | **Not in the template** - see Audit findings. Nicks whose traffic is silently dropped. |
 
 `config.py` reads only `command_prefix`/`api_cooldown`/`flood_cooldown`/`modules_dir`/`autoload`
 from `[bot]`; the paths above are read by the core at construction time. There is no documented
@@ -148,7 +148,7 @@ default is also `"90"`).
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:505` context | Hash gating `.load`/`.unload`/`.reload`. |
+| `password_hash` | str | `""` | `botlog.py:174`, re-read in `admin_cmds.py:553` context | Hash gating `.load`/`.unload`/`.reload`. |
 
 `get_hash()` (`botlog.py:164-174`) calls `reload_config()` first, then reads
 `cfg["admin"].get("password_hash","").strip()` - so the value is re-pulled live (honoring the
@@ -211,12 +211,12 @@ legacy plaintext from - not where the runtime reads it.
 
 | Key | Type | Default | Reader | Notes |
 |---|---|---|---|---|
-| `enable` | bool | `false` | `internets.py:1377` | `getboolean("enable", False)`. Gates the whole exporter. |
-| `host` | str | `127.0.0.1` | `internets.py:1381` | Prometheus listener bind host. Do **not** bind `0.0.0.0` - endpoint is unauthenticated. |
-| `port` | int | `9779` | `internets.py:1382` | `getint("port", 9779)`. |
+| `enable` | bool | `false` | `internets.py:1363` | `getboolean("enable", False)`. Gates the whole exporter. |
+| `host` | str | `127.0.0.1` | `internets.py:1367` | Prometheus listener bind host. Do **not** bind `0.0.0.0` - endpoint is unauthenticated. |
+| `port` | int | `9779` | `internets.py:1368` | `getint("port", 9779)`. |
 
 The exporter only starts if the `[metrics]` section exists **and** `enable` is true
-(`internets.py:1377`). `/metrics` is unauthenticated and exposes internal counters
+(`internets.py:1363`). `/metrics` is unauthenticated and exposes internal counters
 (`config.ini.example:145-146`).
 
 ### [seen]
@@ -224,9 +224,9 @@ The exporter only starts if the `[metrics]` section exists **and** `enable` is t
 Not in the template. `modules/seen.py:63-64` reads `[seen] file` (default `seen.json`) if the
 section exists, else uses `seen.json`. Retention (`_max_age_days = 180`) is hardcoded in the
 module, not configurable (`modules/seen.py:70`). The generic `_state_file(cfg, section, default)`
-helper in `admin_cmds.py:1076-1081` follows the same `[section].file` convention for module state
+helper in `admin_cmds.py:1129-1134` follows the same `[section].file` convention for module state
 files; the literal key name `file` is hardcoded inside the helper (`cfg[section].get("file", default)`,
-`admin_cmds.py:1081`), so it implements the convention without taking the key as a parameter.
+`admin_cmds.py:1134`), so it implements the convention without taking the key as a parameter.
 
 ## Secret model
 
@@ -350,16 +350,16 @@ Verified against the readers above. These are the discrepancies the next maintai
    (`secret_store.py:60`) and the template promises "set this only if it differs from
    `nickserv_password`; if empty, falls back to `nickserv_password`" (`config.ini.example:184-186`).
    The SASL PLAIN auth path hardcodes `NS_PW` (the `nickserv_password` value):
-   `internets.py:914` calls `sasl_plain_payload(self._nick, NS_PW)`. The only place
+   `internets.py:900` calls `sasl_plain_payload(self._nick, NS_PW)`. The only place
    `"sasl_password"` appears in `internets.py` is `_tls_or_refuse("sasl_password")`
-   (`internets.py:902`), where it is just a **label** for the TLS-guard log, not a value read.
+   (`internets.py:888`), where it is just a **label** for the TLS-guard log, not a value read.
    Net effect: a distinct `sasl_password` is silently ignored - SASL always uses
    `nickserv_password`. The documented "differs from nickserv" case does not work. `set`/`list`/
    `migrate` still manage the name; only the runtime read is missing.
 
 3. **Keys read by code but absent from the template.** A fresh `config.ini` from
    `config.ini.example` will not mention these; they fall back to in-code defaults:
-   - `[bot] shadow_bans_file` (default `shadow_bans.json`, `internets.py:269`).
+   - `[bot] shadow_bans_file` (default `shadow_bans.json`, `internets.py:255`).
    - `[seen] file` (default `seen.json`, `modules/seen.py:64`); `[seen]` section entirely absent
      from the template.
 

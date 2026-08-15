@@ -11,7 +11,7 @@ this document.
 
 ### 1. The `_nick` value used for SASL is the runtime nick, not the config nick
 
-`internets.py:914` passes `self._nick` to `sasl_plain_payload`, not the
+`internets.py:900` passes `self._nick` to `sasl_plain_payload`, not the
 startup constant `NICKNAME`. On a 433 nick-collision (nick already taken), the
 bot appends `_` or a random suffix. SASL PLAIN authenticates as the bumped
 nick, not the intended one. This is correct: NickServ knows the bot's account
@@ -39,7 +39,7 @@ breaks out immediately.
 
 ### 4. NAMES only adds ops, never removes them
 
-`internets.py:996` uses `setdefault(chan, set())` and adds nicks to the chanop
+`internets.py:982` uses `setdefault(chan, set())` and adds nicks to the chanop
 set. It never clears the set before processing a NAMES reply. A NAMES refresh
 on an already-joined channel cannot remove someone who was deopped in the
 interim. Removal happens only through MODE (the `-o`/`-a`/`-q` path) or when
@@ -54,7 +54,7 @@ itself.
 
 ### 6. `.rehash` clears admin sessions only on the happy path
 
-`cmd_rehash` (`admin_cmds.py:483`) has two early-return paths (config reload
+`cmd_rehash` (`admin_cmds.py:531`) has two early-return paths (config reload
 failure, bad hash prefix) that return before reaching `self._authed.clear()`.
 Admin sessions survive both. This means a config-file syntax error preserves
 the current auth state rather than defensively clearing it.
@@ -108,7 +108,7 @@ passes `None` explicitly when no argument text follows the command word.
 
 `on_raw` is called synchronously on the event-loop thread for every inbound
 IRC line. A slow implementation blocks all dispatch. A raised exception is
-caught by the fanout loop (`internets.py:878-882`) so one module cannot break
+caught by the fanout loop (`internets.py:864-868`) so one module cannot break
 the pipeline, but it is logged as an error. Modules should do minimal work in
 `on_raw` and defer anything expensive.
 
@@ -172,7 +172,7 @@ module's commands from `.help` when no key is set.
 
 ### Registration then MOTD then channels
 
-The read loop (`internets.py:1182`) sends `PASS`/`CAP LS`/`NICK`/`USER` first.
+The read loop (`internets.py:1168`) sends `PASS`/`CAP LS`/`NICK`/`USER` first.
 After the MOTD end (numeric 376 or 422), it: ends CAP if still busy, applies
 user modes, falls back to NickServ `IDENTIFY` if SASL didn't already identify,
 sends `OPER` if configured, and starts the keepalive and rejoin background
@@ -182,7 +182,7 @@ channels and exposes its real host.
 
 ### Graceful shutdown order
 
-`graceful_shutdown` (`internets.py:537`): save channels -> unload all modules
+`graceful_shutdown` (`internets.py:523`): save channels -> unload all modules
 (each gets `on_unload` to flush state) -> stop the store flush thread with a
 final write -> enqueue QUIT at priority 0 -> sleep 2s for the sender to drain
 -> stop sender -> close socket -> cancel background tasks -> stop metrics ->
@@ -192,7 +192,7 @@ must flush last (so shutdown events are captured).
 
 ### Lock release before `execv` on restart
 
-`_main` releases the process lock before `os.execv` (`internets.py:1458-1468`).
+`_main` releases the process lock before `os.execv` (`internets.py:1444-1454`).
 `execv` preserves the PID, so leaving the lockfile in place would make the new
 process image see its own old PID as a live holder and refuse to start.
 

@@ -14,43 +14,43 @@ Files: `internets.py`, `sender.py`, `store.py`, `config.py`, `modules/base.py`,
 
 One process, one asyncio event loop, plus a small number of OS threads.
 
-Entry is `_entry()` (`internets.py:1485`). It runs a drop-root guard (refuses to start
-as euid 0 unless `INTERNETS_ALLOW_ROOT=1`, `internets.py:1507`), acquires a
+Entry is `_entry()` (`internets.py:1471`). It runs a drop-root guard (refuses to start
+as euid 0 unless `INTERNETS_ALLOW_ROOT=1`, `internets.py:1493`), acquires a
 `ProcessLock` on `./internets.pid`, and runs `asyncio.run(_main(lock))` inside the
-`with` block (`internets.py:1521-1523`). `LockHeld` aborts with exit 1
-(`internets.py:1529`). `KeyboardInterrupt` exits 130 (`internets.py:1528`).
+`with` block (`internets.py:1507-1509`). `LockHeld` aborts with exit 1
+(`internets.py:1515`). `KeyboardInterrupt` exits 130 (`internets.py:1514`).
 
-`_main()` (`internets.py:1369`) builds the `IRCBot`, optionally starts the Prometheus
-exporter when `[metrics] enable = true` (`internets.py:1377`), then creates up to two
+`_main()` (`internets.py:1355`) builds the `IRCBot`, optionally starts the Prometheus
+exporter when `[metrics] enable = true` (`internets.py:1363`), then creates up to two
 top-level tasks:
 
 - `console` - only when `--no-console` is unset AND stdin is an interactive TTY
-  (`internets.py:1396`; the TTY check is `console.should_skip_console()`). Skipping on a
+  (`internets.py:1382`; the TTY check is `console.should_skip_console()`). Skipping on a
   non-TTY refuses admin-equivalent console access to whatever is piped in. That is a
   security reason and it is the only one - there is no EOF spin loop to prevent, since
   the dispatch loop returns on the first `EOFError` (`console.py:81-82`).
-- `bot` - `bot.run()` (`internets.py:1401`).
+- `bot` - `bot.run()` (`internets.py:1387`).
 
-`asyncio.wait(..., FIRST_COMPLETED)` (`internets.py:1403`) blocks until either exits.
+`asyncio.wait(..., FIRST_COMPLETED)` (`internets.py:1389`) blocks until either exits.
 If the console exits first while the bot is still running, `_main` calls
 `bot.request_shutdown("Console exited")` and waits up to 10s for a graceful stop rather
 than cancelling the bot task (which would skip `graceful_shutdown`,
-`internets.py:1407-1416`).
+`internets.py:1393-1402`).
 
 Console teardown gotcha: the console is parked in `input()` on a dedicated
 `threading.Thread(daemon=True)` (`console.py:144`), blocked on a `read(0)` syscall that
 cancelling the asyncio task does not interrupt. It is deliberately NOT an
 `asyncio.to_thread` worker: such a worker is non-daemon and on the default executor, so
 `asyncio.run`'s `shutdown_default_executor()` would wait forever for it. `_main` closes
-`sys.stdin` (`internets.py:1436`) to unblock the read, and the thread being a daemon
+`sys.stdin` (`internets.py:1422`) to unblock the read, and the thread being a daemon
 guarantees cleanup completes even if it does not return. Full reasoning in section 10.2.
 
 After all tasks drain, if `bot._restart_flag` is set, `_main` flushes and closes log
 handlers, releases the process lock, and re-execs: `os.execv` on POSIX, a
-`subprocess.Popen` self-relaunch on Windows (`internets.py:1451-1482`). The lock is
+`subprocess.Popen` self-relaunch on Windows (`internets.py:1437-1468`). The lock is
 released BEFORE `execv` because `execv` preserves the PID; leaving the lockfile in place
 would make the new image see its own old PID as a live holder and refuse to start
-(`internets.py:1458-1468`).
+(`internets.py:1444-1454`).
 
 ### Threads
 
@@ -66,7 +66,7 @@ would make the new image see its own old PID as a live holder and refuse to star
 Cross-thread mutation is guarded by explicit locks (`threading.Lock`), not by relying on
 the GIL, so the design holds under free-threaded / GIL-disabled Python. Locks:
 `_mod_lock`, `_auth_lock` (guards `_authed` AND `_nick_hosts`), `_chanops_lock`
-(`internets.py:237-239`); the three `Store` dataset locks; the `RateLimiter` lock; the
+(`internets.py:244-246`); the three `Store` dataset locks; the `RateLimiter` lock; the
 `Sender._seq_lk`.
 
 ---
@@ -75,154 +75,154 @@ the GIL, so the design holds under free-threaded / GIL-disabled Python. Locks:
 
 ### Construction (`internets.py:232`)
 
-`__init__` wires the `Store` from `[bot]` file paths (`internets.py:252`), the
-`RateLimiter(FLOOD_CD, API_CD)` (`internets.py:258`), loads the shadow-ban set from
-`shadow_bans.json` (`internets.py:271`), and zeroes the metrics dict (reconnects,
+`__init__` wires the `Store` from `[bot]` file paths (`internets.py:238`), the
+`RateLimiter(FLOOD_CD, API_CD)` (`internets.py:244`), loads the shadow-ban set from
+`shadow_bans.json` (`internets.py:257`), and zeroes the metrics dict (reconnects,
 dropped_messages, command_timeouts, oversized_lines, sasl_failures, unexpected_errors -
-`internets.py:291`). `_loop`, `_sender`, `_reader`, `_writer`, `_stop` are created later
+`internets.py:277`). `_loop`, `_sender`, `_reader`, `_writer`, `_stop` are created later
 in `run()`.
 
 ISUPPORT-derived state starts from the module-level defaults
 `_DEFAULT_CHANMODE_TYPES` / `_DEFAULT_PREFIX_MODES` (`internets.py:153-157`), copied in
-the constructor (`internets.py:250-251`). They live at module level because `_connect`
-re-seeds them too (`internets.py:768-769`): the tables are per-connection facts, and a
+the constructor (`internets.py:257-258`). They live at module level because `_connect`
+re-seeds them too (`internets.py:754-755`): the tables are per-connection facts, and a
 reconnect can land on a different server. A well-formed `005` replaces them; a malformed
 token does not (section 9.3).
 
-### `run()` (`internets.py:1135`)
+### `run()` (`internets.py:1121`)
 
 1. Captures the running loop and creates `self._stop = asyncio.Event()`
-   (`internets.py:1136-1137`).
-2. POSIX signal handlers (`internets.py:1141-1151`): `SIGTERM`/`SIGINT` ->
+   (`internets.py:1122-1123`).
+2. POSIX signal handlers (`internets.py:1127-1137`): `SIGTERM`/`SIGINT` ->
    `_on_signal`; `SIGHUP` -> `_on_sighup`. On Windows the loop signal API is
    unsupported, so it relies on `KeyboardInterrupt` + the console
-   (`internets.py:1152-1155`).
-3. `autoload_modules()` (`internets.py:1157`) loads each name in `[bot] autoload`.
-4. Initial connect loop with jittered backoff (`internets.py:1161-1177`): retries
+   (`internets.py:1138-1141`).
+3. `autoload_modules()` (`internets.py:1143`) loads each name in `[bot] autoload`.
+4. Initial connect loop with jittered backoff (`internets.py:1147-1163`): retries
    `_connect()` until success or `_stop`, sleeping on `_stop.wait()` so a shutdown during
    backoff breaks out immediately.
-5. Registration + read loop (`internets.py:1182-1323`).
-6. `await self.graceful_shutdown()` on exit (`internets.py:1324`).
+5. Registration + read loop (`internets.py:1168-1309`).
+6. `await self.graceful_shutdown()` on exit (`internets.py:1310`).
 
-### `_connect()` (`internets.py:714`)
+### `_connect()` (`internets.py:700`)
 
 Reads `[irc] ssl` (default true) and `ssl_verify` (default true). Records
-`self._tls_active` for the credential-send guard (`internets.py:718`; see
-`_tls_or_refuse`, `internets.py:696`). TLS context defaults to TLS 1.3 minimum;
+`self._tls_active` for the credential-send guard (`internets.py:704`; see
+`_tls_or_refuse`, `internets.py:682`). TLS context defaults to TLS 1.3 minimum;
 `INTERNETS_ALLOW_TLS12=1` lowers it to 1.2 with a loud warning
-(`internets.py:731-738`). `ssl_verify=false` disables hostname + cert checks and warns
-on every connect (`internets.py:739-752`).
+(`internets.py:717-724`). `ssl_verify=false` disables hostname + cert checks and warns
+on every connect (`internets.py:725-738`).
 
 The socket is `asyncio.open_connection(SERVER, PORT, ssl=ssl_ctx, limit=self._READ_LIMIT)`
-(`internets.py:756`). `_READ_LIMIT = 8192` (`internets.py:175`) is the inbound stream
+(`internets.py:742`). `_READ_LIMIT = 8192` (`internets.py:175`) is the inbound stream
 buffer cap. A server line longer than this triggers `readline()` to raise (handled as an
 oversized line, see below) - it is the inbound counterpart to the `Sender`'s outbound
 `MAX_QUEUE`, and the two are unrelated bounds.
 
 `_connect` resets per-connection state, sets `_last_pong = time.monotonic()` for the
-keepalive clock (`internets.py:762`), clears `_chanops`, stops any old `Sender`, and
+keepalive clock (`internets.py:748`), clears `_chanops`, stops any old `Sender`, and
 creates a fresh `Sender(self._loop, on_drop=self._bump_dropped_metric)` then `.start`s it
-on the new writer (`internets.py:770-772`). The `on_drop` callback is what makes the
+on the new writer (`internets.py:756-758`). The `on_drop` callback is what makes the
 shutdown summary's `dropped=` count real rather than always zero
-(`internets.py:307-315`).
+(`internets.py:293-301`).
 
-### Registration and the read loop (`internets.py:1182`)
+### Registration and the read loop (`internets.py:1168`)
 
 On first pass (`registered` false): optionally `PASS` (gated on TLS), then `CAP LS 302`,
-`NICK`, `USER` (`internets.py:1185-1191`). All at priority 0.
+`NICK`, `USER` (`internets.py:1171-1177`). All at priority 0.
 
 The read loop does NOT block naively on `readline()`. It races two tasks with
-`asyncio.wait(FIRST_COMPLETED)` (`internets.py:1198-1206`):
+`asyncio.wait(FIRST_COMPLETED)` (`internets.py:1184-1192`):
 
 - `read_task` = `asyncio.wait_for(self._reader.readline(), timeout=self._READ_TIMEOUT)`
   (`_READ_TIMEOUT = 300`, `internets.py:176`).
 - `stop_task` = `self._stop.wait()`.
 
 This makes `.shutdown` / SIGINT react immediately instead of waiting up to ~5 minutes for
-the next server line (`internets.py:1192-1197`). If `_stop` won, the read task is
-cancelled/drained and the loop breaks (`internets.py:1211-1221`).
+the next server line (`internets.py:1178-1183`). If `_stop` won, the read task is
+cancelled/drained and the loop breaks (`internets.py:1197-1207`).
 
 Read outcomes:
 - Read timeout -> raised as `ConnectionResetError("Read timeout ...")`
-  (`internets.py:1224`), routing into the reconnect handler.
+  (`internets.py:1210`), routing into the reconnect handler.
 - Oversized line -> `ValueError`/`LimitOverrunError`: increments `oversized_lines`,
   drains to the next newline so the truncated tail is not parsed as a spurious line, and
-  `continue`s (`internets.py:1227-1240`).
+  `continue`s (`internets.py:1213-1226`).
 - Empty bytes -> `ConnectionResetError("Server closed connection")`
-  (`internets.py:1241`).
+  (`internets.py:1227`).
 - Otherwise decode (`errors="replace"`), strip CRLF, skip blank, log (AUTH lines
-  redacted, `internets.py:1244-1246`), and call `self._process(line)`.
+  redacted, `internets.py:1230-1232`), and call `self._process(line)`.
 
-MOTD gate: on the first `376`/`422` (`_RE_MOTD`, `internets.py:1248`) the bot ends CAP if
+MOTD gate: on the first `376`/`422` (`_RE_MOTD`, `internets.py:1234`) the bot ends CAP if
 still busy, applies `user_modes`, falls back to NickServ `IDENTIFY` if SASL did not
-already identify (`internets.py:1253-1255`), sends `OPER` if configured, and starts the
-`keepalive` and `rejoin` background tasks (`internets.py:1258-1259`). The `identified`
+already identify (`internets.py:1239-1241`), sends `OPER` if configured, and starts the
+`keepalive` and `rejoin` background tasks (`internets.py:1244-1245`). The `identified`
 flag makes this fire once per connection.
 
-### Reconnect (`internets.py:1261`)
+### Reconnect (`internets.py:1247`)
 
 Catches `ConnectionResetError`, `ConnectionAbortedError`, `BrokenPipeError`,
 `ssl.SSLError`, `OSError`. If `_stop` is set, breaks instead of reconnecting
-(`internets.py:1262`). Otherwise: increments `reconnects`, computes whether the failure is
+(`internets.py:1248`). Otherwise: increments `reconnects`, computes whether the failure is
 permanent (SASL hard-failed AND >=3 SASL failures AND no NickServ fallback,
-`internets.py:1274-1276`), cancels and clears all background tasks, stops the sender,
-clears `_authed` and `_nick_hosts` under `_auth_lock` (`internets.py:1281-1286`), and
+`internets.py:1260-1262`), cancels and clears all background tasks, stops the sender,
+clears `_authed` and `_nick_hosts` under `_auth_lock` (`internets.py:1267-1272`), and
 resets `identified/registered`. A permanent failure logs CRITICAL and breaks
-(`internets.py:1288-1291`); otherwise an inner loop retries `_connect()` with jittered
-backoff until success or `_stop` (`internets.py:1293-1310`).
+(`internets.py:1274-1277`); otherwise an inner loop retries `_connect()` with jittered
+backoff until success or `_stop` (`internets.py:1279-1296`).
 
 Backoff: `_backoff(attempt)` is `min(15 * 2**attempt, 300)` (`internets.py:109-115`);
 `_backoff_jittered` adds +/-25% equal jitter via `random.SystemRandom`
 (`internets.py:124-134`). So 15s, 30s, 60s, 120s, 240s, then capped at 300s, each spread
 by jitter to avoid a thundering herd. `attempt` resets to 0 on every successful connect.
 
-`asyncio.CancelledError` breaks the loop cooperatively (`internets.py:1311`). Any other
+`asyncio.CancelledError` breaks the loop cooperatively (`internets.py:1297`). Any other
 exception increments `unexpected_errors`, logs with traceback, and sleeps
-`_UNEXPECTED_SLEEP_S` (5s) on `_stop.wait()` before retrying (`internets.py:1315-1323`).
+`_UNEXPECTED_SLEEP_S` (5s) on `_stop.wait()` before retrying (`internets.py:1301-1309`).
 
-### Keepalive (`internets.py:778`)
+### Keepalive (`internets.py:764`)
 
 Every `_PING_INTERVAL` (90s) it checks `time.monotonic() - self._last_pong`. If that
 exceeds `_PONG_TIMEOUT` (240s) the link is presumed half-open: it closes the writer to
 force a reconnect now and returns (the read loop sees the dead transport,
-`internets.py:785-794`). Otherwise it sends `PING :<server>` at priority 0. `_last_pong`
-is refreshed by inbound PONG handling in `_process` (`internets.py:857-860`).
+`internets.py:771-780`). Otherwise it sends `PING :<server>` at priority 0. `_last_pong`
+is refreshed by inbound PONG handling in `_process` (`internets.py:843-846`).
 
-### Graceful shutdown (`internets.py:537`)
+### Graceful shutdown (`internets.py:523`)
 
 Ordered, each step guarded so one failure does not abort the rest:
 
-1. Save channel list to disk first (`internets.py:540`).
-2. Unload all modules so they flush their own state (`internets.py:543-547`).
+1. Save channel list to disk first (`internets.py:526`).
+2. Unload all modules so they flush their own state (`internets.py:529-533`).
 3. `self._store.stop()` - stops the flush thread and forces a final write
-   (`internets.py:550`).
-4. Enqueue the QUIT at priority 0 (bypasses the token bucket, `internets.py:556`).
+   (`internets.py:536`).
+4. Enqueue the QUIT at priority 0 (bypasses the token bucket, `internets.py:542`).
 5. `await asyncio.sleep(_SHUTDOWN_DRAIN_S)` (2.0s) to let the sender drain the QUIT
-   (`internets.py:559`).
-6. Stop the sender (`internets.py:562`).
-7. Close the socket (`internets.py:566-571`).
-8. Cancel remaining background tasks and gather them (`internets.py:573-577`).
-9. Stop the metrics server if running (`internets.py:579-584`).
+   (`internets.py:545`).
+6. Stop the sender (`internets.py:548`).
+7. Close the socket (`internets.py:552-557`).
+8. Cancel remaining background tasks and gather them (`internets.py:559-563`).
+9. Stop the metrics server if running (`internets.py:565-570`).
 10. Log the metrics summary and flush all log handlers (important before `execv`, which
-    skips atexit handlers, `internets.py:585-595`).
+    skips atexit handlers, `internets.py:571-581`).
 
 ### Signals and the use-time prefix read
 
-`request_shutdown` (`internets.py:525`) is idempotent and thread-safe: first reason wins,
+`request_shutdown` (`internets.py:511`) is idempotent and thread-safe: first reason wins,
 sets `_quit_msg`, and `call_soon_threadsafe(self._stop.set)`. The `_shutdown_initiated`
 guard stops a second SIGINT during a clean shutdown from rewriting the QUIT message.
 
-`_on_signal` (`internets.py:1326`) ignores a repeat signal once shutdown is in flight and
+`_on_signal` (`internets.py:1312`) ignores a repeat signal once shutdown is in flight and
 otherwise calls `request_shutdown`.
 
-`_on_sighup` (`internets.py:1341`) is rehash. It calls `config.reload_config()` (which
+`_on_sighup` (`internets.py:1327`) is rehash. It calls `config.reload_config()` (which
 re-reads BOTH `config.ini` and `config.local.ini` in order, `config.py:43-64`) and then
 clears admin sessions defensively. It deliberately does NOT reload the import-time
 credential constants `NS_PW`/`OPER_PW`/`SERVER_PW` - a live credential reload is out of
-scope, and the log says so (`internets.py:1351-1364`).
+scope, and the log says so (`internets.py:1337-1350`).
 
 Because config values that are read at USE time DO pick up a rehash, `_cmd_prefix()`
-(`internets.py:599`) reads `cfg["bot"]["command_prefix"]` live on every dispatch instead
+(`internets.py:585`) reads `cfg["bot"]["command_prefix"]` live on every dispatch instead
 of using the frozen import-time `CMD_PREFIX`. Without this, a `command_prefix` change via
 rehash would take effect for modules (which read `cfg` live) but leave the core dispatch
 frozen on the old prefix. It falls back to `CMD_PREFIX` only if the key is absent.
@@ -231,88 +231,88 @@ frozen on the old prefix. It falls back to `CMD_PREFIX` only if the key is absen
 
 ## 3. Line parse and dispatch pipeline
 
-### `_process(line)` (`internets.py:842`)
+### `_process(line)` (`internets.py:828`)
 
-1. `strip_tags(line)` FIRST (`internets.py:849`) - strips an IRCv3 `@tag` block so the
+1. `strip_tags(line)` FIRST (`internets.py:835`) - strips an IRCv3 `@tag` block so the
    PING/PONG and every later regex still match on a server-time-tagged line. A tagged PING
    left unanswered would ping-timeout the link.
 2. PING -> reflect `PONG :<payload[:400]>` at priority 0 and return
-   (`internets.py:850-854`).
+   (`internets.py:836-840`).
 3. PONG (command at token 0 or 1) -> `_last_pong = monotonic()` and return
-   (`internets.py:857-860`).
-4. Shadow-ban prefix filter (`internets.py:867-877`): if the source nick is shadow-banned,
+   (`internets.py:843-846`).
+4. Shadow-ban prefix filter (`internets.py:853-863`): if the source nick is shadow-banned,
    set `skip_module_fanout` so modules' `on_raw` never sees the line (the banned user is
    invisible to `.seen`/`.tell`/etc). A malformed prefix falls through (logged at debug) so
    modules still see the line.
 5. Module `on_raw` fanout over a snapshot of loaded modules, unless skipped; each call is
-   try-wrapped so one module cannot break the pipeline (`internets.py:878-882`).
+   try-wrapped so one module cannot break the pipeline (`internets.py:864-868`).
 6. `_handle_cap` / `_handle_numeric` / `_handle_membership` / `_handle_privmsg`, first
-   match wins (`internets.py:883-886`).
+   match wins (`internets.py:869-872`).
 
-`_handle_cap` (`internets.py:888`) drives CAP LS/ACK/NAK/NEW, SASL PLAIN (`AUTHENTICATE`,
+`_handle_cap` (`internets.py:874`) drives CAP LS/ACK/NAK/NEW, SASL PLAIN (`AUTHENTICATE`,
 903 success, 902/904/905 failure), and CAP END fallbacks. SASL uses the runtime `_nick`,
 not the startup constant, so a 433-bumped nick authenticates as its real session identity
-(`internets.py:910-914`). 904/905 set `_sasl_failed_permanently` (`internets.py:930`).
+(`internets.py:896-900`). 904/905 set `_sasl_failed_permanently` (`internets.py:916`).
 
-`_handle_numeric` (`internets.py:943`) handles 433 nick-collision (append `_`, then a
-random suffix once the length budget is hit, `internets.py:944-947`), 005 ISUPPORT
+`_handle_numeric` (`internets.py:929`) handles 433 nick-collision (append `_`, then a
+random suffix once the length budget is hit, `internets.py:930-933`), 005 ISUPPORT
 (`CHANMODES`/`PREFIX` reparse), 473 invite-only (ask services for INVITE), join-error
 numerics (discard the channel from the saved set), OPER 381/491, NickServ 900/NOTICE
 identify confirmation, 353 NAMES op-tracking, and channel MODE op changes. Op state lives
 in `_chanops` under `_chanops_lock`.
 
-`_handle_membership` (`internets.py:1016`) maps CHGHOST/ACCOUNT/INVITE/JOIN/PART/KICK/
+`_handle_membership` (`internets.py:1002`) maps CHGHOST/ACCOUNT/INVITE/JOIN/PART/KICK/
 QUIT/NICK to store updates and `_chanops`/`_nick_hosts` maintenance. Identity-change
 security: QUIT and NICK both DROP any admin session bound to the old nick rather than
 migrating it, so a nick-takeover cannot inherit an authed session
-(`internets.py:1074-1078`, `internets.py:1088-1094`).
+(`internets.py:1060-1064`, `internets.py:1074-1080`).
 
-### `_handle_privmsg(line)` (`internets.py:1101`)
+### `_handle_privmsg(line)` (`internets.py:1087`)
 
 Parses `:nick!user@host PRIVMSG target :text`. Updates `_nick_hosts[nick]` under
-`_auth_lock` (`internets.py:1107`) - this is the live hostmask that admin auth is checked
-against. CTCP (`\x01`) is ignored (`internets.py:1109`). `is_pm` is `target == self._nick`;
+`_auth_lock` (`internets.py:1093`) - this is the live hostmask that admin auth is checked
+against. CTCP (`\x01`) is ignored (`internets.py:1095`). `is_pm` is `target == self._nick`;
 `reply_to` is the nick in PM else the channel.
 
-Command extraction (`internets.py:1114-1126`): if the text starts with the live prefix,
+Command extraction (`internets.py:1100-1112`): if the text starts with the live prefix,
 the first token is the command. In PM ONLY, a bare leading token that matches a known
 command also dispatches (so `weather 10001` works in PM without the `.`). The valid-command
 set is `_CORE | _commands` under `_mod_lock`. Auth/deauth args are redacted in the log
-(`internets.py:1128`). Only known commands reach `_dispatch`.
+(`internets.py:1114`). Only known commands reach `_dispatch`.
 
-### `_dispatch(...)` (`internets.py:611`)
+### `_dispatch(...)` (`internets.py:597`)
 
 Gates, in order:
 
 1. Shadow-banned nick -> silent drop. No reply, no rate-limit consumption, no audit entry;
-   the banned user cannot distinguish ignored from offline (`internets.py:617-619`).
-2. `auth`/`deauth` outside PM -> told to use PM, abort (`internets.py:620-621`).
+   the banned user cannot distinguish ignored from offline (`internets.py:603-605`).
+2. `auth`/`deauth` outside PM -> told to use PM, abort (`internets.py:606-607`).
 3. `flood_limited(nick)` -> NOTICE "slow down", abort. Admins bypass this gate (the
-   `is_admin` flag passes through to `RateLimiter.flood_check`, `internets.py:386`).
+   `is_admin` flag passes through to `RateLimiter.flood_check`, `internets.py:372`).
 4. Channel-flood gate for non-PM: `channel_limited(reply_to)` catches coordinated floods
    across many distinct nicks that the per-nick limit cannot see. Silent (log only) so the
-   bot does not spam the channel about throttling (`internets.py:627-631`).
-5. Arg length > `_MAX_ARG_LEN` (400) -> NOTICE, abort (`internets.py:632`).
+   bot does not spam the channel about throttling (`internets.py:613-617`).
+5. Arg length > `_MAX_ARG_LEN` (400) -> NOTICE, abort (`internets.py:618`).
 6. `_active_cmd_tasks >= _MAX_TASKS` (50) -> NOTICE "bot is busy", abort. This is an O(1)
-   counter check, not an O(n) scan of `_tasks` (`internets.py:637-641`).
+   counter check, not an O(n) scan of `_tasks` (`internets.py:623-627`).
 7. Resolve handler: `_CORE` (built-in admin/meta commands) first, else `_commands` under
-   `_mod_lock` (`internets.py:643-650`).
+   `_mod_lock` (`internets.py:629-636`).
 8. If resolved: increment `_active_cmd_tasks` and stats, bump the Prometheus
    `commands_total`, create an `asyncio.Task` running `_run_cmd`, append to `_tasks`, and
    register a done-callback that decrements the counter and removes the task
-   (`internets.py:651-671`).
+   (`internets.py:637-657`).
 
 Every command runs as its own task; the bot does not await handlers inline.
 
-### `_run_cmd(...)` (`internets.py:673`)
+### `_run_cmd(...)` (`internets.py:659`)
 
 Wraps the handler in `asyncio.wait_for(..., timeout=self._CMD_TIMEOUT)` (60s) so a wedged
 handler cannot permanently hold one of the 50 task slots and eventually starve every
-command including admin ones (`internets.py:677-680`). `TimeoutError` -> increment
-`command_timeouts`, NOTICE the user (`internets.py:681-685`). `CancelledError` is
-re-raised (it is shutdown, not a timeout, `internets.py:686`). Any other exception ->
+command including admin ones (`internets.py:663-666`). `TimeoutError` -> increment
+`command_timeouts`, NOTICE the user (`internets.py:667-671`). `CancelledError` is
+re-raised (it is shutdown, not a timeout, `internets.py:672`). Any other exception ->
 increment `unexpected_errors`, log with traceback, send a GENERIC error notice (no stack
-trace or internal state to IRC, `internets.py:689-692`).
+trace or internal state to IRC, `internets.py:675-678`).
 
 ---
 
@@ -347,7 +347,7 @@ On the loop thread, tries `put_nowait`. On `QueueFull`:
 ### Drop accounting (`sender.py:77`)
 
 `_drop()` bumps the Prometheus `dropped_messages_total` AND, if the bot wired one, calls
-the `on_drop` callback. The bot passes `_bump_dropped_metric` (`internets.py:771`) so its
+the `on_drop` callback. The bot passes `_bump_dropped_metric` (`internets.py:757`) so its
 in-process `dropped_messages` counter - the honest source for the shutdown summary - is
 real. The callback runs on the loop thread inside `_drop` and is exception-guarded so a
 counter bump can never break sending (`sender.py:85-89`).
@@ -380,24 +380,24 @@ drain task and awaits it (`sender.py:67`).
 
 ### Load / unload / reload
 
-`load_module(name)` (`internets.py:462`), all under `_mod_lock`:
+`load_module(name)` (`internets.py:448`), all under `_mod_lock`:
 
-1. Validate the name against `^[a-z][a-z0-9_]*$` (`internets.py:464`).
-2. Reject if already loaded (`internets.py:466`).
-3. Require `modules/<name>.py` to exist (`internets.py:469`).
+1. Validate the name against `^[a-z][a-z0-9_]*$` (`internets.py:450`).
+2. Reject if already loaded (`internets.py:452`).
+3. Require `modules/<name>.py` to exist (`internets.py:455`).
 4. Symlink/escape guard: `path.resolve().relative_to(MODULES_DIR.resolve())` - blocks a
-   module path that escapes the modules directory (`internets.py:472-474`).
+   module path that escapes the modules directory (`internets.py:458-460`).
 5. `spec_from_file_location("modules.<name>", path)` + `module_from_spec` +
-   `spec.loader.exec_module(mod)` (`internets.py:476-478`). Require `setup`, call
+   `spec.loader.exec_module(mod)` (`internets.py:462-464`). Require `setup`, call
    `mod.setup(self)` to build the `BotModule` instance.
 6. Command-conflict check: reject if any command in `inst.COMMANDS` is already owned by a
-   different module (`internets.py:482-484`).
+   different module (`internets.py:468-470`).
 7. `on_load()`, register the instance and its commands into `_modules`/`_commands`
-   (`internets.py:485-488`).
+   (`internets.py:471-474`).
 
-`unload_module` (`internets.py:497`) calls `on_unload()`, removes the module's commands and
-the instance. `reload_module` (`internets.py:514`) is unload-then-load. `cmd_reloadall`
-(`admin_cmds.py:458`) snapshots the loaded names and reloads each.
+`unload_module` (`internets.py:483`) calls `on_unload()`, removes the module's commands and
+the instance. `reload_module` (`internets.py:500`) is unload-then-load. `cmd_reloadall`
+(`admin_cmds.py:504`) snapshots the loaded names and reloads each.
 
 The `BotModule.COMMANDS` contract is validated at class-definition time
 (`__init_subclass__`, `modules/base.py:220`): each mapped method must exist and be an
@@ -419,8 +419,8 @@ re-reading `geocode.py` from disk.
 
 Consequence: `.reload weather` and `.reloadall` refresh the COMMAND modules but NOT helper
 modules like `geocode` or `units`. An edit to `modules/geocode.py` is invisible until a
-full process restart. Use `.restart` (`admin_cmds.py:473`), which sets `_restart_flag` and
-requests shutdown; `_main` then `execv`s a brand-new interpreter (`internets.py:1451-1482`)
+full process restart. Use `.restart` (`admin_cmds.py:520`), which sets `_restart_flag` and
+requests shutdown; `_main` then `execv`s a brand-new interpreter (`internets.py:1437-1468`)
 with an empty `sys.modules`, so every file is re-read.
 
 ---
@@ -560,8 +560,8 @@ Startup validation at import (`botlog.py:180-229`):
 - `user_modes`/`oper_modes`/`oper_snomask` are validated against `^[a-zA-Z+\- ]*$`; an invalid
   value is fail-closed via `sys.exit(1)` (`botlog.py:221-227`).
 
-Log-flush discipline: handlers are flushed in `graceful_shutdown` (`internets.py:593-595`) and
-again before `execv` in `_main` (`internets.py:1447-1450`,`1416-1418`), because `execv` replaces
+Log-flush discipline: handlers are flushed in `graceful_shutdown` (`internets.py:579-581`) and
+again before `execv` in `_main` (`internets.py:1433-1436`,`1416-1418`), because `execv` replaces
 the process image without running atexit handlers - unflushed log records would be lost across a
 restart.
 
@@ -572,7 +572,7 @@ Pure functions over strings. No bot state, no I/O, no logging, no imports beyond
 orchestration and state while parsing stays independently testable
 (`tests/test_protocol.py`, plus the protocol block in `tests/run_tests.py`).
 
-The read loop decodes with `errors="replace"` (`internets.py:1242`), so every
+The read loop decodes with `errors="replace"` (`internets.py:1228`), so every
 string reaching these functions is already valid UTF-8 with U+FFFD substituted
 for undecodable bytes. That is what lets the wire-facing parsers be written
 without defensive decoding.
@@ -588,13 +588,13 @@ than an exception, so a malformed line cannot take the read loop down.
 `sasl_plain_payload` (`protocol.py:122-125`) is the exception and is not
 wire-facing: it encodes with `.encode("utf-8")` (`protocol.py:124`), which
 raises `UnicodeEncodeError` on any surrogate codepoint. Its inputs are
-`self._nick` and the configured NickServ password (`internets.py:914`), not
+`self._nick` and the configured NickServ password (`internets.py:900`), not
 server output, and the `errors="replace"` decode above means a surrogate cannot
 arrive from the wire in the first place.
 
 ### 9.2 Where the parsers sit in the pipeline
 
-`_process` (`internets.py:848`) calls `strip_tags` first (`internets.py:849`),
+`_process` (`internets.py:834`) calls `strip_tags` first (`internets.py:835`),
 then dispatches in a fixed order:
 
 | step | line | effect |
@@ -688,8 +688,8 @@ Three behaviours worth knowing:
   never rewound.
 
 At the call site the result is filtered hard: only `{"o","a","q"}` intersected
-with the advertised prefix modes (`internets.py:1003`), and only changes carrying
-a truthy parameter (`internets.py:1011`), drive `_chanops`. Halfop and voice are
+with the advertised prefix modes (`internets.py:989`), and only changes carrying
+a truthy parameter (`internets.py:997`), drive `_chanops`. Halfop and voice are
 parsed and then discarded.
 
 ### 9.5 `parse_names_entry` and its hardcoded prefix set
@@ -703,7 +703,7 @@ entirely prefix characters returns `(entry, False)` rather than an empty nick
 That set is a literal, not the PREFIX symbol map the bot already parsed and
 threw away. On a network advertising a prefix symbol outside `~&@%+`, `lstrip`
 leaves the symbol attached and the returned "nick" carries it into `_chanops`
-(`internets.py:998-999`). This is the one place the discarded symbol map would
+(`internets.py:984-985`). This is the one place the discarded symbol map would
 have earned its keep.
 
 ### 9.6 Gotchas
@@ -711,12 +711,12 @@ have earned its keep.
 - **A malformed ISUPPORT token no longer wipes a mode table** (fixed; see 9.3).
   It is now refused and logged as `event=isupport_malformed`. If chanop state
   looks wrong on one network, grep the log for that event first.
-- **NAMES only ever adds ops.** `internets.py:996` uses
+- **NAMES only ever adds ops.** `internets.py:982` uses
   `setdefault(chan, set())` and never clears the channel's set first, so a NAMES
   refresh on an already-joined channel cannot remove someone deopped in the
-  interim. Removal happens through MODE (`internets.py:1011`), PART/KICK
+  interim. Removal happens through MODE (`internets.py:997`), PART/KICK
   bookkeeping, or `_on_part` dropping the channel entirely.
-- **The MODE branch is channel-only.** `internets.py:1002` requires the target to
+- **The MODE branch is channel-only.** `internets.py:988` requires the target to
   start with `#`, `&`, `+` or `!`, so a user-MODE line is not parsed here.
 - Adding a parser here means adding it to `tests/test_protocol.py`. These
   functions are pure, so they are the cheapest thing in the repo to test
@@ -726,7 +726,7 @@ have earned its keep.
 
 An optional stdin REPL for the operator at the terminal running the bot. Enabled
 by default when stdin is a TTY, suppressed by `--no-console` or automatically
-when stdin is not interactive (`internets.py:1396-1401`).
+when stdin is not interactive (`internets.py:1382-1387`).
 
 ### 10.1 The console is an unauthenticated admin surface
 
@@ -779,7 +779,7 @@ shutdown race.
 `_wrap` also catches every exception out of the dispatch loop and logs it
 (`console.py:134-135`). A crash therefore does not propagate: `done` is still set
 by the `finally`, the console silently disappears, and `_main` treats the
-completed task as "console exited" (`internets.py:1407-1416`).
+completed task as "console exited" (`internets.py:1393-1402`).
 
 The three dispatched actions are safe to call from off-loop, each for its own
 reason (`console.py:66-73`): `apply_debug`/`apply_loglevel` mutate logger state,
@@ -805,7 +805,7 @@ argument uses the reason `"Console shutdown"` (`console.py:97`).
 
 **Only the command word is lowercased** (`console.py:86`); arguments keep their
 case. `cmd_debug` on the IRC side lowercases the entire argument string
-(`admin_cmds.py:937`), so `debug WEATHER` at the console and `.debug WEATHER`
+(`admin_cmds.py:988`), so `debug WEATHER` at the console and `.debug WEATHER`
 over IRC do not register the same subsystem. The console form preserves
 `WEATHER`, which matches no real logger name, so it prints a confirmation and
 changes nothing. Use lowercase subsystem names at the console.
@@ -815,7 +815,7 @@ output.
 
 ### 10.5 Shutdown interaction
 
-`_main` closes stdin and then cancels pending tasks (`internets.py:1436`,
+`_main` closes stdin and then cancels pending tasks (`internets.py:1422`,
 `:1402-1403`). Nothing is awaited between those two statements, so the event loop
 cannot deliver `done.set()` before the cancellation is applied. `run_console` -
 parked at `await done.wait()` (`console.py:147`) - therefore normally receives

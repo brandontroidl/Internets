@@ -233,22 +233,8 @@ class IRCBot(AdminCommandsMixin):
     _RE_MOTD      = re.compile(r":\S+ (?:376|422) ")
     _CHAN_RE      = re.compile(r"^[#&+!][^\s,\x07]{1,49}$")
 
-    _CORE: dict[str, str] = {
-        "help": "cmd_help", "modules": "cmd_modules", "version": "cmd_version",
-        "auth": "cmd_auth", "deauth": "cmd_deauth",
-        "load": "cmd_load", "unload": "cmd_unload",
-        "reload": "cmd_reload", "reloadall": "cmd_reloadall",
-        "restart": "cmd_restart", "rehash": "cmd_rehash",
-        "mode": "cmd_mode", "snomask": "cmd_snomask", "raw": "cmd_raw",
-        "say": "cmd_say", "act": "cmd_act", "audit": "cmd_audit",
-        "uptime": "cmd_uptime", "nick": "cmd_nick", "stats": "cmd_stats",
-        "fingerprint": "cmd_fingerprint",
-        "shadow-ban":   "cmd_shadow_ban",
-        "shadow-unban": "cmd_shadow_unban",
-        "shadow-list":  "cmd_shadow_list",
-        "shutdown": "cmd_shutdown", "die": "cmd_shutdown",
-        "loglevel": "cmd_loglevel", "debug": "cmd_debug",
-    }
+    # _CORE (command -> handler dispatch table) lives on AdminCommandsMixin,
+    # next to the handlers and the .help branches that derive from it.
 
     def __init__(self) -> None:
         self.cfg               = cfg
