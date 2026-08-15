@@ -77,7 +77,14 @@ security-policy
 
 ```{toctree}
 :maxdepth: 2
-:caption: IX. API Reference
+:caption: IX. Implementation Reference
+
+internals/index
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: X. API Reference
 
 autoapi/index
 ```
