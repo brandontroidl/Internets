@@ -30,8 +30,8 @@ Root files (13):
 - [ ] config.py
 - [ ] botlog.py
 - [x] store.py
-- [ ] secret_store.py
-- [ ] hashpw.py
+- [x] secret_store.py
+- [x] hashpw.py
 - [ ] audit_log.py
 - [ ] process_lock.py
 - [ ] metrics.py
@@ -101,3 +101,14 @@ protocol parse_isupport_prefix() return value discarded by its only caller while
 parse_names_entry hard-codes prefix sets (non-standard PREFIX desyncs chanop tracking);
 console: no test file at all, _print_status reaches into private fields, console
 events not routable by the per-subsystem debug facility it controls.
+
+Agent-reported (secret_store/hashpw batch): secret_store module docstring claims
+"encryption-at-rest" - implementation is plaintext + 0600, stale keyring-era claim;
+perms_ok() equality check refuses 0400 (stricter-than-0600 silently falls to defaults);
+set_value() rejects CR/LF in value but not name; sasl_password KNOWN_SECRETS entry has
+no consumer and its documented fallback does not exist; hashpw _FAST_HASH_THRESHOLD_S
+comment describes auto cost-backoff that is not implemented; scrypt/argon2 hash fns do
+not enforce MAX_PASSWORD_BYTES in-function; _verify_scrypt maps MemoryError to silent
+False; botlog _VALID_HASH_PREFIXES is a hand-maintained duplicate of verify_password's
+set; tests/test_hashpw.py has a stale "DOCUMENTED RESIDUAL" docstring contradicting the
+implemented verify-side guard; secret_store CLI handlers largely untested.
