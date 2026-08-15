@@ -226,3 +226,12 @@ activity in the bot log (pairs with regloc PII log finding). notes mutates dict
 unlocked while to_thread save iterates it; channels founder attribution can
 misattribute overlapping verifications in the 15s window.
 Test gaps: ALL TEN social/util modules have no test files.
+
+Agent-reported (batch I, fun): qr advertised 1000-char cap collides with the
+400-char strip_ctrl default so long inputs emit silently broken QR links
+(agent-verified defect); bored's intended bold is stripped by its own
+strip_ctrl call; bofh and dice skip rate_limited() (add to the cross-module
+rate-gate inconsistency family); dice en-dash output pinned by tests;
+nine modules carry a dead local _strip_ctrl alias; fml scraper coupled to a
+Tailwind class string. Test gaps: entire batch except dice untested; games.py
+absent from the async-handler contract test.
