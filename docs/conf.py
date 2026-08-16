@@ -107,7 +107,29 @@ latex_engine = "xelatex"
 latex_documents = [
     ("index", "internets.tex", "Internets Documentation", "Brandon Troidl", "manual"),
 ]
+
+# -- PDF table fitting --------------------------------------------------------
+# Markdown tables carry long symbol names and paths. Sphinx renders wide or
+# long tables as longtable with non-wrapping columns, which runs off the
+# printed page; the HTML build never shows this. Shrinking the table font
+# absorbs the moderate cases. The two tables that overflow badly regardless
+# carry an explicit {tabularcolumns} directive with p{} widths so LaTeX wraps
+# their cells. Verified by counting Overfull \hbox in docs/_build/latex/*.log,
+# not by reading the build script's stdout, which does not carry them.
+_TABLE_FIT = r"""
+\usepackage{etoolbox}
+\AtBeginEnvironment{longtable}{\footnotesize}
+\AtBeginEnvironment{tabulary}{\footnotesize}
+\AtBeginEnvironment{tabular}{\footnotesize}
+\setlength{\emergencystretch}{3em}
+% The generated index lists fully-qualified Python names that exceed the
+% index column width. Ragged right lets them break instead of running into
+% the margin.
+\AtBeginEnvironment{theindex}{\footnotesize\raggedright}
+"""
+
 latex_elements = {
+    'preamble': _TABLE_FIT,
     "papersize": "letterpaper",
     "pointsize": "10pt",
     # Force very long code/verbatim lines to wrap rather than overflow the

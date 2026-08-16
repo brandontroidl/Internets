@@ -8,6 +8,34 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Documentation reconstructed from the source, in two layers.** The narrative
+  guides under `docs/` were rewritten or written from scratch against the
+  implementation rather than against the previous documentation, and a new
+  implementation reference under `docs/internals/` documents every source file
+  in the tree: the thirteen root modules, all 75 files under `modules/`, the
+  five weather-aggregation core files, and each of the 32 provider
+  sub-packages. New guides cover the IRC protocol surface, the complete command
+  reference, operations, administration, troubleshooting, state and
+  persistence, logging and auditing, metrics, integrations, testing, and
+  provider authoring. Everything is wired into the Sphinx toctree, so the HTML
+  and the xelatex PDF both carry the whole corpus.
+
+- **`docs/known-issues.md`.** Reading the source to document it surfaced
+  defects that were not previously recorded anywhere. They are collected in one
+  register with the symbol, the observed behavior, how it was verified, and the
+  shape a fix would take. Nothing was changed in the code to make the
+  documentation tidier; the register is the deliverable, and the guides link to
+  it rather than describing broken behavior as working.
+
+- **`scripts/gen-command-reference.py`** generates the command inventory from
+  actual registration, with a `--check` mode that fails when a documented set
+  drifts from the registered one. **`scripts/verify-doc-citations.py`** resolves
+  every `file.py - Symbol.method()` citation in the documentation through the
+  cited file's AST, so a citation naming a symbol that no longer exists is a
+  build-time failure rather than a reader's discovery. Citation style moved from
+  line numbers to symbols for the same reason: line numbers rot on the next
+  edit, silently.
+
 - **`scholar` module: keyless scholarly search (`.papers` / `.thesis` /
   `.scholar`).** `.papers` finds works on OpenAlex by author ORCID iD (bare or
   orcid.org URL, newest first) or by free-text topic; `.thesis` searches
@@ -609,7 +637,7 @@ regrouped to mirror those `.help` categories.
 
 - New shared `modules.base.help_row(prefix, usage, desc)` formatter; **all
   command modules migrated to it** so `.help <module>` output aligns
-  uniformly (previously each module hand-padded to a different column, 18–50)
+  uniformly (previously each module hand-padded to a different column, 18-50)
   and renders correctly in both monospace and proportional IRC clients.
 - Normalized alias notation to `.cmd/.alias` everywhere (was a mix of
   `.cmd/.alias` and `.cmd / .alias`); surfaced previously-hidden short

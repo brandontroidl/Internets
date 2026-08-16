@@ -42,10 +42,13 @@ What actually happened, including any error messages.
 
 ## Logs
 
-The bot scrubs credentials from its **outbound IRC** logging automatically,
-but please double-check before pasting - local logs, tracebacks, and
-manual copy/paste can still contain tokens, passwords, hostmasks, or
-private channel content. Trim what you do not need.
+The bot redacts credentials from its **logging** of IRC lines in both
+directions, but that is all it covers: redaction matches credential
+verbs (`PASS`, `IDENTIFY`, `AUTHENTICATE`, `OPER`) in log output, and it
+never touches a reply the bot composed and sent to a channel. Tracebacks,
+provider error text, and a pasted channel transcript can all still carry
+an API key, a password, a hostmask, or private channel content. Read what
+you are pasting and trim it.
 
 <details>
 <summary>Relevant log output (click to expand)</summary>
