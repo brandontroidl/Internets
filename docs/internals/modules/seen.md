@@ -78,7 +78,7 @@ data still accumulates in memory and the unload flush persists it.
   cannot inject IRC formatting into bot-attributed `.seen` output; the comment
   notes this keeps the data clean both on disk and on replay.
 - Shadow-banned nicks are excluded upstream (the `on_raw` fanout skip in
-  `internets.py - _handle_line()`).
+  `internets.py - _process()`).
 - `cmd_seen` is rate-limited.
 
 ## Findings

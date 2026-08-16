@@ -203,11 +203,17 @@ Three module commands gate on `is_admin()` directly rather than through the
 core table:
 
 - `channels.cmd_users` - admin only, because the output is per-nick hostmask PII.
-- `health.cmd_health` - admin only; refers non-admins to `.uptime`.
+- `health.cmd_health` - admin only; its refusal message points non-admins at
+  `.uptime`, which is itself admin-gated. `health` also registers a public
+  `uptime`, but `_dispatch()` resolves `_CORE` first, so that registration is
+  permanently unreachable while `health.help_lines()` still advertises it. It
+  is the only shadowed command name in the whole command set.
 - `weather.cmd_providers` - admin only; exposes which provider keys are live.
 
 `channels.cmd_users` is admin-gated in code but advertised as public in its help
-entry, a documentation defect recorded in the reconstruction ledger.
+entry: `help_lines()` tags `join` and `part` with
+`[channel founder / admin]` and leaves `users` unmarked. The gate holds; only
+the advertisement is wrong.
 
 ### PM-only commands
 
@@ -301,7 +307,7 @@ would strip every comment from the file.
 
 Redaction scope is the important limit here: it operates on the **log path
 only**. The bytes on the wire are unchanged, and no PRIVMSG the bot composes is
-passed through it. See [section 10](#10-known-limitations) for the case where
+passed through it. See [section 12](#12-known-limitations) for the case where
 that matters.
 
 ### Verify-only versus recoverable
@@ -368,7 +374,7 @@ URL is fetched (`probe`, `scinews`):
 The divergence is real and is a known defect: `resolve_public()` does **not**
 test `is_site_local`, so `fec0::/10` passes the prober guard and is blocked by
 the netsafe guard. Verified by direct call. See
-[section 10](#10-known-limitations).
+[section 12](#12-known-limitations).
 
 The DNS pin is a module-level monkeypatch of `socket.getaddrinfo`, installed
 once at import and a no-op unless the calling thread has set a pin. It affects
@@ -466,7 +472,7 @@ reply bypasses it entirely.
 The main log (`internets.log`) is created by `logging.handlers.RotatingFileHandler`
 with no mode enforcement, so it lands at the process umask, typically 0644,
 while `config.ini` and `audit.log` are held at 0600. That log contains PII (see
-[section 10](#10-known-limitations)).
+[section 12](#12-known-limitations)).
 
 ## 9. Audit integrity
 

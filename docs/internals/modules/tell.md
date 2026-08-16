@@ -4,7 +4,7 @@
 
 `TellModule` queues a message for an absent user and flushes the queue the next
 time that user says anything the bot can see. Delivery is passive, via the
-synchronous `on_raw` hook (fanned out from `internets.py - _handle_line()`),
+synchronous `on_raw` hook (fanned out from `internets.py - _process()`),
 not via a command from the recipient. Base contract: [base](base.md).
 
 ## Commands
@@ -82,7 +82,7 @@ Unreadable/malformed store: warn, start empty (entries lacking
 - `.tell-list` and its ack go via NOTICE to the sender, so message contents are
   not echoed into the channel.
 - Shadow-banned nicks never reach `on_raw` (the fanout is skipped in
-  `internets.py - _handle_line()`), so they can neither trigger delivery nor be
+  `internets.py - _process()`), so they can neither trigger delivery nor be
   recorded.
 
 ## Findings

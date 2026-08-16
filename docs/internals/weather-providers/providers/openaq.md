@@ -147,7 +147,7 @@ monitor. There is no entry for `openaq` in
 
 - defect | `air_quality.fetch()` - `_PARAM_MAP` / `sensor_param` | The sensor's
   `parameter.units` field is read nowhere; only `parameter.name` is captured.
-  Every value is stored as-is and `modules/weather.py - _format_air_quality()`
+  Every value is stored as-is and `modules/weather.py - _format_aqi()`
   labels all of `pm25`/`pm10`/`o3`/`no2`/`co` as `ug/m3`. OpenAQ v3 reports
   gaseous species in the contributing network's native unit, which for many US
   and Asian feeds is ppm/ppb rather than ug/m3 [unverified against the live
@@ -161,7 +161,7 @@ monitor. There is no entry for `openaq` in
   lower-ranked `openmeteo` (rank 4) or `iqair` (rank 5) would have returned a
   real index.
 - questionable | `air_quality.fetch()` | `so2` is parsed and stored, but
-  `modules/weather.py - _format_air_quality()` renders `pm25`, `pm10`, `o3`,
+  `modules/weather.py - _format_aqi()` renders `pm25`, `pm10`, `o3`,
   `no2`, and `co` and never `so2`. The field is dead on the output path.
 - questionable | `openaq/air_quality.py` importing
   `..purpleair._codes.pm25_to_aqi` | A shared EPA conversion lives inside a

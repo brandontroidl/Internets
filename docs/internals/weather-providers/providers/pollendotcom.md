@@ -179,7 +179,7 @@ second), which this module does not implement.
 ## Findings
 
 - defect | `__init__.py - _f_pollendotcom()` versus
-  `modules/weather.py - Weather.__init__` (weather.py:555) | The two User-Agent
+  `modules/weather.py - WeatherModule.on_load()` (weather.py:555) | The two User-Agent
   lookups agree on the secret-store name (`weather_user_agent`) but **diverge on
   the ini fallback tier**: the factory calls
   `_cred(cfg, "weather_user_agent", "weather_user_agent")`, whose fallback is

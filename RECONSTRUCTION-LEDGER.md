@@ -487,3 +487,32 @@ same class as the meteomatics/nowcast entry) - found by hasattr sweep over all
 32 provider classes; config.ini.example provider_priority lists 30 of 32 ids
 (pollendotcom and google_pollen absent) under a comment claiming to list all 32.
 Programmatic ground truth: 32 providers, 12 keyless / 20 keyed.
+
+P3 CITATION VERIFICATION (content-based, not line remapping):
+Built scripts/verify-doc-citations.py - parses each cited file's AST and
+confirms the cited SYMBOL exists (incl. instance attributes assigned in
+methods), with path-affinity resolution for ambiguous basenames (base.py,
+__init__.py, air_quality.py exist many times over).
+Instrument was corrected twice before its verdict was trusted: (1) arbitrary
+basename resolution produced 72 false failures; (2) instance attributes and
+prose placeholders produced 3 more. Trap-tested: a deliberately broken symbol
+and an out-of-range line are both caught, then removed.
+RESULT: 1026 citations - 864 symbol citations VERIFIED, 0 failures, 0 missing
+files, 0 out-of-range line citations. 162 legacy line-number citations remain
+(47 of them in deployment.md, which is still queued for rewrite); they are
+range-valid but cannot be content-verified mechanically.
+Doc citation errors found and FIXED by this pass: internets.py - main ->
+_main (4, console.md); internets.py - _handle_line -> _process (4, across
+linktitle/seen/tell); modules/weather.py - _format_air_quality -> _format_aqi
+(2, openaq.md); modules/weather.py - Weather.__init__ ->
+WeatherModule.on_load() (pollendotcom.md).
+
+Agent-reported (security-model/configuration rewrite): [seen] max_age_days IS
+configurable (old configuration.md claimed hardcoded - internals/seen.md was
+already right); non-boolean [metrics] enable ABORTS startup (getboolean sits
+outside the try that catches host/port errors); health.cmd_health tells a
+non-admin to "try .uptime instead" which is ALSO admin-gated - and health's own
+public .uptime is the shadowed registration, so both halves are dead ends;
+config.ini.example also omits [seen]; KNOWN_SECRETS=41 vs CONFIG_LOCATIONS=40
+(sasl_password is the orphan); provider classification refined: 20 key-gated,
+11 keyless, 1 (pollendotcom) UA-gated but unconditionally registered.

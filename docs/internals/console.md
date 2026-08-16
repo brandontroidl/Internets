@@ -20,14 +20,14 @@ Belongs here:
 
 Deliberately not here:
 
-- Whether the console runs at all - `internets.py - main()` combines the operator
+- Whether the console runs at all - `internets.py - _main()` combines the operator
   opt-out (`--no-console`) with `should_skip_console()` (`internets.py:1416-1420`).
 - The semantics of `debug` / `loglevel` - `botlog.py - apply_debug()` /
   `apply_loglevel()`, shared with the IRC-side admin commands so both surfaces mutate
   the same `botlog.log_filter`.
 - Shutdown mechanics - `internets.py - IRCBot.request_shutdown()` /
   `graceful_shutdown()`; the console only requests.
-- Unblocking the `input()` call at shutdown - `internets.py - main()` closes
+- Unblocking the `input()` call at shutdown - `internets.py - _main()` closes
   `sys.stdin` (`internets.py:1454-1460`), which makes `input()` raise `EOFError`.
 
 ## Dependencies and dependents
@@ -44,7 +44,7 @@ Dependencies:
 
 Dependents:
 
-- `internets.py - main()` imports `run_console` and `should_skip_console` and owns the
+- `internets.py - _main()` imports `run_console` and `should_skip_console` and owns the
   gating, task creation, and shutdown coupling.
 - No test file imports console.py (see Findings).
 
@@ -160,7 +160,7 @@ None.
 Returns True when stdin is not an interactive TTY, or has no `isatty`, or is already
 closed. The docstring is explicit that this is purely a security gate (not an
 EOF-loop workaround, since the dispatch loop exits on the first `EOFError`). Caller:
-`internets.py - main()`. Pure read, no side effects.
+`internets.py - _main()`. Pure read, no side effects.
 
 ### `_console_dispatch_loop(bot) -> None`
 

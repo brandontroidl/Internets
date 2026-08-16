@@ -26,7 +26,7 @@ A URL is announced only when ALL hold:
 
 Each surviving URL spawns an `_announce()` task (`asyncio.ensure_future` with
 a done-callback that logs failures, `_task_done()`). Shadow-banned nicks never
-reach `on_raw` (fanout skip in `internets.py - _handle_line()`).
+reach `on_raw` (fanout skip in `internets.py - _process()`).
 
 ## Fetch paths (`LinkTitleModule._announce()`)
 
