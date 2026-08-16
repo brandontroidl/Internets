@@ -472,7 +472,8 @@ are what to think about.
 The state-file format itself is not the hazard: `store.py - Store._read()` has
 accepted both the v2 checksum envelope and a legacy bare payload since the
 initial commit. The hazard is the *handling* of a rejected file. Quarantine
-arrived in 5.0.0 (CHANGELOG, "Store quarantine instead of clobber"); before it,
+arrived in 4.0.0 (CHANGELOG, "Store quarantine instead of clobber", commit
+`a837365`, reachable from v4.0.0); before it,
 `Store._read()` reset to empty on a checksum, size, shape, or parse failure and
 the next flush overwrote the only copy. So a rollback below 5.0.0 turns one bad
 read into permanent loss of locations, channel state, and opt-out flags -

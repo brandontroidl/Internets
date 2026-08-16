@@ -793,6 +793,9 @@ remains valid until the issuer invalidates it.
 
 Rotation, grouped by where you go to do it:
 
+```{tabularcolumns} |l|p{0.50\linewidth}|p{0.24\linewidth}|
+```
+
 | Group | Names | Where |
 |---|---|---|
 | Admin auth | `password_hash` | `python hashpw.py`, then `.rehash` |
@@ -836,7 +839,7 @@ removing what you found.
 1. Fresh host, fresh OS, fresh dedicated unprivileged user.
 2. Fresh checkout at a known-good tag, dependencies installed from
    `requirements.txt` (see the lockfile defect in
-   [deployment.md](deployment.md#deploy-defect-lockfile)).
+   [deployment.md](deployment.md#known-defect-the-dependency-lockfile)).
 3. Fresh `config.ini` from `config.ini.example` via
    `python -m secret_store init`, then set every rotated secret with
    `python -m secret_store set`. Do **not** restore the old `config.ini`.

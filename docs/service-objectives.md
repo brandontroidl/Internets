@@ -256,7 +256,7 @@ success. Do not phrase it as an error rate.
 | `audit_log record failed` or `audit_log: write failed` in the log | any | page | **log.** Disk space and permissions on `audit.log`; [troubleshooting - Audit verify reports a broken chain](troubleshooting.md#audit-verify-reports-a-broken-chain) |
 | `.audit verify` reports a break | manual | page | [logging-and-auditing](logging-and-auditing.md), noting that `verify()` reads only the live segment |
 | `event=metrics_start_failed` in the log | any | ticket | **log.** Until fixed, every rule in [3.1](#31-availability) and [3.2](#32-responsiveness) is vacuous |
-| `event=store_flush_failed` equivalent (`Store flush failed` at ERROR) | any | ticket | **log.** Disk or permissions; state is dirty in memory and retries every 30 s |
+| `Store flush failed` at ERROR (`store.py - Store._flush_loop()`) | any | ticket | **log.** Disk space or permissions; the datasets stay dirty in memory and retry every 30 s |
 
 ### 3.4 Rules that should not be written
 

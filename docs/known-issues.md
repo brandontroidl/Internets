@@ -19,16 +19,22 @@ Severity is judged on user impact, not on how hard the fix is.
 **Symbol:** `modules/stocks.py - _try_providers()`
 
 When every configured finance provider fails, the handler builds an IRC reply
-containing `str(exception)` for each one. A `requests` transport error embeds the
-full request URL, and these providers carry credentials in the query string
-(`token=`, `apikey=`). A network outage while keys are configured therefore
-prints the keys into the channel.
+containing `str(exception)` for each one. A `requests` error embeds the full
+request URL, and these providers carry credentials in the query string
+(`token=`, `apikey=`), so the key is printed into the channel.
+
+The trigger is not rare. `raise_for_status()` renders the prepared URL, so an
+expired, revoked, or quota-exhausted key produces exactly this on the next
+`.stock`. That makes the defect self-amplifying: the most likely moment for
+every provider to fail at once is a key rotation, and a botched rotation
+publishes the replacement key the same way. Verified output shape:
+`401 Client Error: Unauthorized for url: https://finnhub.io/api/v1/quote?symbol=AAPL&token=<key>`.
 
 `sender.redact_secrets` does not save this: it applies to log output, not to
 `PRIVMSG` bodies.
 
-**Verified:** reproduced directly. A connect timeout to a `token=` URL yields
-exception text containing the token.
+**Verified:** reproduced directly, on both a connect timeout and a 401, each
+yielding exception text containing the token.
 
 **Fix shape:** aggregate `type(e).__name__` and the provider name, never
 `str(e)`. `weather_providers/pirateweather/_codes.py - safe_get_json()` already
@@ -104,8 +110,10 @@ a synchronous call already running on the loop.
 
 **Symbol:** `config.ini.example` `[bot] autoload`
 
-The template autoloads 67 modules, six of which record user-derived data:
-`seen`, `tell`, `linktitle`, `notes`, `remind`, `steam`. `privacy` is not among
+The template autoloads 67 modules, seven of which record user-derived data:
+`seen`, `tell`, `linktitle`, `notes`, `remind`, `steam`, and `location` (which
+stores saved locations through the core store rather than its own file, and
+logs nick-to-location pairs). `privacy` is not among
 them. A deployment that copies the template verbatim therefore tracks users and
 ships no `.forgetme`, `.optout`, `.optin`, or `.privacy` command. The erasure
 mechanism exists and works; it is switched off by default while collection is
@@ -291,7 +299,8 @@ In each case a mid-iteration mutation raises inside the worker and the save is
 silently skipped.
 
 Separately: **`os.fsync` appears nowhere in the codebase.** No writer syncs,
-including `audit_log.record()` and all six module JSON stores. `store.py`'s three
+including `audit_log.record()`, the five module-owned JSON stores (`seen`,
+`tell`, `notes`, `steam`, `remind`), and the core-owned `shadow_bans.json`. `store.py`'s three
 datasets survive a torn write through their checksum envelope and quarantine
 path; the module stores have no envelope, so a corrupt file is logged, loaded as
 empty, and overwritten by the next save.
@@ -374,9 +383,17 @@ so `python -m secret_store init` cannot bootstrap a packaged install either.
 the absence of `config.ini.example` from the built wheel in `dist/`.
 
 **Fix shape:** resolve `MODULES_DIR` against the package location when the
-CWD-relative path does not exist, and ship the template as package data. This is
-the same hand-enumerated-packaging failure family as the `py-modules` omission
-that shipped broken wheels in 3.0.0 and 4.0.0.
+CWD-relative path does not exist. This is the same hand-enumerated-packaging
+failure family as the `py-modules` omission that shipped broken wheels in 3.0.0
+and 4.0.0.
+
+The repository currently holds two positions on the missing template.
+`scripts/verify_install.sh` states it is "deliberately not shipped in the wheel -
+the bot is installed from a checkout", which would make the packaged install an
+unsupported shape rather than a defect. Decide which is intended and make the
+other artifact agree: either ship the template as package data, or say in the
+README and `docs/deployment.md` that a wheel install is not a supported
+deployment.
 
 ---
 
@@ -396,6 +413,122 @@ reach as well.
 **Fix shape:** set `UMask=0077` in the service unit as an immediate mitigation;
 longer term, drop the identifiers from those two log lines or move them to
 DEBUG.
+
+---
+
+## 16. The most privacy-invasive admin command is the only unaudited one
+
+**Symbol:** `admin_cmds.py - AdminCommandsMixin.cmd_fingerprint()`
+
+`.fingerprint` cross-references everything the bot knows about a nick: hostmask,
+channel membership, the `seen` record including its stored message context, tell
+counts, note count, and audit-log mentions. It reads `seen.json`, `tells.json`,
+and `notes.json` directly.
+
+Twenty-five call sites in `admin_cmds.py` write an audit record. This handler is
+not one of them, so the one command that assembles a complete profile of a user
+leaves no trace that it was run or against whom.
+
+The output is delivered to the admin by notice rather than to the channel, so
+this is an accountability gap rather than a disclosure one.
+
+**Verified:** counted `_audit(` call sites in the file and confirmed none falls
+inside this handler.
+
+**Fix shape:** call `self._audit(nick, "fingerprint", target)` like every
+sibling. Consider whether the target nick belongs in the record, which is itself
+a privacy decision.
+
+---
+
+## 17. Two retention controls disagree about what zero means
+
+**Symbols:** `store.py - Store.__init__()`, `modules/seen.py - SeenModule._prune_stale()`,
+`config.py` logging handler construction
+
+Three retention knobs, three behaviors at zero:
+
+| Setting | Zero means |
+| --- | --- |
+| `[bot] user_max_age_days` | floored to 1 day; pruning cannot be disabled |
+| `[seen] max_age_days` | pruning disabled entirely, records kept forever |
+| `[logging] max_bytes` | rotation disabled; the log grows without limit |
+
+The first fails safe. The second and third fail open, and the third compounds
+the log-privacy issue in item 15: the file that holds unerasable user data is
+also the one whose growth bound can be silently switched off.
+
+`[seen]` has no section in `config.ini.example` at all, so its 180-day default
+is the shipped behavior and an operator cannot change it from the template.
+
+**Verified:** read all three sites; confirmed `[seen]` absent from the template.
+
+**Fix shape:** decide one convention for zero across retention settings and
+apply it. If zero is to mean "disabled", say so in the template next to each
+key; if it is to mean "default", floor it as `store.py` does.
+
+---
+
+## 18. Opting out creates a record that never expires
+
+**Symbols:** `store.py - Store.set_opt_out()`, `store.py - Store._prune_users()`
+
+Calling `.optout` for a nick the bot has never seen creates a sentinel row in a
+synthetic `"*"` channel, and the pruner skips any row flagged `opted_out`. The
+exemption is correct in intent: pruning an opt-out flag would silently re-enrol
+the user. The consequence is that exercising a privacy control creates the one
+record in the store with unbounded retention, removable only by `.forgetme`.
+
+This is also why `.forgetme` miscounts for an untracked user, per item 4.
+
+**Verified:** read both methods.
+
+**Fix shape:** none required if documented, and it now is (see the privacy
+notice and `docs/data-retention.md`). If a bounded form is wanted, keep opt-out
+flags in a separate store from the tracking rows.
+
+---
+
+## 19. Outbound and observability blind spots
+
+Grouped: each is a place where the system does something the operator cannot
+see. Verified against source.
+
+- **Queued output is discarded uncounted on reconnect.**
+  `internets.py - IRCBot._connect()` builds a fresh `Sender`, and
+  `sender.py - Sender.start()` assigns a new queue. Anything still queued from
+  the disconnected period is garbage-collected rather than dropped through
+  `_safe_put()`, so the drop counters never see it. Treat
+  `internets_dropped_messages_total` as a floor, not a count.
+- **The thread pool behind `asyncio.to_thread` is unbounded by any project
+  setting and invisible.** Nothing calls `loop.set_default_executor()`, so the
+  default pool is `min(32, cpu_count + 4)` - five workers on a single-core host.
+  Blocking handlers queue behind it with no metric, log line, or command
+  exposing depth, while the task cap of 50 suggests far more headroom than
+  exists.
+- **Geocoding runs outside the weather chain budget.** `modules/weather.py`
+  awaits `geocode()` before the dispatcher starts its 45 s chain budget. The
+  worst case is several sequential Nominatim requests at 10 s each, which can
+  approach the 60 s command timeout on its own. The cache makes this rare rather
+  than bounded.
+- **The provider circuit breaker counts failures, not latency.** A provider that
+  answers successfully but slowly never trips it while consuming most of the
+  chain budget on every command. `ProviderHealth.avg_latency` is already
+  computed and simply not exported.
+- **Audit write failure is unmeasurable.** `audit_log.py - AuditLog.record()`
+  increments its counter only after a successful append, and the caller swallows
+  the error at warning level. A full disk looks identical to an idle bot at the
+  exporter.
+- **`.help all` costs about a minute of the global outbound budget.** The grid
+  is roughly 44 to 50 lines; at a burst of 5 then one per 1.5 s it takes near a
+  minute to arrive and occupies a quarter of the 200-slot queue. The handler
+  returns immediately because `preply` only enqueues, so the command timeout
+  never applies and nothing records the delivery delay.
+- **`on_raw` fans out to every loaded module on the event loop for every
+  inbound line.** With the shipped autoload that is roughly 67 calls per line,
+  of which four modules do any work; the rest inherit a no-op.
+- **`metrics.py` implements only counters and gauges.** Any latency objective
+  needs a new metric type, not just a new call site.
 
 ---
 

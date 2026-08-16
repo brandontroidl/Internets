@@ -46,7 +46,8 @@ This is recorded as item 4 in [docs/known-issues.md](docs/known-issues.md).
 
 All of it is plain files in the bot's working directory. There is no database
 and nothing is sent to a central service operated by this project. Every file
-below is written 0600 (owner-only) except where noted.
+below is written 0600 (owner-only) with one exception: `internets.log` takes
+whatever the process umask gives it, and its `.bak` siblings do too.
 
 | What | Where it lands |
 | --- | --- |

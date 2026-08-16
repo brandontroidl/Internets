@@ -141,6 +141,15 @@ jobs:
         run: |
           for f in modules/*.py; do python -m py_compile "$f"; done
 
+      # Documentation gates. Both scripts read source and fail on drift, so a
+      # code change that invalidates the docs fails here rather than being
+      # found by a reader. Neither needs the project's runtime dependencies.
+      - name: Docs - every source citation resolves to a real symbol
+        run: python scripts/verify-doc-citations.py
+
+      - name: Docs - command reference matches registered commands
+        run: python scripts/gen-command-reference.py --check docs/command-reference.md
+
   package:
     runs-on: ubuntu-latest
     name: Packaging (wheel install gate)

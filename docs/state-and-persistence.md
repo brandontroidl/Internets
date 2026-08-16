@@ -54,7 +54,7 @@ deployment root, or set absolute paths in `config.ini`. See
 | `internets.pid` | `process_lock.py` | (fixed, set by `_entry()`) | `pid\|start_time\|hostname` |
 | `internets.log` | `botlog.py` | `[logging] log_file` | application log |
 
-Only `[seen]` and `[steam]` appear in `config.ini.example`; the `[tell]`,
+Only `[steam]` appears in `config.ini.example`; the `[tell]`,
 `[notes]`, `[remind]`, and `[bot] shadow_bans_file` keys are read by the code
 but not templated, so those four files land on their built-in defaults unless
 an operator adds the sections by hand.

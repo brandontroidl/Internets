@@ -151,9 +151,10 @@ evidence that replies are being delivered.
 is instructive.
 
 `admin_cmds.py - cmd_help()` collapses aliases to one name per handler method
-and renders the result through `_help_grid(items, cols=4)`. Across the 69
-module files in `modules/`, `COMMANDS` maps declare 202 names resolving to 165
-distinct handler methods; core adds 4 public and 23 admin methods.
+and renders the result through `_help_grid(items, cols=4)`. Across the 69 files
+in `modules/` that declare a `COMMANDS` map, those maps hold 202 names
+resolving to 165 distinct handler methods; `admin_cmds.py - _CORE` adds 4
+public and 23 admin methods on top.
 
 | Caller | Names shown | Grid rows | Total lines |
 | --- | --- | --- | --- |
@@ -424,7 +425,7 @@ under them is exactly what the test is measuring.
    the sender, and the loop in isolation.
 2. **Blocking-path load.** Commands that go through `asyncio.to_thread`, driven
    past the executor's worker count (5 to 8 on a typical host), to characterize
-   the pool queueing described in [1.4](#14-the-thread-pool-behind-to-thread).
+   the pool queueing described in section 1.4 above.
 3. **Provider-path load.** The weather commands against a **stubbed** provider
    endpoint with injected latency, including a case at 28 s (under
    `_PER_CALL_BUDGET`, so the breaker never trips) to reproduce the slow-but-

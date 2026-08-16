@@ -58,7 +58,11 @@ configuration
 operations
 administration
 troubleshooting
+incident-response
+disaster-recovery
 metrics-and-observability
+service-objectives
+performance
 integrations
 ```
 
@@ -72,6 +76,7 @@ modules
 writing-modules
 providers
 writing-providers
+output-conventions
 testing
 contributing
 ```
@@ -89,6 +94,7 @@ design-decisions
 
 handoff
 knowledge-recovery
+documentation-governance
 ```
 
 ```{toctree}
@@ -96,6 +102,9 @@ knowledge-recovery
 :caption: VIII. Project
 
 known-issues
+versioning-and-support
+dependencies
+release-process
 changelog
 security-policy
 privacy
