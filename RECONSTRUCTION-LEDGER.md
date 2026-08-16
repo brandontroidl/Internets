@@ -516,3 +516,34 @@ public .uptime is the shadowed registration, so both halves are dead ends;
 config.ini.example also omits [seen]; KNOWN_SECRETS=41 vs CONFIG_LOCATIONS=40
 (sasl_password is the orphan); provider classification refined: 20 key-gated,
 11 keyless, 1 (pollendotcom) UA-gated but unconditionally registered.
+
+PRIVACY / COMPLIANCE DEFECT (VERIFIED by orchestrator): config.ini.example
+autoload lists 67 modules including seen, tell, linktitle, notes, remind and
+steam - all of which record user-derived data - but does NOT include privacy.
+A deployment that copies the shipped template verbatim therefore tracks users
+while shipping NO .forgetme, .optout, .optin or .privacy command: the
+right-to-erasure entry point is absent by default. health and example are also
+absent (health is merely inconvenient; privacy is the compliance item).
+Fix shape (owner decision): add privacy (and health) to the template autoload.
+
+Count correction (agent-verified by instantiation, supersedes my earlier
+figure): 75 .py files under modules/; 70 define a loadable BotModule subclass;
+only 69 register at least one command - linktitle registers ZERO and runs
+entirely from the on_raw fanout. Use "70 modules, 69 command-registering".
+Weather key-gating confirmed EXACTLY 20 of 32 gated / 12 keyless by AST-walking
+the factories for a return-None path (weatherkit additionally needs PyJWT).
+
+Agent-reported (modules/writing-modules rewrite): a FAILED .reload leaves the
+module UNLOADED - reload_module unloads then loads, so a syntax error while
+editing deregisters the commands with nothing to restore them (.reloadall does
+this for every name in its FAILED: list); setup(bot) runs BEFORE the
+command-conflict check so side effects fire on a rejected load, and on_load()
+runs before registration with no on_unload() on the raise path (resource leak);
+.modules advertises _netsafe as available though load_module's name regex then
+rejects it; search.py does NOT override is_configured despite requiring
+brave_key, so .si/.gi stay advertised on a keyless install (7 modules do
+override: imdb, lastfm, satpass, steam, stocks, twitch, youtube).
+NUANCE correcting my earlier rate-gate wording: the dispatcher already applies
+flood_limited (3s, admin bypass) to EVERY command, so usage-first ordering
+bypasses only the 10s API cooldown - a usage reply per 3s window, not unbounded
+spam. Argument-less commands correctly gate first (no usage branch).

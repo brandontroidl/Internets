@@ -118,8 +118,8 @@ digraph load {
    A symlink whose real path escapes the modules directory is blocked.
 5. **Fresh execution.** `importlib.util.spec_from_file_location("modules.
    <name>", path)` then `exec_module`. The file is executed from source on
-   every load, and the resulting module object is deliberately not inserted
-   into `sys.modules`, which is what makes `.reload` pick up edits.
+   every load, and the resulting module object is not inserted into
+   `sys.modules`. That is what makes `.reload` pick up edits to the file.
    `BotModule.__init_subclass__` runs here, so a bad `COMMANDS` mapping fails
    the load at this point.
 6. **`setup` presence check**, then `inst = mod.setup(self)`.
