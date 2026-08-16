@@ -298,6 +298,9 @@ Trace of `.weather tokyo` to a reply, each function crossed:
 
 ### Provider catalog (registration order; credential = secret_store name)
 
+```{tabularcolumns} |l|l|p{0.36\linewidth}|p{0.26\linewidth}|
+```
+
 | id | credential | capabilities | notes |
 |---|---|---|---|
 | nws | none | current, forecast, hourly, alerts, marine | US only; api.weather.gov; multi-hop |

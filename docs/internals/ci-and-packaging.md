@@ -194,6 +194,38 @@ in the repo violates this contract - see Findings.
 - `.github/PULL_REQUEST_TEMPLATE.md` - summary/linked-issue skeleton asking
   for motivation over mechanics.
 
+## docs/conf.py - the documentation build
+
+`docs/conf.py` is the only source file in the tree that this reference does not
+document as bot code, because it is build tooling. What it configures:
+
+| Setting | Effect |
+| --- | --- |
+| `extensions` | myst-parser for Markdown, sphinx-autoapi for the API pages, napoleon, intersphinx, graphviz, copybutton, sphinx-design |
+| `autoapi_dirs` | the repository root, filtered by `autoapi_ignore`; parses statically and never imports the bot, so side-effectful imports cannot break the build |
+| `myst_heading_anchors` | 4, so cross-document heading links resolve down to h4 |
+| `latex_elements` | letterpaper, 10pt, `verbatimforcewraps` for long code lines, and the table/index fitting preamble described below |
+
+**Table and index fitting.** Markdown tables become `longtable` with
+non-wrapping columns in LaTeX, so cells holding long symbol names or paths run
+off the printed page. The HTML build never reveals this. The preamble shrinks
+the table font and adds `\emergencystretch`; the generated index is set ragged
+right because fully-qualified Python names exceed its column width; and the two
+tables that still overflowed carry an explicit `{tabularcolumns}` directive with
+`p{}` widths (`docs/modules.md` and
+`docs/internals/weather-providers/init.md`).
+
+Measure this from `docs/_build/latex/internets.log`, not from the build
+script's output: `scripts/build-docs.sh` does not surface xelatex's overfull-box
+warnings, so a page that overflows badly still reports a successful build.
+
+```bash
+grep -c 'Overfull \\hbox' docs/_build/latex/internets.log
+```
+
+Current state: 323 overfull boxes, none severe (worst 95.7pt), zero LaTeX
+errors, 850 pages.
+
 ## Findings
 
 - defect | requirements.lock (header line 2) vs scripts/regen-lockfile.sh |

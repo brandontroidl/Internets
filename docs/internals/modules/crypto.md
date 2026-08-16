@@ -26,7 +26,13 @@ timeout 10 s:
    to a coin id. `_resolve_coin_id()` prefers an exact (case-insensitive)
    symbol match among the returned coins, else falls back to the first result.
    Skipped entirely on a cache hit.
-2. `GET https://api.coingecko.com/api/v3/simple/price?ids=<id>&vs_currencies=usd&include_24hr_change=true&include_market_cap=true`.
+2. The price call:
+
+   ```text
+   GET https://api.coingecko.com/api/v3/simple/price
+       ?ids=<id>&vs_currencies=usd
+       &include_24hr_change=true&include_market_cap=true
+   ```
 
 Privacy: sends only the queried symbol/name. No key exists to leak.
 

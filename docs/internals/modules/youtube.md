@@ -15,9 +15,14 @@ shared [base](base.md) contract; blocking helper `_search_sync()` via
 Two sequential calls (`youtube.py - _search_sync()`), both via
 `modules.base - fetch_json()` (256 KB cap), timeout 10 s:
 
-1. `GET https://www.googleapis.com/youtube/v3/search` with
-   `part=snippet&order=relevance&type=video&maxResults=1&q=<query>&key=<key>` -
-   picks the single top result. Empty `items` maps to `no results for '<query>'`.
+1. The search call picks the single top result. Empty `items` maps to
+   `no results for '<query>'`.
+
+   ```text
+   GET https://www.googleapis.com/youtube/v3/search
+       ?part=snippet&order=relevance&type=video
+       &maxResults=1&q=<query>&key=<key>
+   ```
 2. `GET https://www.googleapis.com/youtube/v3/videos` with
    `part=contentDetails,statistics&id=<videoId>` - duration, views, likes. If
    this returns nothing, the reply degrades to title + link only (unlike

@@ -329,6 +329,9 @@ syntax and behavior, read that document; for implementation detail on a single
 module, read its page under
 [internals/modules/index.md](internals/modules/index.md).
 
+```{tabularcolumns} |l|p{0.72\linewidth}|
+```
+
 | Module | Commands (aliases) |
 | --- | --- |
 | advice | `.advice` |
