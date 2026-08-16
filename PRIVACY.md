@@ -27,12 +27,13 @@ verification steps, is [docs/data-retention.md](docs/data-retention.md).
 
 ## Read this first if you are installing the bot
 
-The shipped `config.ini.example` autoloads 67 modules. Five of them keep their
+The shipped `config.ini.example` autoloads 69 modules. Five of them keep their
 own store of user data: `seen`, `tell`, `notes`, `remind`, `steam`. `location`
 keeps no file of its own but writes your saved location through the core store
-and logs it. `linktitle` persists nothing, and writes every URL it announces or
-skips, with the channel, into the application log. The `privacy` module is
-**not** in that list.
+and logs it. `linktitle` persists nothing, and writes every URL it announces
+into the application log. The `privacy` module is in that list, so the erasure
+commands are available on a template install; a `config.ini` created from an
+earlier copy of the template may not have it.
 
 A deployment that copies the template verbatim therefore collects user data and
 offers **no `.privacy`, `.forgetme`, `.optout`, or `.optin` command at all**.

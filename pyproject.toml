@@ -91,7 +91,7 @@ internets = "internets:_entry"
 # and admin_cmds.py imports audit_log at module scope, so the console script
 # raised ModuleNotFoundError on start.  scripts/verify_install.sh is the gate
 # that must catch this - run it after touching this list.  That script carries
-# its own copy of the list (its REQUIRED array); both have to move together or
+# its own copy of the list (its REQUIRED list); both have to move together or
 # the gate stops covering the module you just added.
 py-modules = [
     "internets", "config", "botlog", "admin_cmds", "console", "sender",

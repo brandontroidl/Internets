@@ -285,12 +285,14 @@ store, and `linktitle` persists nothing but writes announced URLs to the log. Th
 `privacy` module supplies `.privacy`, `.optout`, `.optin`, and `.forgetme`, and
 erasure works when it is loaded.
 
-It is not in the shipped autoload. `config.ini.example` autoloads 67 modules
-including all seven that collect data, and `privacy` is not among them, so a
-deployment that copies the template verbatim tracks users and offers no erasure
-command. Add `privacy` to `[bot] autoload` before running this for other people.
-Erasure also cannot reach `internets.log`, which is written with the default
-umask while `config.ini` is fail-closed at 0600. Those are items 4 and 15 in
+`config.ini.example` now autoloads 69 modules, including `privacy`, so a
+deployment that copies the template gets the erasure commands. Earlier copies of
+the template did not: if your `config.ini` predates this change, check that
+`privacy` is in `[bot] autoload`.
+
+Erasure does not reach `internets.log`, which is written with the process umask
+while `config.ini` is fail-closed at 0600, and the dispatcher logs every command
+argument, so a password passed to `.pwn` lands there in plaintext. Those are items 4, 15 and 22 in
 [docs/known-issues.md](docs/known-issues.md). What is recorded, what leaves the
 machine, how long it is kept, and what controls a user has are in
 [PRIVACY.md](PRIVACY.md), with the normative per-datum table in
