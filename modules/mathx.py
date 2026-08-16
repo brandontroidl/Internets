@@ -93,21 +93,49 @@ def _next_prime(n: int) -> int:
     return cand
 
 
-def _pollard_rho(n: int) -> int:
+class FactorizationLimit(Exception):
+    """Raised when factoring gave up inside its iteration budget.
+
+    Pollard's rho is unbounded by nature: on a semiprime of two large primes it
+    needs on the order of n**0.25 iterations, which for the sizes `.isprime`
+    and `.factor` accept is effectively forever. An IRC command must not be
+    able to run forever, so the budget is finite and exhausting it is a
+    reportable outcome rather than a hang.
+    """
+
+
+# Total iterations across all restarts. Sized so the worst case costs well
+# under a second on a modern CPU while still factoring anything a user is
+# plausibly asking about; a genuinely hard semiprime hits it and is reported.
+_RHO_MAX_ITERATIONS = 200_000
+
+
+def _pollard_rho(n: int, max_iterations: int = _RHO_MAX_ITERATIONS) -> int:
+    """Find a non-trivial factor of composite n, or raise FactorizationLimit.
+
+    The budget spans restarts, not each one: a per-attempt cap would let the
+    outer loop run forever by starting over with a fresh c.
+    """
     if n % 2 == 0:
         return 2
-    while True:
+    used = 0
+    while used < max_iterations:
         x = random.randrange(2, n)  # nosec B311: Pollard's rho factorisation, not crypto
         y = x
         c = random.randrange(1, n)  # nosec B311: non-crypto factorisation randomness
         d = 1
         while d == 1:
+            if used >= max_iterations:
+                raise FactorizationLimit(
+                    f"gave up after {max_iterations} iterations")
+            used += 1
             x = (x * x + c) % n
             y = (y * y + c) % n
             y = (y * y + c) % n
             d = math.gcd(abs(x - y), n)
         if d != n:
             return d
+    raise FactorizationLimit(f"gave up after {max_iterations} iterations")
 
 
 def _prime_factors(n: int) -> dict[int, int]:
@@ -150,7 +178,12 @@ def _isprime(arg: str) -> str:
         return f"{_fmt_int(n)} is not prime (primes are >= 2)"
     if _is_probable_prime(n):
         return f"{_fmt_int(n)} is prime :: next prime {_fmt_int(_next_prime(n))}"
-    f = _smallest_factor(n)
+    try:
+        f = _smallest_factor(n)
+    except FactorizationLimit:
+        # Composite is proven by Miller-Rabin; only the witness is out of reach.
+        return (f"{_fmt_int(n)} is composite :: could not find a factor within "
+                f"the search budget :: next prime {_fmt_int(_next_prime(n))}")
     return (f"{_fmt_int(n)} is composite :: smallest factor {_fmt_int(f)} :: "
             f"next prime {_fmt_int(_next_prime(n))}")
 
@@ -166,7 +199,11 @@ def _factor(arg: str) -> str:
         return "nothing to factor - give an integer >= 2"
     if _is_probable_prime(n):
         return f"{_fmt_int(n)} is prime"
-    factors = _prime_factors(n)
+    try:
+        factors = _prime_factors(n)
+    except FactorizationLimit:
+        return (f"{_fmt_int(n)} is composite, but could not be fully factored "
+                f"within the search budget")
     parts = []
     for p in sorted(factors):
         e = factors[p]
@@ -500,7 +537,10 @@ class MathxModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}isprime <n>")
             return
-        self.bot.privmsg(reply_to, strip_ctrl(_isprime(arg[:_MAX_INPUT])))
+        # Factoring is CPU-bound and bounded, not instant; keep it off the
+        # event loop so one command cannot stall every other user.
+        result = await asyncio.to_thread(_isprime, arg[:_MAX_INPUT])
+        self.bot.privmsg(reply_to, strip_ctrl(result))
 
     async def cmd_factor(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._gate(nick):
@@ -509,7 +549,8 @@ class MathxModule(BotModule):
             p = self.bot.cfg["bot"]["command_prefix"]
             self.bot.privmsg(reply_to, f"{nick}: {p}factor <n>")
             return
-        self.bot.privmsg(reply_to, strip_ctrl(_factor(arg[:_MAX_INPUT])))
+        result = await asyncio.to_thread(_factor, arg[:_MAX_INPUT])
+        self.bot.privmsg(reply_to, strip_ctrl(result))
 
     async def cmd_gcd(self, nick: str, reply_to: str, arg: str | None) -> None:
         if not self._gate(nick):

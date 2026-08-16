@@ -93,7 +93,16 @@ Tomorrow.io air-quality path changed to raise rather than return empty.
 
 ---
 
-## 3. `.isprime` can hang the entire bot
+## 3. `.isprime` could hang the entire bot
+
+**FIXED 2026-08-16.** `_pollard_rho()` now takes an iteration budget spanning
+restarts and raises `mathx.FactorizationLimit` when it is exhausted;
+`_isprime()` and `_factor()` report that outcome instead of propagating it, and
+both handlers run through `asyncio.to_thread` like `cmd_bignum` already did. A
+60-digit semiprime now answers in about a second with "composite, could not
+find a factor within the search budget" rather than never. Pinned by
+`tests/test_mathx_bounds.py`. The description below is the record of what was
+wrong.
 
 **Symbol:** `modules/mathx.py - MathxModule.cmd_isprime()`
 
