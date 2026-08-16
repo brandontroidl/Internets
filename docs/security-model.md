@@ -593,9 +593,12 @@ instances from sharing the state files.
 Known drift at the time of writing: `requirements.lock` carries a header saying
 it was compiled with Python 3.14, which violates the resolve-on-3.10 contract in
 `scripts/regen-lockfile.sh`, and the CI Tests workflow has been red on `main`
-since 2026-08-13 as a result. There is also an environment drift between the
-installed bcrypt (4.3.0) and the pinned version (5.0.0). Neither is a
-documentation fix; both are recorded in the reconstruction ledger.
+since 2026-08-13 as a result. Separately, this machine's installed bcrypt is a
+major version behind the one `requirements.lock` pins, which matters because the
+two differ in how they treat an over-long password: the pinned major raises,
+the installed one truncated. Verify with `pip show bcrypt` against the lockfile
+before trusting a local bcrypt test result. Neither is a documentation fix; both
+are recorded in [known issues](known-issues.md).
 
 ## 12. Known limitations
 
