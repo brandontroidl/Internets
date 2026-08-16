@@ -336,6 +336,10 @@ class SecinfoModule(BotModule):
         "cipher": "cmd_cipher",
     }
 
+    # `.pwn` takes a password as its entire argument, so the dispatcher must
+    # not log it.  Nothing in redact_secrets() can catch a bare secret.
+    SECRET_ARGS: frozenset[str] = frozenset({"pwn"})
+
     def on_load(self) -> None:
         from .base import cred
         self._ua: str = cred(self.bot.cfg, "weather_user_agent",

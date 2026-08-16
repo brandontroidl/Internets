@@ -233,6 +233,10 @@ class IRCBot(AdminCommandsMixin):
     _RE_MOTD      = re.compile(r":\S+ (?:376|422) ")
     _CHAN_RE      = re.compile(r"^[#&+!][^\s,\x07]{1,49}$")
 
+    # Core commands whose argument is the admin password.  Module-owned
+    # commands declare their own via BotModule.SECRET_ARGS.
+    _SECRET_ARG_CORE: frozenset[str] = frozenset({"auth", "deauth"})
+
     # _CORE (command -> handler dispatch table) lives on AdminCommandsMixin,
     # next to the handlers and the .help branches that derive from it.
 
@@ -1116,6 +1120,17 @@ class IRCBot(AdminCommandsMixin):
             return True
         return False
 
+    def _cmd_arg_is_secret(self, cmd: str) -> bool:
+        """True if the module owning ``cmd`` declares its argument a secret.
+
+        Resolved from the module at log time rather than from a registry built
+        at load time: one fewer copy of the same fact to fall out of step.
+        """
+        with self._mod_lock:
+            entry = self._commands.get(cmd)
+            inst = self._modules.get(entry[0]) if entry else None
+        return bool(inst and cmd in getattr(inst, "SECRET_ARGS", frozenset()))
+
     def _handle_privmsg(self, line: str) -> None:
         m = self._RE_PRIVMSG.match(line)
         if not m: return
@@ -1143,10 +1158,16 @@ class IRCBot(AdminCommandsMixin):
                 cmd = parts[0].lower()
                 arg = parts[1].strip() if len(parts) > 1 else None
         if cmd and cmd in all_cmds:
-            # auth/deauth: fully masked. Everything else (notably `.raw`, which
-            # can carry a NickServ/oper password in its argument) has any
-            # credential in the argument redacted by the shared verb list.
-            log_arg = ("[REDACTED]" if cmd in ("auth", "deauth")
+            # Three tiers, because one mechanism cannot cover all of them:
+            #   1. auth/deauth        - the argument IS the admin password.
+            #   2. module SECRET_ARGS - the argument IS a secret for that
+            #      command (`.pwn <password>`).  Owned by the module so a new
+            #      one is declared once, not remembered here.
+            #   3. everything else    - verb-keyed redaction, which catches
+            #      `.raw identify <pw>` but cannot see a bare secret, since
+            #      there is no verb to key on.
+            log_arg = ("[REDACTED]" if cmd in self._SECRET_ARG_CORE
+                       or self._cmd_arg_is_secret(cmd)
                        else (redact_secrets(arg) if arg else arg))
             log.info(f"cmd={cmd!r} arg={log_arg!r} from {nick}!{hostmask} "
                      f"{'(PM)' if is_pm else 'in ' + reply_to}")

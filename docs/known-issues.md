@@ -606,10 +606,15 @@ population, then check each member.
 
 ---
 
-## 22. Every command argument is logged, so `.pwn` writes a password to disk
+## 22. Every command argument is logged, so `.pwn` wrote a password to disk
 
-**Severity: ranks with item 1.** Listed here only because the register is
-numbered in discovery order.
+**FIXED 2026-08-16.** Commands whose argument is itself a secret now declare
+themselves via `modules/base.py - BotModule.SECRET_ARGS`, and
+`internets.py - IRCBot._cmd_arg_is_secret()` resolves that off the owning
+module at log time. `modules/secinfo.py` declares `pwn`. Pinned by
+`tests/test_command_logging.py`, which also pins that an ordinary argument is
+still logged, so the fix cannot be widened into destroying the log's value.
+The description below is retained as the record of what was wrong.
 
 **Symbols:** `internets.py - IRCBot._handle_privmsg()`,
 `sender.py - redact_secrets()`, `modules/secinfo.py - SecinfoModule.cmd_pwn()`

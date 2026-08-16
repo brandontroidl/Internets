@@ -213,9 +213,25 @@ class BotModule:
         on_raw(line) - called for every incoming IRC line (must be fast, sync)
 
     Override help_lines() to describe commands for .help output.
+
+    A command whose ARGUMENT is itself a secret must be named in
+    ``SECRET_ARGS``.  The dispatcher logs every accepted command with its whole
+    argument, and ``sender.redact_secrets()`` only masks a credential that
+    follows a credential verb, so a bare secret has nothing to key on.
+    ``.pwn <password>`` is the motivating case::
+
+        SECRET_ARGS = frozenset({"pwn"})
+
+    Declaring it here rather than in the core keeps the knowledge with the
+    module that owns the command, so a new one cannot be forgotten in a list
+    somewhere else.
     """
 
     COMMANDS: dict[str, str] = {}
+
+    # Commands whose argument must never reach the log.  See the class
+    # docstring; the dispatcher reads this off the owning module.
+    SECRET_ARGS: frozenset[str] = frozenset()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Validate the COMMANDS → handler contract at class-definition time.
