@@ -10,8 +10,11 @@ above it; the line exists, it just says something else now. Neither fails a
 build, a test, or a review that is not specifically looking for it.
 
 The rules below exist to make that class of drift either impossible or loud.
-They are not aspirational: three of them are already enforced by a script, and
-this page says plainly which are not.
+Two of them run as CI steps, one has a test behind it, and one is convention
+only. Section 7 says which is which, and each rule below states how much its
+check actually proves - a gate credited with more strength than it has is worse
+than an acknowledged convention, because nobody re-reads what they believe is
+machine-checked.
 
 ---
 
@@ -23,42 +26,63 @@ code does, not what it was meant to do. Where the behavior is a defect, the doc
 says so and links to [known-issues](known-issues.md) rather than describing the
 intent as if it worked.
 
-**Citations are symbol-based.** The form is `` `internets.py - IRCBot._dispatch()` ``,
-not `` `internets.py:618` ``. A symbol citation survives every edit that does not
-rename the symbol, and when it does break, `scripts/verify-doc-citations.py`
-resolves it against the file's AST and fails. A line citation survives nothing
-and can only be checked for range sanity. As of 2026-08-16 the corpus holds 1097
-citations: 1093 symbol-verified, 4 line citations remaining, 0 failures.
+**Citations are symbol-based, and partly machine-checked.** The form is
+`` `internets.py - IRCBot._dispatch()` ``, not `` `internets.py:618` ``. A symbol
+citation survives every edit that does not rename the symbol, where a line
+citation survives nothing and can only be checked for range sanity.
+`scripts/verify-doc-citations.py` parses the cited file's AST and fails when the
+symbol is not there.
+
+How much that proves is stated in full under the script's entry in section 2,
+and it is less than the phrase "machine-checked" suggests: the match is on the
+last dotted component only, so a wrong or invented class name passes as long as
+the method name exists somewhere in the file, and a citation written without the
+`.py` filename is not seen by the checker at all. Treat the rule as a convention
+with a backstop that catches the common case, a renamed or deleted method, not
+as a gate that makes a wrong citation impossible.
+
+Current census: run `scripts/verify-doc-citations.py --summary`. One reading on
+2026-08-16 gave 1356 citations - 1249 symbol-verified, 105 prose line ranges in
+range, 2 line citations, 0 failures. Take the totals as a marker and nothing
+more; they move with every documentation edit, and that reading was already
+stale within the same hour. The part that is a contract is the last column:
+zero failures, which is what the CI step asserts.
 
 **Any list that can be generated is generated.** The command inventory in
 [command-reference](command-reference.md) comes from
-`scripts/gen-command-reference.py`, which walks `modules/` and reads
-`AdminCommandsMixin._CORE` rather than trusting prose. Hand-editing it is a
+`scripts/gen-command-reference.py`, which walks `modules/` and reads each
+module's `COMMANDS` mapping plus `AdminCommandsMixin._CORE` rather than trusting
+prose. Hand-editing it is a
 regression even when the edit is correct, because the next generated run will
 not agree with it.
 
 **A hand-maintained enumeration that cannot be generated gets a completeness
 gate.** `tests/run_tests.py` carries one: it enumerates the security-relevant
 modules and asserts each references `strip_ctrl`. That is the pattern to copy
-when a list must stay in sync with code and no generator is practical.
+when a list must stay in sync with code and no generator is practical. Copy the
+honesty with it: section 4 sets out what that particular gate does and does not
+prove, and a gate whose limit is not written down gets read as proving more.
 
 ---
 
 ## 2. Tooling
 
-Four scripts. None of them runs automatically (section 7).
+Four scripts. Two of them run in CI; two are manual (section 7).
 
 | Script | What it does | Run it |
 |---|---|---|
-| `gen-command-reference.py` | regenerates the command inventory | after any command change |
-| `verify-doc-citations.py` | AST-resolves every symbol citation | before every commit touching docs or cited source |
+| `gen-command-reference.py` | regenerates the command inventory | after any command change; `--check` also runs in CI |
+| `verify-doc-citations.py` | AST-resolves every symbol citation | before every commit touching docs or cited source; also runs in CI |
 | `remap-doc-citations.py` | renumbers surviving line citations | only after a source edit, with `--apply` second |
 | `build-docs.sh` | builds HTML and PDF | before a release, and after structural doc changes |
 
 ### `scripts/gen-command-reference.py`
 
-Instantiates every `BotModule` subclass without running `__init__`, folds
-aliases into their primary command, and emits the Markdown table. Two modes:
+Imports every module under `modules/`, finds the one `BotModule` subclass each
+defines, and reads the class-level `COMMANDS` mapping off it. Nothing is
+instantiated and no handler runs, so no API keys and no network access are
+needed. It folds aliases into their primary command and emits the Markdown
+table. Two modes:
 
 ```bash
 scripts/gen-command-reference.py                              # emit Markdown
@@ -66,11 +90,19 @@ scripts/gen-command-reference.py --check docs/command-reference.md
 ```
 
 `--check` is the drift gate: it exits 1 listing every registered command whose
-name does not appear anywhere in the file. It proves presence, not correctness
-of the surrounding description, so a command whose behavior changed passes the
-gate while its prose is wrong. Run it from the repository root; it inserts the
-repo root on `sys.path` and sets `sys.argv` because `config.py` parses argv at
-import time.
+name does not appear anywhere in the file. Three limits worth knowing:
+
+- It proves presence, not correctness of the surrounding description, so a
+  command whose behavior changed passes the gate while its prose is wrong.
+- Presence is a plain substring test for `.<name>` over the whole file, so a
+  short name is satisfied by a longer one containing it. `.pw` is present in
+  every mention of `.pwn`, `.dns` in every `.rdns`, `.ly` in every `.hourly`.
+- Only primary commands are checked. Aliases are folded into their primary by
+  `primary_commands()` and never looked for, so a dropped alias is invisible
+  here.
+
+Run it from the repository root; it inserts the repo root on `sys.path` and
+sets `sys.argv` because `config.py` parses argv at import time.
 
 ### `scripts/verify-doc-citations.py`
 
@@ -89,14 +121,53 @@ scripts/verify-doc-citations.py --summary   # counts only
 
 Line citations are reported as REVIEW, never PASS, and only checked for
 existence and range. That asymmetry is the point: the tool cannot content-verify
-a line citation, so it refuses to bless one.
+a line citation, so it refuses to bless one. Bare prose ranges ("lines 42-103")
+inside `docs/internals/` are range-checked against the source file the page is
+named after.
+
+#### What it does not catch
+
+Four gaps, all in the accept path, so each one is a silent pass rather than a
+noisy failure:
+
+- **The match is on the bare tail.** `main()` compares the citation against the
+  AST symbol set with `sym in known or tail in known or any(k.endswith("." +
+  tail) for k in known)`, where `tail` is the last dotted component. So
+  `` `store.py - Store.user_purge()` `` and `` `store.py - Invented.user_purge()` ``
+  are equally acceptable: only `user_purge` has to exist. A class rename, a
+  method that moved to a different class, and a fabricated class name all
+  survive. The check fails only when the final name is absent from every
+  candidate file.
+- **Candidates are plural by design.** A bare basename such as `base.py`
+  resolves to every file with that name, and a symbol found in any of them is
+  accepted. That is deliberate (see the docstring on `candidates()`), and it
+  widens the accept path further.
+- **A citation with no `.py` in it is invisible.** Both regexes anchor on a
+  filename ending in `.py`, so a dotted module-path form such as
+  `` `sender.Sender._MAX_IRC_LINE` `` matches neither pattern. It is not
+  checked, not counted, and not rejected. If you write that form, nothing will
+  ever tell you it broke.
+- **`PRIVACY.md` is outside the walk.** `doc_files()` takes three named files
+  at the repository root - README, CONTRIBUTING, SECURITY - plus everything
+  under `docs/`. `PRIVACY.md` is not one of them. `docs/privacy.md` pulls it in
+  with an `{include}` directive, but the checker reads that file's own text,
+  which is the directive and nothing else, so the notice's symbol citations are
+  never resolved. Check them by hand when you edit it.
+
+The practical rule: the checker catches the drift a rename or deletion causes,
+which is the common case and worth the CI step. It does not certify that a
+citation points where the prose says it does. Reviewing a citation still means
+opening the file.
 
 ### `scripts/remap-doc-citations.py`
 
-A mechanical helper for the four line citations that remain, and for any that a
-future edit strands. It diffs a source file at a git ref against the working
-tree with `difflib`, builds an exact old-to-new line map, and rewrites the
-citations. Report first, apply second:
+A mechanical helper for line citations, kept for the ones a future edit strands
+rather than for a current backlog: the corpus has no real line citations left.
+Every one the checker still counts is an illustrative example inside this page
+itself, and the `file.py` forms elsewhere are placeholders it skips by name.
+The script diffs a source file at a git ref against the working tree with
+`difflib`, builds an exact old-to-new line map, and rewrites the citations.
+Report first, apply second:
 
 ```bash
 scripts/remap-doc-citations.py HEAD internets.py admin_cmds.py
@@ -138,9 +209,13 @@ grep -c 'Overfull \\hbox' docs/_build/latex/internets.log
 grep 'Overfull \\hbox' docs/_build/latex/internets.log | head -20
 ```
 
-As of 2026-08-16 the log reports 323 overfull horizontal boxes, the worst about
-96pt (roughly 1.3 inches) past the margin. Treat the count as a budget: record
-it, and if it rises after your change, find what you added that is too wide.
+On 2026-08-16 that log reported 334 overfull horizontal boxes, the worst about
+96pt (roughly 1.3 inches) past the margin. Treat the count
+as a budget: `docs/_build/` is gitignored, so the log is a local artifact that
+the next build overwrites and a fresh clone does not have at all. The number
+therefore has to be recorded by whoever runs the build - here, or in the commit
+message - and compared against the next run. If it rises after your change,
+find what you added that is too wide.
 :::
 
 ---
@@ -262,11 +337,16 @@ most drift-prone row in this section.
 
 ### Edit a source file that documentation cites
 
-Symbol citations survive. For the four remaining line citations, editing the
-file above one invalidates it silently. Run `verify-doc-citations.py` first to
-see whether any point into the file you are about to change, and use
-`remap-doc-citations.py` only if they do. Better: convert them to symbol form
-and delete the problem.
+Symbol citations survive a line-number shift; that is the whole reason for the
+form. No real line citation is left in the corpus, so there is currently
+nothing to renumber, and the rule is simply: do not introduce one. If you do,
+editing the file above it invalidates it silently, and
+`remap-doc-citations.py` is the repair.
+
+What symbol citations do not survive is a rename, and the checker only catches
+part of that (see section 2). If you rename a class, grep the docs for the old
+class name as well as running the checker - a citation naming the old class
+still passes as long as the method kept its name.
 
 ---
 
@@ -313,12 +393,23 @@ A decision that lives only in prose gets violated and then distrusted. Where a
 decision can be checked mechanically, it gets an enforcing test in the same
 change that adds the ADR, and the ADR names the test.
 
-The pattern already exists in-repo. `tests/run_tests.py` enumerates the
-security-relevant modules and asserts each references `strip_ctrl`; that is the
-sanitization decision made executable. The gate proves only that a call site
-exists in the file, not that the string you emitted passed through it, and the
-test comment says so. An honest partial gate that states its own limit is
-correct governance; a gate that overstates what it proves is worse than none.
+The pattern already exists in-repo. `tests/run_tests.py` enumerates six
+security-relevant modules and asserts each references `strip_ctrl`, then checks
+`weather` separately because it keeps an equivalent `_sanitize` of its own.
+That is the sanitization decision made executable, and the enumeration is the
+valuable half - a module added later is not covered until someone adds it here.
+
+Be precise about what the assertion proves, because the test does not say it
+itself. It reads the module file as text and asserts the substring `strip_ctrl`
+appears somewhere in it. That is satisfied by an import, by a comment, or by a
+docstring mentioning the name, and it stays satisfied after the last real call
+site is deleted as long as any mention survives. It does not check that the
+string you emitted passed through the sanitizer. So it catches a module added
+with no sanitization at all, and misses a module that lost its sanitization.
+
+State that limit wherever such a gate is cited. An honest partial gate is
+correct governance; a gate credited with more than it proves is worse than
+none, because it stops anyone looking.
 
 Where a decision genuinely cannot be checked (ADR-001's rule that no accessor
 reachable from a worker may become a coroutine, for instance), the ADR says so
@@ -387,12 +478,16 @@ analysis. The register is allowed to contain things that will never be fixed.
 None of this survives without someone looking. The intervals below are what the
 artifacts actually decay at, not a ritual.
 
-| Frequency | Check |
-|---|---|
-| every commit touching docs | `verify-doc-citations.py` exits 0 |
-| every commit adding a command | `gen-command-reference.py --check` exits 0 |
-| every release | full `build-docs.sh`, plus the overfull-box count |
-| quarterly | the reconciliation pass below |
+| Frequency | Check | Who runs it |
+|---|---|---|
+| every commit touching docs | `verify-doc-citations.py` exits 0 | you, then CI |
+| every commit adding a command | `gen-command-reference.py --check` exits 0 | you, then CI |
+| every release | full `build-docs.sh`, plus the overfull-box count | you |
+| quarterly | the reconciliation pass below | you |
+
+Running the first two locally is not redundant with CI. CI runs on a push to
+`main` and on a pull request against it, which is after the commit is written,
+and both checks pass on drift they cannot see (section 2).
 
 The quarterly pass is the one that catches what the per-commit checks cannot,
 because a curated document cannot reveal its own omissions:
@@ -418,23 +513,49 @@ because a curated document cannot reveal its own omissions:
 
 ---
 
-## 7. What is not enforced
+## 7. What is and is not enforced
 
 Stated plainly, because a governance page that implies more enforcement than
-exists is itself a drift hazard.
+exists is itself a drift hazard - and one that implies less sends a reader
+looking for a gate that is already there.
 
 `.github/workflows/` contains `tests.yml`, `security.yml`, and `codeql.yml`.
-None of them runs `gen-command-reference.py --check`, `verify-doc-citations.py`,
-or `build-docs.sh`. There is no `Makefile` and no `.pre-commit-config.yaml`. All
-four scripts in section 2 are manual, and every rule in section 1 is currently
-maintained by whoever remembers to run them.
+The `lint` job in `tests.yml` ends with two documentation steps, both
+unconditional, on every push to `main` and every pull request against it:
 
-The lowest-effort change that would move the most: add
-`gen-command-reference.py --check docs/command-reference.md` and
-`verify-doc-citations.py` as two steps in the existing `tests.yml` `lint` job.
-Both are fast, both exit non-zero on failure, and both are currently green, so
-neither would land red. Until that happens, treat section 6 as the real
-mechanism.
+```yaml
+- name: Docs - every source citation resolves to a real symbol
+  run: python scripts/verify-doc-citations.py
+
+- name: Docs - command reference matches registered commands
+  run: python scripts/gen-command-reference.py --check docs/command-reference.md
+```
+
+So a commit that renames a cited method, or adds a command without
+regenerating the reference, lands red. That is the enforcement this page's
+rules rest on, and it is worth reading section 2 for what those two steps do
+**not** catch - both accept on a weaker test than their names suggest.
+
+Not enforced anywhere:
+
+- **`build-docs.sh`.** No workflow builds the documentation, so a change that
+  breaks the Sphinx build or overflows the PDF margin is found by whoever
+  builds next. The overfull-box budget is a manual measurement of a gitignored
+  log.
+- **`scripts/sbom.sh`.** It exists and is referenced by other pages, but no
+  workflow runs it, so an SBOM is produced only when someone asks for one.
+- **Everything in section 3.** The what-to-update-when-you-change-X table is a
+  reading aid, not a gate. Nothing checks that a new metric reached
+  [metrics-and-observability](metrics-and-observability.md), that a new secret
+  reached the inventory in [handoff](handoff.md), or that a new module was
+  added to `admin_cmds._MODULE_GROUPS`.
+- **Prose accuracy generally.** Both CI steps check names, not statements. A
+  paragraph describing behavior the code no longer has passes every gate in
+  this repository.
+
+There is no `Makefile` and no `.pre-commit-config.yaml`, so nothing runs before
+a commit is made. Section 6 remains the real mechanism for everything in the
+list above.
 
 ---
 

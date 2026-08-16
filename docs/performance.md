@@ -65,8 +65,9 @@ takes the whole bot with it.
 > **Known defect** (`modules/mathx.py - MathxModule.cmd_isprime()`,
 > [known-issues](known-issues.md#3-isprime-can-hang-the-entire-bot)): the live
 > example of exactly this. `cmd_isprime` calls `_isprime()` directly on the
-> loop while the sibling `cmd_bignum` (line 568) correctly uses
-> `await asyncio.to_thread(_bignum, ...)`. A composite that survives the 2^20
+> loop while the sibling `modules/mathx.py - MathxModule.cmd_bignum()`
+> correctly uses `await asyncio.to_thread(_bignum, ...)`. A composite that
+> survives the 2^20
 > trial-division cap falls into `_pollard_rho`, whose outer loop has no
 > iteration bound, and the input cap permits 100 digits
 > (`_MAX_ISPRIME_DIGITS`). One message from any user in any channel stalls
@@ -75,12 +76,26 @@ takes the whole bot with it.
 
 ### 1.4 The thread pool behind `to_thread`
 
-Nothing in the codebase calls `loop.set_default_executor()`. `to_thread`
-therefore uses CPython's default `ThreadPoolExecutor`, sized
-`min(32, (os.process_cpu_count() or 1) + 4)`.
+Nothing in the codebase calls `loop.set_default_executor()` or constructs a
+`ThreadPoolExecutor`. `to_thread` therefore uses CPython's default executor,
+and **the sizing formula differs across the supported Python range**:
 
-That is a host-dependent number, and on the small hosts this bot typically
-runs on it is small:
+| Python | Default `max_workers` |
+| --- | --- |
+| 3.10 - 3.12 | `min(32, (os.cpu_count() or 1) + 4)` |
+| 3.13 - 3.14 | `min(32, (os.process_cpu_count() or 1) + 4)` |
+
+The two agree on an unrestricted host. They diverge when the process is
+constrained: `process_cpu_count()` honors CPU affinity and the
+`PYTHON_CPU_COUNT` / `-X cpu_count` override, so a `taskset`-pinned bot on
+3.13+ sizes its pool from the CPUs it may actually use while the same bot on
+3.12 sizes from the machine's total. Neither reads a cgroup CPU quota, so a
+container limited with `--cpus` is sized for the host on every supported
+version.
+
+Either way it is a host-dependent number, and on the small hosts this bot
+typically runs on it is small (the table reads the same under both formulas
+for an unconstrained host):
 
 | Host cores | Worker threads | Task slots |
 | --- | --- | --- |
@@ -99,9 +114,24 @@ presents as unexplained latency.
 The blocking work that lands there is real, not hypothetical: `modules/geocode.py`
 runs every `requests` call through `asyncio.to_thread`, `internets.py -
 _save_shadow_bans()` serializes in a worker, and several modules do the same
-for their own JSON stores. Weather provider HTTP, by contrast, is native
-`aiohttp` on the loop (`weather_providers/_http.py`) and does not consume pool
-workers.
+for their own JSON stores.
+
+**Weather provider HTTP may or may not consume pool workers, depending on
+whether an optional package is installed.** `weather_providers/_http.py` sets
+`_HAS_AIOHTTP` from a guarded import at module scope and picks a transport per
+call. With `aiohttp` present it is native async on the loop and costs no
+worker. Without it, every provider request runs `requests` inside
+`asyncio.to_thread` and takes a pool slot for the duration - and `aiohttp` is
+the optional `async` extra, not a mandatory dependency
+([dependencies](dependencies.md)), so a `pip install internets-irc` with no
+extras gets the fallback path.
+
+That flips the sizing conclusion on a keyless-but-busy bot. On a 2-core host
+the pool is 6 workers; a weather command on the fallback transport can hold one
+for up to the 30 s `_PER_CALL_BUDGET`, so six concurrent weather commands can
+saturate the executor that geocoding and every module JSON write also depend
+on. Confirm which path a deployment is on before using the table above:
+`python -c "import aiohttp"` succeeding is the whole test.
 
 ---
 
@@ -151,19 +181,48 @@ evidence that replies are being delivered.
 is instructive.
 
 `admin_cmds.py - cmd_help()` collapses aliases to one name per handler method
-and renders the result through `_help_grid(items, cols=4)`. Across the 69 files
-in `modules/` that declare a `COMMANDS` map, those maps hold 202 names
-resolving to 165 distinct handler methods; `admin_cmds.py - _CORE` adds 4
-public and 23 admin methods on top.
+and renders the result through `_help_grid(items, cols=4)`.
+`admin_cmds.py - _CORE` contributes 4 public names (`_CORE_PUBLIC`) and, for an
+authenticated admin, 23 more after `_core_admin_cmds()` collapses aliases.
 
-| Caller | Names shown | Grid rows | Total lines |
+**Two different module populations give two different answers, and only one of
+them describes a shipped bot.** `.help all` enumerates the modules the bot has
+actually *loaded*, not the files on disk:
+
+| Population | Files declaring `COMMANDS` | Command names | Distinct handler methods |
 | --- | --- | --- | --- |
-| Non-admin | about 169 | 43 | about 44 |
-| Admin | about 192 | 48 | about 50 |
+| Every file in `modules/` | 69 | 202 | 165 |
+| The shipped `config.ini.example` autoload | 66 | 195 | 158 |
 
-At burst 5 plus 1 line per 1.5 s, a 44-line reply takes
-`5 + (39 x 1.5)` = about **58 seconds** to reach the wire in full, and occupies
-44 of the 200 queue slots for most of that.
+The 67-entry autoload omits three `COMMANDS`-declaring modules - `example`,
+`health` and `privacy` - and includes one that declares none (`linktitle`,
+which is passive). Counting from the file population therefore overstates a
+default install.
+
+Resolved through the grid, after `sorted(set(...))` dedupes names across
+modules:
+
+| Population | Caller | Names | Grid rows | Reply lines |
+| --- | --- | --- | --- | --- |
+| Shipped autoload | Non-admin | 162 | 41 | 42 |
+| Shipped autoload | Admin | 184 | 46 | 47 |
+| Every file present | Non-admin | 169 | 43 | 44 |
+| Every file present | Admin | 190 | 48 | 49 |
+
+Reply lines are one header plus the grid rows. An admin also gets one more line
+when any loaded module is unconfigured (the `(hidden, no key: ...)` row), and
+the non-admin figure assumes every module reports `is_configured()`; an
+unkeyed install shows fewer names to a non-admin. **Use 42 lines as the shipped
+worst case** and 44 only if you have added the three unlisted modules.
+
+At burst 5 (`CAPACITY`) plus 1 line per 1.5 s (`REFILL`), the first 5 lines go
+out immediately and the remaining 37 are metered, so a 42-line reply takes
+`(42 - 5) x 1.5 s` = about **56 seconds** to reach the wire in full, and
+occupies 42 of the 200 queue slots for most of that. The 44-line file-population
+case is `(44 - 5) x 1.5 s` = about **59 seconds**. Note the shape of that
+expression: the burst is subtracted from the message count before the rate is
+applied. Adding the burst to a duration (`5 + 39 x 1.5`) reaches a similar
+number by adding a message count to seconds, and does not generalize.
 
 Two consequences follow, and neither is obvious from reading the handler:
 
@@ -171,14 +230,18 @@ Two consequences follow, and neither is obvious from reading the handler:
    returns; the handler is done and its task slot is released long before the
    user has seen line 10. `_CMD_TIMEOUT` never enters into it, and no metric
    records the delivery delay.
-2. **Four concurrent `.help all` calls put roughly 176 messages in a 200-slot
-   queue.** A fifth, or any normal channel traffic arriving alongside them,
-   starts dropping. There is no per-user output budget and no coalescing.
+2. **Four concurrent `.help all` calls put about 168 messages in a 200-slot
+   queue** on a shipped autoload (4 x 42), or 176 on the full file population.
+   A fifth, or any normal channel traffic arriving alongside them, starts
+   dropping. There is no per-user output budget and no coalescing.
 
 The same arithmetic applies to any multi-line output. `IRCBot._split_msg()`
-splits a reply body at `_MAX_BODY` = 400 bytes, so a single 2 KB formatted
-response becomes 5 queued messages, and a module that emits one line per result
-row is emitting one queue slot per row.
+encodes the body to UTF-8 and slices it at `_MAX_BODY` = 400 **bytes** (backing
+off to a codepoint boundary), so the chunk count is `ceil(len(body_bytes) /
+400)`. A 2 KiB response is 2048 bytes and becomes **6** queued messages, not 5;
+5 is the answer only for exactly 2000 bytes. Sizes here are binary throughout,
+matching the sibling documents. A module that emits one line per result row is
+emitting one queue slot per row regardless.
 
 ---
 
@@ -272,10 +335,13 @@ mirror, not the working copy.
 
 Three things have no prune and no cap:
 
-- **`Store._locs`.** One entry per nick that has ever run `.setloc`, keyed by
-  nick, never expired. On a busy network this grows for the life of the
-  deployment. The only removal path is `.forgetme` via `modules/privacy.py`,
-  which a user has to invoke.
+- **`Store._locs`.** One entry per nick that has ever registered a location,
+  keyed by nick, never expired. The registering commands are `.regloc` and its
+  alias `.register_location` (`modules/location.py - LocationModule.cmd_regloc()`);
+  `.myloc` reads and `.delloc` removes. There is no `.setloc`. On a busy network
+  this grows for the life of the deployment. Removal paths are `.delloc` for the
+  owner's own entry and `.forgetme` via `modules/privacy.py`, both of which a
+  user has to invoke.
 - **`IRCBot._shadow_bans`.** Operator-managed, so bounded by operator
   behaviour rather than by code.
 - **The audit chain, in aggregate.** The live segment rotates at

@@ -56,11 +56,14 @@ The module-owned stores differ, and the difference is worth knowing:
 
 **No `fsync`, anywhere.** Verified: the string appears exactly once in the
 codebase, in a stale comment in `admin_cmds.py` claiming `record()` fsyncs. It
-does not. Every writer here is `mkstemp` plus `os.replace`, which is atomic with
+does not. The JSON writers are `mkstemp` plus `os.replace`, which is atomic with
 respect to *readers* - you never observe a half-written file - but says nothing
-about durability. Until the kernel flushes its page cache, a "written" file can
-still be lost to a power cut or a kernel panic. That is why the third row above
-exists and why it is not a number this project controls.
+about durability. `audit.log` is not in that class at all:
+`audit_log.py - AuditLog.record()` opens the file in append mode and writes one
+line, so a partially-written final line is possible there where it is not for a
+state file. Either way, until the kernel flushes its page cache a "written" file
+can still be lost to a power cut or a kernel panic. That is why the third row
+above exists and why it is not a number this project controls.
 
 The practical consequence: a clean `kill -INT` gives you an RPO of zero against
 the last backup. A power loss gives you an RPO of "the last backup, plus
@@ -299,8 +302,12 @@ all three and they are the part people get wrong:
 2. **Permissions before secrets.** `secret_store.py - perms_ok()` requires
    `config.ini` to be **exactly** 0600 and fails closed otherwise, returning the
    default for every secret behind one error line.
-3. **Secrets before start.** A bot started without its keys connects, logs one
-   `REFUSING to read` line, and runs degraded rather than failing.
+3. **Secrets before start.** A bot started without its keys connects and runs
+   degraded rather than failing, and it does so **quietly**: an absent secret
+   produces no log line at all. `secret_store.py - get()` logs
+   `REFUSING to read <path> - <reason>` only when `perms_ok()` rejects
+   `config.ini`, once per `get()` call. A restored deployment whose secrets did
+   not come back looks identical in the log to one that never had them.
 4. **Start last, and verify before declaring done.**
 
 ### A. Single corrupt state file
@@ -418,10 +425,13 @@ Then start and verify per [After any restore](#dr-verify).
 ### C. Full host rebuild from scratch
 
 ```bash
-# 1. Dedicated unprivileged user; INTERNETS_ALLOW_ROOT stays unset
-useradd -r -m -d /srv/internets -s /usr/sbin/nologin internets
+# 1. Dedicated unprivileged user; INTERNETS_ALLOW_ROOT stays unset.
+#    Deliberately no -m.  See the note under this block.
+useradd -r -d /srv/internets -s /usr/sbin/nologin internets
+install -d -o internets -g internets -m 700 /srv/internets
 
-# 2. Code at the tag you were running
+# 2. Code at the tag you were running.  Clone into the existing empty
+#    directory - git accepts an empty target, not a populated one.
 sudo -u internets git clone https://github.com/brandontroidl/Internets /srv/internets
 cd /srv/internets && sudo -u internets git checkout <tag>
 
@@ -463,6 +473,17 @@ work, so regenerate the lock per the script beforehand, or install from
 [known-issues.md](known-issues.md) item 6.
 :::
 
+:::{note}
+**Why step 1 does not pass `useradd -m`.** On a stock Fedora or Debian
+`/etc/skel` is not empty (`.bashrc`, `.bash_profile`, `.bash_logout`, and more),
+so `-m` creates `/srv/internets` already populated, and `git clone` into it then
+fails with `destination path '/srv/internets' already exists and is not an empty
+directory`. Verified on Fedora 43. Create the directory empty instead, as above.
+If the account already exists with a populated home, either clone elsewhere and
+move the contents in, or clear the skel files first - do not `rm -rf` a home
+directory that might already hold a deployment.
+:::
+
 If this rebuild follows a compromise rather than a hardware failure, do **not**
 restore `config.ini`, `audit.log`, or `audit.log.key`. Build a fresh config from
 `config.ini.example` and set every rotated secret by hand; see the rotation
@@ -493,8 +514,22 @@ grep -nE 'Store: .* unusable|failed to load|failed to read|load failed|REFUSING 
      internets.log
 ```
 
-Any hit means a state file did not survive. Stop, and go back to
+Any hit means a state file did not survive, or `config.ini` came back at the
+wrong mode. Stop, and go back to
 [procedure A](#a-single-corrupt-state-file) before the next flush overwrites it.
+
+**A clean grep is not proof the secrets came back.** `REFUSING to read` covers
+only the permissions failure. A `config.ini` that is correctly 0600 but is
+missing its `[secrets]` entries produces no line at any level. Confirm the
+secrets positively instead:
+
+```bash
+python -m secret_store list | grep -v '(unset)'
+```
+
+Compare that against the list you took before the restore. A module that lost
+its key reports itself at INFO on load (`stocks: active providers: ['none']` and
+its equivalents), which is the other place to look.
 
 (dr-audit)=
 ## Audit chain continuity across a restore
@@ -531,22 +566,32 @@ first record after the restore. Nothing in the bot marks it. `verify()` reports
 records correctly - the missing records simply never existed as far as the file
 is concerned.
 
-So a gap is invisible to verification and must be reconstructed from timestamps:
+So a gap is invisible to verification and must be reconstructed from timestamps.
+Compare the elapsed time between consecutive records against a threshold you
+choose, rather than comparing calendar dates - a date comparison reports every
+midnight the bot was idle and misses a six-hour hole inside one day:
 
 ```bash
 python -c "
 import json
+from datetime import datetime, timedelta
+GAP = timedelta(hours=1)          # tune to your deployment's activity
 prev = None
 for i, l in enumerate(open('audit.log')):
-    r = json.loads(l)
-    if prev and r['ts'][:10] != prev[:10]:
-        print(f'index {i}: {prev} -> {r[\"ts\"]}')
-    prev = r['ts']
+    # 'Z' is only accepted by fromisoformat on 3.11+; 3.10 is supported.
+    ts = datetime.fromisoformat(json.loads(l)['ts'].replace('Z', '+00:00'))
+    if prev is not None and ts - prev > GAP:
+        print(f'index {i}: {prev.isoformat()} -> {ts.isoformat()} '
+              f'({ts - prev})')
+    prev = ts
 "
 ```
 
-Compare the first post-restore timestamp against the last pre-restore one, and
-against when you know the bot was down. If the gap is longer than the outage,
+A privileged-action log is sparse by nature, so most of what this prints is idle
+time, not loss. It is a shortlist to check against your own outage record, not a
+finding on its own. Compare the first post-restore timestamp against the last
+pre-restore one, and against when you know the bot was down. If the gap is
+longer than the outage,
 records were lost that the outage does not explain, and that is a finding for
 [incident-response.md](incident-response.md#6-audit-log-tampering-suspected).
 
@@ -599,9 +644,17 @@ ls -la
 -rw-------. 1 btroidl btroidl 375 Aug 16 01:10 users.json
 ```
 
-**Check:** `audit.log.key` is present. `config.ini` is present. The `.bak` at
-0644 is the known permissions defect, and its appearance here is expected, not a
+**Check:** `audit.log.key` is present, alongside `audit.log`. The `.bak` at 0644
+is the known permissions defect, and its appearance here is expected, not a
 drill failure.
+
+**`config.ini` must also be present**, and in the listing above it is **not**.
+That listing came from a synthetic deployment that had no config file, which is
+exactly the shape of a real backup failure: a backup scoped to the state files
+restores nothing you can start the bot from, and step 6 below tells you to edit
+a `config.ini` that is not there. If your own listing is missing it, stop and fix
+the backup job before continuing the drill. The same goes for
+`config.local.ini` if your `password_hash` lives in the overlay.
 
 ### Step 2: validate the three checksummed datasets
 
@@ -662,15 +715,31 @@ the single most common silent backup defect.
 
 ### Step 4: the audit chain, including rotated segments
 
+`AuditLog` derives its key path from its log path, so it can only be pointed at
+a file named `audit.log`. Constructing it on a rotated segment makes it generate
+a fresh key, report the segment broken under that key, and leave a stray
+`<segment>.key` behind. Copy each segment into a scratch directory under the
+canonical names instead:
+
 ```bash
 python3 -c "
+import shutil, tempfile
 from pathlib import Path
 from audit_log import AuditLog
-for p in [Path('audit.log')] + sorted(Path('.').glob('audit.log.2*')):
-    a = AuditLog(p)
-    ok, idx = a.verify()
-    print(f'{p.name:28} {\"intact\" if ok else f\"BROKEN at {idx}\"} '
-          f'({a.count()} records)')
+
+def check(label, log, key):
+    with tempfile.TemporaryDirectory() as d:
+        shutil.copy2(log, Path(d) / 'audit.log')
+        shutil.copy2(key, Path(d) / 'audit.log.key')
+        a = AuditLog(Path(d) / 'audit.log')
+        ok, idx = a.verify()
+        state = 'intact' if ok else f'BROKEN at {idx}'
+        print(f'{label:28} {state} ({a.count()} records)')
+
+src = Path('.').resolve()
+check('audit.log', src / 'audit.log', src / 'audit.log.key')
+for seg in sorted(src.glob('audit.log.2*')):
+    check(seg.name, seg, src / 'audit.log.key')
 "
 ```
 
@@ -678,10 +747,16 @@ for p in [Path('audit.log')] + sorted(Path('.').glob('audit.log.2*')):
 audit.log                    intact (2 records)
 ```
 
-**Check:** intact, and the rotated segments are listed. The bot's own
-`.audit verify` never reads them, so this loop is the only place they get
-checked. A `BROKEN at 0` on every file at once means the key did not come out of
-the archive.
+**Check:** every line reads `intact`, and every rotated segment in the archive is
+listed. The bot's own `.audit verify` never reads the segments, so this loop is
+the only place they get checked.
+
+A `BROKEN at 0` on every file at once means the key did not come out of the
+archive, or the archive predates a key replacement. Rotation does not rotate the
+key, but drawing a fresh line after an incident does, and a segment written under
+an older key cannot be verified with the current one. That is a limit of the
+design, not a drill failure - record which key covers which segments in your own
+notes, because nothing on disk does.
 
 ### Step 5: prove the corruption path actually recovers
 
@@ -786,9 +861,31 @@ Rejoining #drill
 ```
 
 **Check:** it reached the channel list from the restored `channels.json`. Time
-this from launch to the `Rejoining` line - that number is your measured RTO
-contribution for the process, and it is the one you should put in your recovery
-plan.
+this from launch to the `Rejoining` line.
+
+:::{warning}
+**That time is not your deployment's RTO, and the drill directory is why.**
+`config.py` resolves `MODULES_DIR` from `[bot] modules_dir`, default the
+relative path `modules`, against the **current working directory**. Run from
+`/tmp/dr-drill`, which holds state files and no code, every entry in `[bot]
+autoload` fails to load, one WARNING each from
+`internets.py - IRCBot.autoload_modules()`:
+
+```text
+'modules/weather.py' not found.
+```
+
+The bot connects and rejoins with **zero modules**, so the number you just
+measured is the floor: connect and rejoin only, with none of the import and
+`on_load()` cost of your real module list.
+
+To measure something you can put in a recovery plan, point `[bot] modules_dir`
+in the drill `config.ini` at the checkout's `modules/` directory
+(`/srv/internets/modules`), re-run, and confirm `event=module_loaded` lines for
+your autoload set before you time it. Record which of the two you measured; a
+connect-only number recorded as the deployment RTO understates every restore
+that follows.
+:::
 
 Then stop it, and clean up:
 
@@ -842,9 +939,10 @@ So a rollback to **below 4.0.0** turns one bad read into permanent loss, with a
 log line and nothing on disk. Copy the whole deployment directory aside before
 the rollback, and treat that copy as the only recovery path.
 
-Note that [deployment.md](deployment.md#rollback) currently attributes
-quarantine to 5.0.0. The CHANGELOG places it in the 4.0.0 section; 5.0.0's
-storage-related entry is the bcrypt 72-byte change, not this one.
+[deployment.md](deployment.md#rollback) states the same threshold. Both pages
+trace to commit `a837365` ("Security sweep: is_admin fails closed, store
+quarantine, ..."), which added `Store._quarantine()` and the `.bak` write in one
+change and is reachable from `v4.0.0` and `v5.0.0` but from no earlier tag.
 :::
 
 Two consequences of rolling back below 4.0.0:
@@ -866,7 +964,7 @@ range does not change the corruption-handling behaviour.
 | Going backwards | Effect |
 |---|---|
 | Below 4.0.0 | Rejected state files are reset and clobbered; no quarantine, no `.bak` |
-| Below 5.0.0, bcrypt password over 72 bytes | The direction is asymmetric: 5.0.0 refuses a bcrypt candidate over 72 bytes at verify time, older versions truncate and accept it. A long password that works before the rollback keeps working after it, and stops working when you roll forward again |
+| Below 5.0.0, bcrypt password over 72 bytes | The rollback **restores** access rather than breaking it. `hashpw.py - _verify_bcrypt()` in 5.0.0 refuses a candidate over 72 UTF-8 bytes; older versions let bcrypt truncate it and accept it. Such a password stopped authenticating when you upgraded to 5.0.0, works again below it, and stops again on the next roll forward. Re-hash with argon2 rather than relying on the rollback |
 | Any version, dependencies left forward | An older binary against newer libraries is not the version you tested; reinstall from that version's `requirements.txt` |
 
 The bcrypt case has its own log line, at WARNING from `hashpw`:

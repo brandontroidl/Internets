@@ -130,8 +130,11 @@ Two related gaps make the erasure incomplete even when `privacy` is loaded:
   row that the purge then counts. An untracked user is told "tracking in 1
   channel(s) (erased now)".
 
-**Verified:** parsed the template's autoload list; confirmed the six collectors
-present and `privacy` absent.
+**Verified:** parsed the template's autoload list and confirmed `privacy` is
+absent. On the count: five modules keep their own store (`seen`, `tell`,
+`notes`, `remind`, `steam`); `location` stores through the core store; and
+`linktitle` persists nothing but writes announced URLs to the log. All seven
+are autoloaded.
 
 **Fix shape:** add `privacy` (and `health`) to the template autoload; decide
 whether the two log sites should log at DEBUG, omit the identifier, or be
@@ -425,15 +428,15 @@ channel membership, the `seen` record including its stored message context, tell
 counts, note count, and audit-log mentions. It reads `seen.json`, `tells.json`,
 and `notes.json` directly.
 
-Twenty-five call sites in `admin_cmds.py` write an audit record. This handler is
+Nineteen call sites in `admin_cmds.py` write an audit record. This handler is
 not one of them, so the one command that assembles a complete profile of a user
 leaves no trace that it was run or against whom.
 
 The output is delivered to the admin by notice rather than to the channel, so
 this is an accountability gap rather than a disclosure one.
 
-**Verified:** counted `_audit(` call sites in the file and confirmed none falls
-inside this handler.
+**Verified:** counted `_audit()` call sites by walking the file's AST (19) and
+confirmed none falls inside this handler.
 
 **Fix shape:** call `self._audit(nick, "fingerprint", target)` like every
 sibling. Consider whether the target nick belongs in the record, which is itself

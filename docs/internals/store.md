@@ -52,7 +52,9 @@ Dependents:
   `channel_users` as thin one-line bot methods (`internets.py - IRCBot.loc_get()`
   and its three siblings) so modules do not touch `self._store` directly
   (though some do; see below).
-- `modules/location.py` - `.setloc`/`.myloc`/`.delloc` via the bot proxies.
+- `modules/location.py` - `.regloc` (alias `.register_location`), `.myloc` and
+  `.delloc` via the bot proxies. Its `COMMANDS` map holds exactly those four
+  names; there is no `.setloc`.
 - `modules/weather.py` - reads saved locations; checks `is_opted_out` via
   `getattr(self.bot, "_store", ...)` before a cross-user `-n <nick>` lookup.
 - `modules/privacy.py` - `.forgetme`/`.privacy`/`.optout`/`.optin`; calls

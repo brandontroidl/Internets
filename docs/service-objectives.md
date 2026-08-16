@@ -108,14 +108,27 @@ counter.
 a non-zero value is always wrong, because a drop is a reply a user asked for
 and never received, with no error shown to them.
 
-**Why.** `sender.py - Sender._safe_put()` drops a priority-1 message when the
-200-slot queue is full, and logs `Send queue full - dropping message` at
-WARNING. There is no retry and no notification to the requesting user.
+**Why.** `sender.py - Sender._safe_put()` branches on priority when the
+200-slot queue is full, and **both branches lose a message**:
+
+| Priority | Behavior on a full queue | Counted? |
+|---|---|---|
+| Non-zero (any user-facing reply, not just 1) | Logs `Send queue full - dropping message` at WARNING, calls `_drop()` | Yes |
+| 0 (PONG/CAP/NICK/QUIT), eviction succeeds | Evicts the worst-priority queued entry to make room, logs `Send queue full - evicted pri=N ...`, calls `_drop()` for the **evicted victim**, enqueues the pri-0 item | Yes, the victim |
+| 0, eviction fails | Logs `Send queue full - UNABLE to enqueue priority-0 message` at ERROR, no `_drop()` | **No** |
+
+Protocol traffic is deliberately protected because losing a PONG causes a
+ping-timeout disconnect and a reconnect storm worse than the overflow. The
+consequence for this objective is that a rising drop count can mean either
+"replies discarded" or "replies evicted to save the link", and only the log line
+distinguishes them. There is no retry and no notification to the requesting
+user in either case.
 
 **Measurable today: yes.** `internets_dropped_messages_total` is incremented
 from `sender.py - _bump_dropped()`, and the bot's own
 `_metrics["dropped_messages"]` is incremented through the `on_drop` callback,
-which surfaces it in the `event=shutdown_complete` line and in `.health`.
+which surfaces it in the `event=shutdown_complete` line and in the `.health`
+counters row.
 
 **But it undercounts.** `internets.py - IRCBot._connect()` constructs a fresh
 `Sender` on every connect, and `Sender.start()` also replaces `self._q` with a
@@ -179,7 +192,7 @@ Do not claim it is monitored.
 **Objective.** Zero failed audit-log writes. An admin action that executes but
 is not recorded destroys the property the audit chain exists to provide.
 
-**Why.** Every admin command routes through
+**Why.** Admin commands that change state route through
 `admin_cmds.py - AdminCommandsMixin._audit()`, which calls
 `audit_log.AuditLog.record()`. `record()` catches `OSError`, logs
 `audit_log: write failed: <ExceptionType>` at ERROR, and re-raises. The caller
@@ -197,15 +210,42 @@ whose failure mode is *silence in the security record*. See
 [logging-and-auditing](logging-and-auditing.md) for what the chain does and
 does not prove.
 
+**Coverage is incomplete as well as unmeasurable, and that is the more
+actionable half.** Walking the AST of `admin_cmds.py` finds 27 `cmd_*` handlers
+and 19 `_audit()` call sites, one per audited handler. Eight handlers write no
+audit record: `cmd_help`, `cmd_version`, `cmd_modules`, `cmd_uptime`,
+`cmd_stats`, `cmd_audit`, `cmd_shadow_list`, and `cmd_fingerprint`.
+
+Seven of those eight are read-only status output, and leaving them out is a
+defensible signal-to-noise choice. **`cmd_fingerprint` is not.** It
+cross-references everything the bot knows about a nick - hostmask, channel
+membership, the `seen` record including stored message context, tell counts,
+note count, audit-log mentions - reading `seen.json`, `tells.json` and
+`notes.json` directly, and it leaves no trace that it ran or against whom. It is
+item 16 in [known-issues](known-issues.md#16-the-most-privacy-invasive-admin-command-is-the-only-unaudited-one).
+
+So read this objective as covering two distinct gaps, not one. Even a perfect
+audit-failure counter would report zero for a `.fingerprint` that was never
+offered to the chain, because the gap there is upstream of `record()`. Adding
+`self._audit(nick, "fingerprint", target)` is the smaller and more urgent fix of
+the two.
+
 ### 2.6 Objective summary
 
 | Objective | Signal today | Verdict |
 | --- | --- | --- |
 | Reconnect frequency | `internets_reconnects_total` + `event=connection_lost` | Measurable; counts losses, not attempts |
-| Outbound drops | `internets_dropped_messages_total` + `.stats` | Measurable; undercounts on reconnect |
+| Outbound drops | `internets_dropped_messages_total` + `.health` counters | Measurable; undercounts on reconnect |
 | Task-capacity rejections | `event=dispatch_rejected` log only | Log only, no metric, no headroom view |
 | Provider success rate | `.health` only | Not scrapable; exporter series are constant zero |
-| Audit write failures | two log lines only | Not measurable; success counter cannot show failure |
+| Audit write failures | two log lines only | Not measurable; and 8 of 27 handlers never audit at all |
+
+`.stats` is not a drop surface: it reports uptime, module counts, channels,
+traffic totals, send-queue depth against `MAX_QUEUE`, audit-record count, and
+RSS. The dropped-message counter appears only in the `.health` counters row and
+in the `event=shutdown_complete` log line. Note also that `health` is absent
+from the shipped `config.ini.example` autoload, so `.health` is unavailable on a
+default install until the operator adds the module.
 
 ---
 
@@ -381,12 +421,26 @@ visible only as a repeated ERROR line.
 ### 5.5 Thread-pool saturation
 
 **What it catches.** Blocking work queueing behind a pool smaller than the task
-cap. Nothing in the codebase calls `loop.set_default_executor()`, so
-`asyncio.to_thread` uses the default `ThreadPoolExecutor`, sized
-`min(32, cpu_count + 4)`. On a 2-core VPS that is **6 workers** against a
-50-slot task cap. Seven concurrent `.g` lookups (blocking `requests` calls
-offloaded via `to_thread`) put the seventh in a queue that no metric,
-log line, or admin command reveals.
+cap. Nothing in the codebase calls `loop.set_default_executor()` or constructs a
+`ThreadPoolExecutor`, so `asyncio.to_thread` uses the default executor, whose
+size CPython computes itself - and the formula changed inside the supported
+matrix:
+
+| Python | `ThreadPoolExecutor` default `max_workers` |
+|---|---|
+| 3.10 - 3.12 | `min(32, (os.cpu_count() or 1) + 4)` |
+| 3.13 - 3.14 | `min(32, (os.process_cpu_count() or 1) + 4)` |
+
+On a 2-core VPS both give **6 workers** against a 50-slot task cap. They diverge
+when the process is restricted: `process_cpu_count()` respects CPU affinity and
+the `PYTHON_CPU_COUNT` / `-X cpu_count` override, so on 3.13+ a `taskset`-pinned
+bot sizes its pool from the CPUs it may actually use, while on 3.12 and below it
+sizes from the machine's total. Neither reads a cgroup CPU quota, so a container
+limited with `--cpus` gets a pool sized for the host on every supported version.
+
+Either way, seven concurrent `.g` lookups (blocking `requests` calls offloaded
+via `to_thread`) put the seventh in a queue that no metric, log line, or admin
+command reveals.
 
 **Shape.** A gauge of active workers and of queued work items, sampled from the
 executor. Alternatively, set the executor size explicitly at startup so at

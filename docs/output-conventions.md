@@ -18,16 +18,32 @@ This page is the layer above: what the assembled line should look like, and why.
 
 ## 1. The hard limits
 
-Four independent caps apply to every reply. They are not the same cap, they do
-not compose the way they look like they do, and three of them are the number
-400.
+Four caps are in play. They are not the same cap, they do not compose the way
+they look like they do, three of them are the number 400, and - the part that
+gets missed - **only two of them apply to every reply.**
 
-| Limit | Symbol | Unit | Effect |
-|---|---|---|---|
-| 512 | `sender.Sender._MAX_IRC_LINE` | bytes | whole IRC line, truncated |
-| 400 | `internets.IRCBot._MAX_BODY` | bytes | body split into chunks |
-| 400 | `modules.base.strip_ctrl` default | characters | string truncated |
-| 400 | `internets.IRCBot._MAX_ARG_LEN` | characters | inbound arg refused |
+| Limit | Symbol | Unit | Direction | Applies |
+|---|---|---|---|---|
+| 512 | `sender.Sender._MAX_IRC_LINE` | bytes | outbound | always, on every line |
+| 400 | `internets.IRCBot._MAX_BODY` | bytes | outbound | always, on every body |
+| 400 | `modules.base.strip_ctrl` default | characters | outbound | **only when a module calls it** |
+| 400 | `internets.IRCBot._MAX_ARG_LEN` | characters | **inbound** | on the command argument, never on a reply |
+
+The last two are the ones to be careful with. `_MAX_ARG_LEN` bounds what a user
+may send *in*; it constrains reply length only indirectly, by limiting one
+possible source of it. And `strip_ctrl()` is a function a module chooses to
+call, not a filter the send path applies: 66 of the 75 files in `modules/`
+reference it, and the rest emit whatever they assembled.
+
+Most of the nine are harmless - `units.py` emits nothing, `dice.py` and
+`bofh.py` emit only self-generated text, `privacy.py`, `channels.py` and
+`health.py` emit values the bot itself owns. **`modules/twitch.py` is not.** It
+imports `BotModule`, `fetch_json` and `help_row` from `.base` and no sanitizer
+at all, then interpolates upstream-controlled `display_name`, `game_name` and
+`title` fields straight into bolded reply lines
+(`modules/twitch.py - TwitchModule.cmd_twitch()` and its siblings). A hostile
+or compromised upstream response is emitted with its control bytes intact. Do
+not read "four caps apply" as meaning the send path will catch that for you.
 
 `sender.Sender._write_line()` is the last stop. It removes `\r`, `\n`, and
 `\x00`, encodes to UTF-8, and if the result exceeds 510 bytes it truncates to
@@ -47,9 +63,12 @@ plus `\x7f`, which includes `\x02` (bold), `\x03` (color), `\x0f` (reset),
 defense against a hostile upstream, and also what makes assembling formatting
 before sanitizing a mistake (section 5).
 
-`internets.IRCBot._dispatch()` refuses an inbound `arg` over 400 characters with
-`input too long (max 400 chars).` before the handler runs, so any module
-advertising a larger input is advertising something unreachable.
+`internets.IRCBot._dispatch()` refuses an inbound `arg` over `_MAX_ARG_LEN`
+characters with `input too long (max 400 chars).` before the handler runs, so
+any module advertising a larger input is advertising something unreachable.
+That message is emitted by the core dispatcher through its own
+`self.notice(...)`, not by any module; `modules/translate.py` has a
+similar-looking line of its own against a different, module-local cap.
 
 ### The token bucket makes multi-line output slow
 
@@ -66,14 +85,22 @@ lines   time until the last line is written
     5   immediate (burst capacity)
    10   ~7.5 s
    20   ~22.5 s
+   42   ~55.5 s
    44   ~58.5 s
 ```
 
-44 is not hypothetical. `.help all` renders every registered command through
-`admin_cmds._help_grid()` at four columns; with 165 primary module commands and
-4 public core commands currently registered, that is 43 grid rows plus a header.
-A user who types it gets five lines instantly and waits about a minute for the
-rest, with no indication that more is coming. See
+The rule is `(lines - CAPACITY) x REFILL`: the first 5 are free, the rest are
+metered at 1.5 s each.
+
+That range is not hypothetical. `.help all` renders every **loaded** command
+through `admin_cmds._help_grid()` at four columns. On the shipped
+`config.ini.example` autoload that is 162 names for a non-admin, 41 grid rows
+plus a header, so 42 lines and about 56 seconds; counting every file in
+`modules/` instead gives 169 names, 43 rows and 44 lines. The full derivation,
+including the admin figures, is in
+[performance](performance.md#23-what-a-large-reply-does-to-the-budget). Either
+way a user who types it gets five lines instantly and waits about a minute for
+the rest, with no indication that more is coming. See
 [design-decisions](design-decisions.md) ADR-012 for why the bucket exists and
 must not be flattened.
 
@@ -96,17 +123,33 @@ user-visible convention, not an implementation detail.
 | `reply(nick, reply_to, msg)` | `PRIVMSG` to the channel | `PRIVMSG` to the nick |
 | `preply(nick, reply_to, msg)` | `NOTICE` to the nick | `PRIVMSG` to the nick |
 
-The convention the modules follow, counted across `modules/`:
+The convention the modules follow, counted by walking the AST of every file in
+`modules/` for calls on the bot object:
 
-- **Results go to the channel.** 352 `bot.privmsg(reply_to, ...)` call sites.
-- **Refusals go privately as a NOTICE.** 93 `bot.notice(nick, ...)` call sites
-  across 65 modules, overwhelmingly rate-limit messages and "not configured"
-  errors. A refusal is noise to everyone except the person who typed it, and a
-  `NOTICE` does not trigger most clients' highlight or logging behavior the way
-  a `PRIVMSG` does.
+- **Results go to the channel.** 395 `bot.privmsg(...)` call sites, 376 of them
+  targeting `reply_to`.
+- **Refusals go privately as a NOTICE.** 96 `bot.notice(...)` call sites across
+  65 files, and **every one of them targets `nick`** rather than `reply_to`,
+  which is the convention holding without exception. A refusal is noise to
+  everyone except the person who typed it, and a `NOTICE` does not trigger most
+  clients' highlight or logging behavior the way a `PRIVMSG` does.
 - **Long administrative output uses `preply`.** `.help`, `.stats`, and the audit
-  views in `admin_cmds.py` all use it, so a 44-line grid lands in the invoker's
+  views in `admin_cmds.py` all use it, so a 42-line grid lands in the invoker's
   query window rather than the channel.
+
+The notice population is far less varied than its size suggests: **79 of the 96
+are the single rate-limit line** `f"{nick}: slow down - try again in a few
+seconds"`, leaving 17 that say anything else (PM-only refusals, `admin only`,
+and the privacy opt-in/opt-out confirmations). Read that as one convention
+applied 79 times, not as 96 distinct refusal messages.
+
+**No notice says "not configured".** That refusal shape does not exist on the
+notice path at all. An unconfigured module is instead hidden from `.help` by
+`modules/base.py - BotModule.is_configured()`, and the few modules that report
+the condition explicitly do it to the channel - `modules/lastfm.py` uses
+`bot.privmsg(reply_to, "Last.fm API key not configured - see [lastfm] in
+config.ini")`. Dispatch still works for an unconfigured module, so an admin can
+`.load` it and add the key later.
 
 ---
 
@@ -127,18 +170,46 @@ reply.
 model of the dense form:
 
 ```
-U+00E9 'e' :: LATIN SMALL LETTER E WITH ACUTE :: cat Ll :: UTF-8 c3 a9 :: Latin-1 Supplement
+U+00E9 'é' :: LATIN SMALL LETTER E WITH ACUTE :: cat Ll :: UTF-8 C3 A9 :: Latin-1 Supplement
 ```
 
-**Bold** (`\x02`) appears in 39 module files and is used for exactly one thing:
-the identity of the record being reported, at the head of the line. Compare
-`modules/imdb.py` (`\x02Title\x02 [Year] ...`), `modules/crypto.py`
-(`\x02BTC\x02 $43,210.50 ...`), and `modules/reflookup.py`
-(`\x02Helium\x02 (He) :: Z=2 ...`). Bold is never used for emphasis inside a
-sentence, and never for a whole line.
+Note the two details that are easy to get wrong when quoting this: the glyph
+column shows the **actual character** (`shown = ch` unless its category is `C`
+or `Z`, in which case a middle dot stands in), and the UTF-8 bytes are
+**uppercase**, from `ch.encode("utf-8").hex(" ").upper()`.
 
-**Color** (`\x03NN`) appears in six modules. In every one of them the color is
-redundant with a word or a shape that carries the same meaning:
+**Bold** (`\x02`) is referenced in 38 files under `modules/` and emitted from
+36 of them (counted by walking each file's AST for a non-docstring string
+literal containing `\x02`; a raw text search overcounts by two, which are
+comments).
+
+It is used for **two** things, not one, and both are established:
+
+1. **The identity of the record**, at the head of the line. `modules/imdb.py`
+   (`\x02Title\x02 [Year] ...`), `modules/crypto.py`
+   (`\x02BTC\x02 $43,210.50 ...`), `modules/reflookup.py`
+   (`\x02Helium\x02 (He) :: Z=2 ...`).
+2. **Field labels, mid-line, throughout the reply.** This is at least as common
+   as the first. `modules/imdb.py` - the same line quoted above - continues
+   `\x02Rating\x02 8.8/10 | \x02Genre\x02 ... | \x02Director\x02 ...`, and the
+   pattern repeats in `lastfm`, `ipinfo`, `twitch`, `steam`, `idlerpg`, `poke`
+   and `youtube`.
+
+There is also one clear use for emphasis inside a sentence:
+`modules/idlerpg.py` emits `player 'x' not found (\x02note:\x02 names are case
+sensitive)`. And `modules/youtube.py` combines bold with color in a single
+token (`\x0303\x02[+]\x02\x03 {likes} likes`).
+
+So treat what follows as **guidance for new code**, not a description of the
+existing corpus: pick one of the two roles per reply and hold it, prefer the
+record-identity form for a single-record lookup and the field-label form for a
+dense multi-field line, and do not mix both in one message. Bolding a whole
+line is the one thing nothing in the codebase does; keep it that way.
+
+**Color** (`\x03NN`) is referenced in 9 files and emitted from **seven**:
+`crypto`, `idlerpg`, `linktitle`, `steam`, `stocks`, `twitch`, `youtube`. In
+every one of them the color is redundant with a word or a shape that carries
+the same meaning:
 
 ```python
 # modules/steam.py - the label carries the state, the color repeats it
@@ -150,13 +221,16 @@ arrow = "\x0303▲\x03" if change >= 0 else "\x0304▼\x03"
 Keep it that way (section 4).
 
 **Errors and usage hints are prefixed with the invoker's nick**, `f"{nick}: ..."`,
-321 times across `modules/`. In a busy channel this is the only thing that ties
+320 times across `modules/`. In a busy channel this is the only thing that ties
 a refusal to the person who caused it. The forms in use:
 
 ```python
+# modules/*: the rate-limit refusal, 79 identical sites
 self.bot.notice(nick, f"{nick}: slow down - try again in a few seconds")
+# modules/qr.py: a usage hint, to the channel
 self.bot.privmsg(reply_to, f"{nick}: {p}qr <text>")
-self.bot.notice(nick, f"{nick}: input too long (max 400 chars).")
+# internets.py - IRCBot._dispatch(): core, not a module
+self.notice(nick, f"{nick}: input too long (max {self._MAX_ARG_LEN} chars).")
 ```
 
 Note the second: the command prefix is read from config
@@ -245,24 +319,52 @@ stats:
 ### Prefer ASCII in emitted strings
 
 The codebase is inconsistent here and the inconsistency is worth knowing about
-before you copy a neighbour. Non-ASCII characters currently reach IRC output
-from at least these places:
+before you copy a neighbour. The inventory below was rebuilt by walking each
+file's AST and looking only at **non-docstring string literals**, so it counts
+characters that can reach output rather than every occurrence in the source:
 
-| Character | Where | Note |
+| Character | Files | Note |
 |---|---|---|
-| U+2013 en dash | `dice.py`, `hn.py`, `netcalc.py`, `encode.py` | inside numeric ranges |
-| U+2192 arrow | `netcalc.py`, `secinfo.py`, `seen.py`, `translate.py` | mapping notation |
+| U+2192 rightwards arrow | `admin_cmds.py`, `base.py`, `netcalc.py`, `privacy.py`, `secinfo.py`, `seen.py`, `translate.py`, `weather.py` | mapping notation; 8 files, the widest-spread of any |
+| U+2013 en dash | `dice.py`, `dnsutils.py`, `encode.py`, `hn.py`, `netcalc.py` | inside numeric ranges |
+| U+00B0 degree | `geocode.py`, `iss.py`, `satpass.py`, `weather.py` | coordinates and temperatures |
+| U+2026 ellipsis | `numberfact.py`, `pkginfo.py`, `satpass.py` | truncation marker |
 | U+00D7 multiply | `netcalc.py`, `numberfact.py` | `4 × /26` |
+| U+00B3 superscript 3 | `numberfact.py`, `weather.py` | `m³` and cube notation |
 | U+2500 box drawing | `admin_cmds.py` | header rules on five commands |
-| U+03BC, U+00B3, U+2082 | `weather.py` | `PM2.5 12.0μg/m³`, `O₃` |
+| U+03BC mu, U+2082, U+2083 | `weather.py` | `μg/m³`, `O₃`, `NO₂` |
 | U+25B2 / U+25BC | `stocks.py` | paired with color |
+| U+2190 / U+2191 / U+2193 | `seen.py`, `crypto.py` | direction markers, paired with color in `crypto` |
+| U+00B7 middle dot | `encode.py` | substitute glyph for a control or space codepoint |
+| U+00B5 micro sign | `physcalc.py` | `µs` |
+| U+2605 black star | `ghinfo.py` | repository star count |
+| U+23F0 alarm clock | `remind.py` | emoji, in the reminder-fired reply |
 
-ASCII substitutes exist for all of the first three: `1-100`, `->`, `x`. The
-scientific units in `weather.py` are the defensible case, since `ug/m3` is
-meaningfully less precise, and the triangles in `stocks.py` are the redundant
+Three things in that table are worth calling out.
+
+**U+03BC and U+00B5 are different codepoints for the same thing.**
+`weather.py` uses GREEK SMALL LETTER MU and `physcalc.py` uses MICRO SIGN. They
+render identically and compare unequal. If either is kept, the codebase should
+pick one.
+
+**U+23F0 is an emoji**, in `modules/remind.py - RemindModule` where a fired
+reminder is announced. It is the only emoji in emitted output and it is the
+clearest case for replacement.
+
+**Two non-ASCII uses look like output and are not**, so a grep-based inventory
+will wrongly include them: `modules/geocode.py` accepts `°`, `º`, `′` and `″`
+inside `_COORD_DMS_RE` (an *input* pattern for degree-minute-second
+coordinates), and `modules/calc.py` uses the noncharacter U+FDD0 as an internal
+tokenizing sentinel that is substituted back out before the reply is built.
+Neither reaches the wire, and neither should be "fixed".
+
+ASCII substitutes exist for most of the list: `1-100`, `->`, `x`, `...`, `deg`,
+`*`. The scientific units in `weather.py` are the defensible case, since `ug/m3`
+is meaningfully less precise, and the triangles in `stocks.py` are the redundant
 encoding that keeps color from being load-bearing. Everything else is
-decoration that costs bytes and renders unpredictably. New code should default
-to ASCII and justify an exception.
+decoration that costs bytes (each of these is 2 to 4 UTF-8 bytes against the
+400-byte chunk budget) and renders unpredictably. New code should default to
+ASCII and justify an exception.
 
 ### Do not assume the reader saw the command
 
@@ -275,8 +377,12 @@ what the `f"{nick}: "` prefix on refusals buys, and why `.alerts` prints a
 
 ## 5. Verified pitfalls
 
-:::{admonition} Known defect: `modules/bored.py` sanitizes away its own bold
+:::{admonition} Defect (not in the register): `modules/bored.py` sanitizes away its own bold
 :class: warning
+Unlike the two below, this one has **no entry in
+[known-issues](known-issues.md)**; it was found while writing this page. It is
+cosmetic, which is presumably why, but the ordering mistake behind it is not.
+
 `modules/bored.py - _fetch_sync()` builds the line with `\x02bored?\x02`, then
 passes the assembled string through `_strip_ctrl()`. `strip_ctrl` removes the
 full C0 range, so it deletes the two `\x02` bytes the function just added. The
@@ -383,7 +489,8 @@ sanitization mechanics this list assumes.
       answers the question.
 - [ ] Field order is fixed and does not shift when a field is absent.
 - [ ] One separator throughout the reply: ` | ` or ` :: `, not both.
-- [ ] Bold, if used, marks the record identity at the head of the line only.
+- [ ] Bold, if used, plays one role for the whole reply: record identity at the
+      head, or field labels throughout. Not both, and never a whole line.
 - [ ] Color, if used, repeats meaning that a word or glyph already carries.
 - [ ] Emitted strings are ASCII, or the exception is justified.
 - [ ] Refusals are `bot.notice(nick, f"{nick}: ...")`; results are
@@ -406,6 +513,7 @@ sanitization mechanics this list assumes.
 - [design-decisions](design-decisions.md) - ADR-012 on the priority queue and
   token bucket.
 - [security-model](security-model.md) - what counts as disclosure.
-- [known-issues](known-issues.md) - the defect register, including the three
-  named above.
+- [known-issues](known-issues.md) - the defect register. It carries the
+  `modules/qr.py` and `modules/stocks.py` entries named above; the
+  `modules/bored.py` one is not in it.
 - [internals/sender](internals/sender.md) - line-level detail on the send path.

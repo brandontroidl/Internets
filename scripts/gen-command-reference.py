@@ -2,11 +2,12 @@
 """Generate the user command inventory from actual command registration.
 
 Documentation that hand-lists commands drifts the moment a module adds one.
-This walks every module under modules/, instantiates each BotModule subclass
-without running __init__ (the same technique tests/test_help.py uses, so no
-network, keys, or config are needed), and emits one Markdown table row per
-module: module name, primary commands (one per handler, aliases folded in),
-and admin-only core commands from AdminCommandsMixin._CORE.
+This imports every module under modules/, finds the BotModule subclass each one
+defines, and reads the class-level COMMANDS mapping off the class.  Nothing is
+instantiated and no handler runs, so no network access or API keys are needed.
+It emits one Markdown table row per module: module name, primary commands (one
+per handler, aliases folded in), and admin-only core commands from
+AdminCommandsMixin._CORE.
 
 Usage:
     scripts/gen-command-reference.py            # Markdown to stdout

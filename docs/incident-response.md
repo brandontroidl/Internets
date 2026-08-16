@@ -155,17 +155,20 @@ Three keys are in scope. Which ones leaked depends on which providers were
 configured and which failed; assume all configured ones leaked unless you can
 read the exact reply text.
 
-| Secret name | Query parameter | Free-tier rate (source comment) |
-|---|---|---|
-| `finnhub_key` | `token=` | 60 calls/min |
-| `alphavantage_key` | `apikey=` | 25 calls/day |
-| `twelvedata_key` | `apikey=` | 800 calls/day |
+| Secret name | Query parameter |
+|---|---|
+| `finnhub_key` | `token=` |
+| `alphavantage_key` | `apikey=` |
+| `twelvedata_key` | `apikey=` |
 
-The signup and account URLs recorded in `modules/stocks.py`:
-
-- Finnhub: <https://finnhub.io/register>
-- Alpha Vantage: <https://www.alphavantage.co/support/#api-key>
-- Twelve Data: <https://twelvedata.com/account>
+:::{note}
+**Unverified against the providers.** The rate ceilings and signup URLs below
+are transcribed from a comment at the top of `modules/stocks.py` (60 calls/min
+Finnhub, 25 calls/day Alpha Vantage, 800 calls/day Twelve Data, plus
+<https://finnhub.io/register>, <https://www.alphavantage.co/support/#api-key>,
+<https://twelvedata.com/account>). Nothing in the repository re-checks them and
+free-tier terms change. Confirm both at the provider before you rely on either.
+:::
 
 The provider consoles differ in shape and change over time; confirm the current
 flow at the console rather than following remembered steps. What matters
@@ -174,11 +177,13 @@ rotation done, is:
 
 - Whether issuing a new key **revokes** the old one or leaves both live. If both
   stay live, you must explicitly delete or disable the old key. A rotation that
-  only adds a key has not contained anything.
+  only adds a key has not contained anything. This is provider policy, not
+  something this repository can tell you; read the console's own wording.
 - Whether the provider offers usage logs for the compromised key, and over what
   window. That is your only evidence of whether it was abused.
-- The rate ceiling, above, is the abuse budget an attacker inherits. Alpha
-  Vantage's 25 calls/day is a small prize; Finnhub's 60 calls/min is not.
+- The rate ceiling is the abuse budget an attacker inherits. If the comment's
+  figures still hold, Alpha Vantage's 25 calls/day is a small prize and
+  Finnhub's 60 calls/min is not.
 
 ### Recovery: install the new key and confirm the bot uses it
 
@@ -245,9 +250,16 @@ shows as `stocks: active providers: ['none']`.
 
 **Environment tier** (`INTERNETS_FINNHUB_KEY`): a running process's environment
 cannot be changed from outside it. `.reload stocks` re-reads `os.environ` of the
-**same** process and will happily keep using the old value. Update the unit's
-`Environment=` or `EnvironmentFile=`, then `systemctl daemon-reload` and restart
-the process. There is no reload path.
+**same** process and will happily keep using the old value. Update wherever your
+service manager sets the variable, then restart the process. There is no reload
+path.
+
+The repository ships **no service unit**; every `systemctl` command in this
+document assumes the systemd unit shown in
+[deployment.md](deployment.md#systemd) and a unit named `internets`. Substitute
+your own unit name, or your own service manager's commands, before running them.
+Under that unit the sequence is `systemctl daemon-reload` after editing
+`Environment=` or `EnvironmentFile=`, then `systemctl restart internets`.
 
 Confirm the value changed without printing it:
 
@@ -273,8 +285,8 @@ containment.
 ### Follow-up
 
 - Reload `stocks` only after the rotation is confirmed. Leaving it unloaded is a
-  legitimate end state: the two commands it provides are `.stock`, `.s`, and
-  `.crypto`.
+  legitimate end state: the three command names it registers are `.stock`, `.s`
+  (an alias for `.stock`), and `.crypto`.
 - The same URL-bearing-exception habit exists in `log.warning` calls in `imdb`,
   `lastfm`, `youtube`, `steam`, and `twitch`. Those leak to the log rather than
   the channel, which is lower severity but the same defect, and they are worth a
@@ -435,13 +447,14 @@ hostmask lives.
 
 ### Evidence preservation
 
-The session table is in memory only. Before any rehash or restart, capture it:
+The session table is in memory only, and **nothing exposes it**. `.stats`
+(`admin_cmds.py - AdminCommandsMixin.cmd_stats()`) reports uptime, module and
+channel counts, traffic counters, send-queue depth, the audit record count, and
+RSS. It does not report the authenticated admins, in number or identity. The
+`authed_admins_count` metric that would have is one of the six with no update
+call site and renders as a constant zero (see [runbook 7](#ir-metrics)).
 
-```text
-.stats
-```
-
-`.stats` reports the authenticated admin count but not the identities. The
+So the session table cannot be captured at all before you clear it. The
 identities are recoverable only from the log lines above (`Auth granted:` with
 the bound hostmask). Grep them out before the log rotates:
 
@@ -512,8 +525,11 @@ landed in a file or section the bot is not reading - check that you edited the
   compared against `[bot] autoload`. An attacker who unloaded `privacy` leaves
   no trace beyond one log line and one audit record.
 - `.audit verify` - the chain should be intact. If it is not, go to
-  [runbook 7](#ir-audit).
-- `.health` and `.stats` for a general state read.
+  [runbook 6](#ir-audit).
+- `.health` and `.stats` for a general state read. `health` is **not** in the
+  shipped `[bot] autoload` in `config.ini.example`, so `.health` answers only on
+  a deployment that added it or loaded it by hand; `.load health` first if it
+  does not.
 - Review `.shadow-list` for bans you did not place.
 - Check `[irc] oper_name` is still what you set, and if the bot is opered,
   review the IRCd's own oper log for the incident window. That log is outside
@@ -542,7 +558,7 @@ landed in a file or section the bot is not reading - check that you edited the
   not themselves audited. An attacker who authenticated and only read data
   leaves an `auth` record and nothing else.
 - **Whether a rotated audit segment was altered.** `verify()` reads only the
-  live `audit.log`. See [runbook 7](#ir-audit).
+  live `audit.log`. See [runbook 6](#ir-audit).
 - **Anything about console access.** The stdin console
   (`console.py`) has **no authentication at all** and is not audited; its
   `shutdown`, `debug`, `loglevel`, and `status` commands leave only the ordinary
@@ -555,19 +571,37 @@ landed in a file or section the bot is not reading - check that you edited the
 
 ### Scope
 
-Four separate reversible credentials reach the IRC network, all resolved through
-`secret_store.get()` and all held as **import-time constants** in `config.py`:
+Three separate reversible credentials reach the IRC network, all resolved
+through `secret_store.get()` and all held as **import-time constants** in
+`config.py`:
 
 | Secret | Read by | Sent as |
 |---|---|---|
 | `nickserv_password` | `config.py - NS_PW` | `PRIVMSG NickServ :IDENTIFY`, SASL PLAIN |
-| `sasl_password` | `secret_store` only | falls back to `nickserv_password` |
 | `server_password` | `config.py - SERVER_PW` | `PASS` during registration |
 | `oper_password` | `config.py - OPER_PW` | `OPER <name> <pw>` |
 
 Because they are import-time constants, **none of them can be changed without a
 process restart**. `.rehash` explicitly does not re-read them; the SIGHUP path
 logs `note=defensive_no_cred_reload` to say so.
+
+:::{warning}
+**`sasl_password` is dead configuration - do not rotate it.** It is registered
+in `secret_store.py - KNOWN_SECRETS`, next to a comment saying it falls back to
+`nickserv_password`, but **no code reads its value**. Verified: a repository-wide
+grep for `sasl_password` across the `.py` tree returns the registry entry and one
+use of the literal *string* as the credential label passed to
+`internets.py - IRCBot._tls_or_refuse()`, which only decides whether the
+connection is TLS. There is no `SASL_PW` in `config.py`, and the SASL PLAIN
+payload is built from `NS_PW` (`internets.py - IRCBot._handle_cap()`, at the
+`AUTHENTICATE` line).
+
+Setting `sasl_password` during a compromise therefore rotates nothing and leaves
+the compromised credential in use, while reading as a completed step. Rotate
+`nickserv_password`: it is what SASL actually sends. `sasl_password` is also the
+one entry in `KNOWN_SECRETS` with no `CONFIG_LOCATIONS` mapping, so `migrate`
+will not relocate a plaintext copy of it from another section either.
+:::
 
 ### Detection signals
 
@@ -594,6 +628,13 @@ The stronger evidence is **not in this bot**. Services (NickServ, and your
 IRCd's oper log) hold the authoritative record of who identified, from where,
 and when. Check `/msg NickServ INFO <account>` for a last-seen and last-address,
 and your network's services log for `IDENTIFY` and `OPER` events.
+
+What services and the IRCd actually expose, retain, and enforce is **outside
+this repository and unverifiable from it**: the command syntax, the fields
+returned, the retention window, and whether a password change invalidates live
+sessions all vary by services package, version, and network policy. Every
+services and IRCd behaviour named in this runbook is a starting point to check
+against your own network's documentation, not a property of this bot.
 
 ### Immediate containment
 
@@ -632,10 +673,8 @@ Rotate at services, then install the new value at whichever tier is live
 python -m secret_store set nickserv_password        # prompts
 ```
 
-Set `sasl_password` explicitly only if it differs from `nickserv_password`; it
-falls back otherwise. Note that `sasl_password` is the one entry in
-`KNOWN_SECRETS` with no `CONFIG_LOCATIONS` mapping, so `migrate` will not
-relocate a plaintext copy of it from another section.
+That one value covers both the `IDENTIFY` path and SASL PLAIN. Do not set
+`sasl_password`; see the warning above.
 
 Then **restart**:
 
@@ -716,12 +755,22 @@ There is no host intrusion detection in this bot. What it can contribute:
 # Files newer than the last known-good deploy, inside the deployment dir
 find . -newermt '2026-08-15 00:00' -type f -ls
 
-# Modules that are not tracked by git
-git status --porcelain modules/
-
-# Whether the installed package tree still matches its wheel manifest
-./scripts/verify_install.sh
+# Modules and other tracked files that git does not agree with
+git status --porcelain
+git diff --stat
 ```
+
+:::{warning}
+**Do not run `scripts/verify_install.sh` here.** It is a packaging gate, not
+compromise detection, and on a host you have just declared compromised it is
+actively harmful. Read against the script: it `rm -rf dist/ build/ ./*.egg-info`
+(destroying artifacts you may want as evidence), runs `pip install` from the
+network, builds a fresh wheel **from the working tree under suspicion**, and
+then hash-checks the installed files against the `RECORD` that same build
+produced. A trojaned tree builds a wheel whose `RECORD` matches it perfectly, so
+the check passes. It answers "did this install extract correctly", never "is
+this source tree the one I shipped".
+:::
 
 Plus the log and audit signals from runbooks 2 and 5. Real detection comes from
 the host: auditd, the package manager's own verification, SSH logs, and your
@@ -784,7 +833,7 @@ verify-only, and it is not in the secret store:
 | Credential | Storage | Class |
 |---|---|---|
 | `[admin] password_hash` | scrypt / bcrypt / argon2 hash | Verify-only |
-| All 42 secret-store names | Plaintext, 0600 or environment | Recoverable |
+| The 41 `KNOWN_SECRETS` names, plus `nasa_api_key` | Plaintext, 0600 or environment | Recoverable |
 | `audit.log.key` | 32-byte hex, 0600 sidecar | Local, not issued |
 
 Everything in the recoverable class must be **reissued at its provider**.
@@ -799,7 +848,7 @@ Rotation, grouped by where you go to do it:
 | Group | Names | Where |
 |---|---|---|
 | Admin auth | `password_hash` | `python hashpw.py`, then `.rehash` |
-| IRC | `nickserv_password`, `sasl_password`, `server_password`, `oper_password` | Services / IRCd operator |
+| IRC | `nickserv_password`, `server_password`, `oper_password` | Services / IRCd operator |
 | Weather (keyed) | `weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key` | Each provider console |
 | Meteomatics | `meteomatics_username`, `meteomatics_password` | Meteomatics account |
 | Apple WeatherKit | `weatherkit_team_id`, `weatherkit_service_id`, `weatherkit_key_id`, `weatherkit_key_file` | Apple Developer |
@@ -810,8 +859,11 @@ Rotation, grouped by where you go to do it:
 | Search / reputation | `brave_key`, `abuseipdb_key` | Brave, AbuseIPDB |
 | Contact identifier | `weather_user_agent` | Not a credential; PII, change if it is your address |
 
-Two entries need their own handling:
+Three entries need their own handling:
 
+- **`sasl_password`** is not in the matrix because nothing reads it; see the
+  warning in [runbook 3](#ir-ircauth). If a value is stored under that name,
+  delete it rather than rotating it, and rotate `nickserv_password`.
 - **`weatherkit_key_file`** stores a *path*, not a value. The secret is the
   contents of the `.p8` private key at that path. Revoke the key at Apple,
   issue a new one, replace the file, and confirm the old file is destroyed.
@@ -858,8 +910,13 @@ removing what you found.
   contents are part of the exposure and were never erasable.
 - Rotate anything the bot host shared with other systems: SSH keys, deploy keys,
   the backup destination's credentials.
-- Add `privacy` and `health` to `autoload` if they were not there; the shipped
-  template omits `privacy` while enabling six data-collecting modules.
+- Add `privacy` and `health` to `autoload` if they were not there. The shipped
+  `config.ini.example` omits both while enabling every data-collecting module:
+  five that keep their own store (`seen`, `tell`, `notes`, `remind`, `steam`),
+  `location`, which stores through the core `store.py` datasets, and
+  `linktitle`, which persists nothing but writes every announced URL to the bot
+  log at INFO (`modules/linktitle.py`, `linktitle: announcing <url> in
+  <channel>`).
 
 ### What this bot cannot tell you
 
@@ -870,7 +927,7 @@ removing what you found.
   bot user. No access is recorded.
 - **Whether the audit log is honest.** With `audit.log.key` in hand, an attacker
   can rewrite it cleanly. Even without the key, the downgrade path in
-  [runbook 7](#ir-audit) makes forgery possible.
+  [runbook 6](#ir-audit) makes forgery possible.
 - **When the compromise started.** The bot log's earliest evidence is bounded by
   `[logging] backup_count`, default 3 files of 5 MiB each.
 
@@ -1030,7 +1087,7 @@ What the repository provides:
 | SAST | same workflow | bandit, failing on HIGH severity |
 | Secret scan | same workflow | gitleaks |
 | SBOM | `scripts/sbom.sh` | CycloneDX from the **installed** environment |
-| Install verification | `scripts/verify_install.sh` | Hash-checks installed files against the wheel `RECORD` |
+| Install verification | `scripts/verify_install.sh` | Packaging gate for *this project*; see the note below |
 
 What to check, in order:
 
@@ -1039,20 +1096,32 @@ What to check, in order:
 pip freeze > ~/ir-$ts/pip-freeze.txt
 git diff -- requirements.txt requirements.lock
 
-# 2. Known CVEs against the lock
-pip-audit -r requirements.lock --strict --progress-spinner off
+# 2. Known CVEs against the lock.  The --ignore-vuln matches CI
+#    (.github/workflows/security.yml); drop it to see the triaged finding.
+pip-audit -r requirements.lock --strict --progress-spinner off \
+    --ignore-vuln PYSEC-2025-183
 
 # 3. An SBOM of the live environment, not of the declared deps
 OUT=~/ir-$ts/sbom.cdx.json ./scripts/sbom.sh
-
-# 4. Does the installed tree still match its manifest
-./scripts/verify_install.sh
 ```
+
+Without the `--ignore-vuln`, `pip-audit --strict` exits non-zero on
+PYSEC-2025-183, which CI has already triaged. During an incident that reads as a
+finding and costs you the time to re-triage it.
+
+`scripts/verify_install.sh` is **not** on this list, and cannot be: it rebuilds
+the wheel from the working tree and checks the installed files against the
+`RECORD` that same build wrote, so it cannot detect a tampered source tree, and
+it verifies nothing about the third-party packages at all. It also deletes
+`dist/`, `build/`, and `*.egg-info` and installs from the network.
 
 In the lockfile diff, the things that matter are: a version that moved without a
 corresponding `requirements.txt` change, a **new transitive** package nobody
-added, a changed hash for an unchanged version (which should be impossible on
-PyPI and is a strong signal), and a package pulled from a non-PyPI index.
+added, a changed hash for an unchanged version, and a package pulled from a
+non-PyPI index. On the third: PyPI's own policy is that a released file is not
+replaced, so a hash change under a fixed version should not happen - but that is
+an index policy this repository cannot verify, so treat it as a strong signal to
+investigate rather than as proof of tampering.
 
 :::{warning}
 **Known defect.** `requirements.lock` was generated on Python 3.14 rather than
@@ -1079,9 +1148,11 @@ ran as the bot user with the bot user's file access.
 - **When a file was modified.** `mtime` is attacker-writable. Use git and your
   backups, not timestamps.
 - **Whether a dependency was tampered with at install time.** `pip-audit`
-  answers "known CVE", not "modified artifact". `verify_install.sh` answers the
-  integrity question only for a wheel install of this project itself, not for
-  its dependencies.
+  answers "known CVE", not "modified artifact". `verify_install.sh` does not
+  close the gap: it builds its own reference from the tree it is checking, and
+  it never looks at the dependencies. A `--require-hashes` install against a
+  known-good lock is the only artifact-integrity control here, and it has to
+  have been used at install time to be worth anything now.
 
 (ir-audit)=
 ## 6. Audit log tampering suspected
@@ -1184,18 +1255,44 @@ sha256sum audit.log audit.log.key audit.log.* > ~/ir-$ts/audit-hashes.txt
 cp -a audit.log audit.log.key audit.log.* ~/ir-$ts/
 ```
 
-Verify each rotated segment by hand, since the bot will not:
+Verify each rotated segment by hand, since the bot will not. There is no
+supported way to point `AuditLog` at a segment: `AuditLog.__init__()` derives the
+key path as `<log path> + ".key"`, and `verify()` calls `_load_key()` before it
+reads a single record, so `AuditLog('audit.log.20260816T000000Z')` looks for a
+key named after the segment, does not find one, **generates a fresh 32-byte key
+and writes it to disk**, and then reports every v2 record broken under it.
+Verified live: an intact three-record segment reports `(False, 0)` and leaves an
+`audit.log.20260816T000000Z.key` behind, which the `audit.log.2*` glob then picks
+up as another segment on the next run.
+
+Copy each segment to a scratch directory under the canonical names instead. That
+uses the same constructor the bot uses, fabricates nothing, and does not write
+into your evidence:
 
 ```bash
 python -c "
-import sys
+import shutil, tempfile
 from pathlib import Path
 from audit_log import AuditLog
-for p in sorted(Path('.').glob('audit.log.2*')):
-    a = AuditLog(p)
-    print(p.name, a.verify(), a.count())
+src = Path('.').resolve()
+for seg in sorted(src.glob('audit.log.2*')):
+    with tempfile.TemporaryDirectory() as d:
+        shutil.copy2(seg, Path(d) / 'audit.log')
+        shutil.copy2(src / 'audit.log.key', Path(d) / 'audit.log.key')
+        a = AuditLog(Path(d) / 'audit.log')
+        print(seg.name, a.verify(), a.count())
 "
 ```
+
+```text
+audit.log.20260816T000000Z (True, -1) 3
+```
+
+This works only for segments written under the **current** key. A segment
+written before a key was replaced (a drawn line after a compromise, or a
+regenerated key) cannot be verified with the key you hold, and a `(False, 0)`
+from this procedure means either that or real tampering. Nothing in the log
+distinguishes the two; your own record of when you cut the chain does.
 
 Note the key sidecar for a rotated segment is still `audit.log.key`: rotation
 renames the log and starts a fresh chain but does not rotate the key, so one key

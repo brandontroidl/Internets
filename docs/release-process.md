@@ -13,11 +13,12 @@ criteria, and the emergency path.
 ## What a release is here
 
 A release is an annotated, GPG-signed git tag on `main`, plus the CHANGELOG
-section that describes it. There is no publishing workflow: nothing in
-`.github/workflows/` builds or uploads a distribution, and no `twine` step
-exists anywhere in the repository. Artifacts are built locally by
-`scripts/verify_install.sh` into `dist/` for verification and are not pushed
-anywhere by any automation in this repository.
+section that describes it. There is no publishing workflow: no `twine` step and
+no upload of a distribution exists anywhere in the repository. CI does *build*
+one - the `package` job in `.github/workflows/tests.yml` runs
+`scripts/verify_install.sh`, which calls `python -m build` - but that artifact
+lives and dies inside the runner. Locally the same script builds into `dist/`
+for verification. Nothing pushes either anywhere.
 
 | Property | Value |
 |---|---|
@@ -144,10 +145,15 @@ the only place the Windows and macOS legs are exercised.
 `scripts/verify_install.sh` is the packaging gate, wired into `tests.yml` as the
 `package` job. It exits 0 only if all of the following hold.
 
-1. `python -m build` produces **both** a wheel and an sdist.
-2. Both install into a fresh throwaway venv.
+1. `python -m build` produces **both** a wheel and an sdist. The sdist is
+   existence-checked and nothing more; only the **wheel** is installed. The
+   pre-release checklist below covers the sdist, because this gate does not.
+2. The wheel installs into a fresh throwaway venv, into which the script then
+   changes directory so nothing resolves against the source tree.
 3. Every file the wheel installed re-hashes to the SHA-256 recorded in the
-   wheel's `RECORD` metadata. This catches tampering and a broken extractor.
+   wheel's `RECORD` metadata. This catches a broken extractor or a modified
+   venv. It does not catch a modified source tree: the `RECORD` is written by
+   the build this same script just ran, from that tree.
 4. `import internets` succeeds and `internets.__version__` is truthy.
 5. All 13 declared top-level modules import from the wheel. A `ModuleNotFoundError`
    naming the module itself is a packaging failure; one naming a third-party
@@ -176,9 +182,13 @@ gate that should have caught it was only then wired into CI - before that,
 `verify_install.sh` existed and nothing ran it.
 
 The same family of defect is live now: `config.ini.example` is in **neither the
-wheel nor the sdist**. Confirmed against the committed
+wheel nor the sdist**. Confirmed against a local
 `dist/internets_irc-5.0.0-py3-none-any.whl` (232 entries) and
-`dist/internets_irc-5.0.0.tar.gz` (313 entries); there is no `MANIFEST.in` and
+`dist/internets_irc-5.0.0.tar.gz` (313 entries). Those are untracked build
+output, not repository content: `dist/` is in `.gitignore` and `git ls-files
+dist/` is empty, and the next `verify_install.sh` run deletes them. Rebuild
+before re-checking rather than trusting whatever is sitting in `dist/`. There is
+no `MANIFEST.in` and
 no `package-data` declaration, so setuptools has no reason to include it.
 `secret_store.py - _cmd_init()` reads that template from the working directory,
 so `python -m secret_store init` cannot bootstrap a package-only install. It
@@ -211,10 +221,40 @@ which is more than importing modules.
 cd "$(mktemp -d)"
 python -m venv v && . v/bin/activate    # Windows: v\Scripts\activate
 pip install /path/to/repo/dist/internets_irc-X.Y.Z-py3-none-any.whl
+# Stage a config.ini in the CWD before anything imports the package.
+cp /path/to/repo/config.ini.example ./config.ini
+chmod 600 ./config.ini
 ```
 
+:::{warning}
+**The `cp` is not optional, and it is why this checklist is longer than it looks
+like it should be.** `internets.py` imports `config` at module scope, and
+`config.py` raises `SystemExit("config.ini not found or unreadable at ...")` at
+import when `read_files` is empty - before it ever reaches the `argparse` block
+that registers `--version`. So in a directory with no `config.ini`, both
+`python -c "import internets"` and `internets --version` exit non-zero with that
+message, and neither tells you anything about the artifact. There is no
+`--version` path that skips the config read.
+
+`scripts/verify_install.sh` handles this the same way, copying
+`config.ini.example` from the repository into its temp directory before the
+smoke test. The template carries no credentials, so a copy in a throwaway
+directory is safe; delete the directory when you are done rather than leaving a
+config lying next to an installed package.
+
+The `chmod 600` is the second half. `config.ini.example` is committed at 0644, a
+plain `cp` preserves that, and `secret_store.py - perms_ok()` then fails closed
+on every credential lookup `config.py` performs at import. Verified: the import
+still succeeds and still prints the version, but it prints three
+`REFUSING to read ... mode is 0o644, expected 0o600` lines first, which read
+like an artifact defect and are not one. `verify_install.sh` does not chmod, so
+expect the same three lines in its output too.
+:::
+
 - [ ] `python -c "import internets; print(internets.__version__)"` prints the
-      version being released.
+      version being released. With the staged `config.ini` in the CWD this
+      exercises the real import chain; without it, it exits 1 on the config
+      check before reaching the package at all.
 - [ ] `pip show -f internets-irc` lists all 13 top-level modules, plus
       `modules/` and `weather_providers/`. Compare the count against
       `[tool.setuptools] py-modules` by eye; a shrinking list is the failure that
@@ -224,12 +264,18 @@ pip install /path/to/repo/dist/internets_irc-X.Y.Z-py3-none-any.whl
       module scope by the entry path, so their absence is fatal rather than
       degrading.
 - [ ] The `internets` console script exists on `PATH` and `internets --version`
-      prints the release version. `verify_install.sh` checks only that the entry
-      point *resolves*; running it is the check that the process starts.
+      prints `Internets X.Y.Z`. `verify_install.sh` checks only that the entry
+      point *resolves* in `console_scripts`; running it is the check that the
+      process starts. This needs the staged `config.ini` too: `--version` is
+      registered in `config.py`, after the config read that exits first.
 - [ ] `python -m secret_store init` either bootstraps a `config.ini` or fails
       with a message an operator can act on. It currently cannot bootstrap,
       because the template is not packaged - confirm the failure is still the
-      known one and not a new one.
+      known one and not a new one. Verified shape:
+      `error: <cwd>/config.ini.example not found - re-clone the repo or fetch
+      it from the project root.`, exit 2. `_cmd_init()` tests for the template
+      before it tests for an existing `config.ini`, so the file you staged
+      above does not mask this.
 - [ ] With a hand-staged `config.ini` whose `[bot] modules_dir` points at the
       installed package directory, the bot starts and the log shows modules
       loading rather than a wall of `'modules/<name>.py' not found`. This is the
@@ -240,6 +286,25 @@ pip install /path/to/repo/dist/internets_irc-X.Y.Z-py3-none-any.whl
 If any of these fail, the release is not ready. A green suite does not prove the
 artifact runs; that distinction is the whole reason 3.0.0 and 4.0.0 shipped
 broken.
+
+### An SBOM for the release
+
+`scripts/sbom.sh` writes a CycloneDX JSON SBOM of the **installed environment**,
+via `pip-audit --format cyclonedx-json`. Nothing runs it automatically and no
+workflow archives its output, so a per-release SBOM only exists if you generate
+one here:
+
+```bash
+OUT=sbom-vX.Y.Z.cdx.json ./scripts/sbom.sh
+```
+
+Two constraints, both from the script itself: it exits 127 unless `pip-audit` is
+on `PATH`, and it reports the environment it is run in, not what
+`pyproject.toml` declares. Run it inside the same venv you built from, or the
+SBOM describes a different dependency set than the one you shipped. Keep the
+file with your release notes; there is no artifact store in this repository to
+put it in. [dependencies.md](dependencies.md) covers the same script from the
+dependency-management side.
 
 ## 6. Tag and push
 
@@ -254,7 +319,14 @@ the tag has a public commit to point at.
 
 ## 7. Post-release verification
 
-Within the hour, from a clean environment:
+:::{note}
+**The timing below is a proposal, not established policy**, in the same sense as
+section 8. The repository records no post-release deadline and no release has
+been verified against one. The checklist itself is grounded; "within the hour"
+is a recommended default for the maintainer to confirm or amend.
+:::
+
+Ideally within the hour, from a clean environment:
 
 - [ ] `git tag -v vX.Y.Z` verifies the signature from a fresh clone, not only
       from the machine that made it.
@@ -337,7 +409,13 @@ for it. The abbreviated path, consistent with `SECURITY.md`:
 5. **Bump appropriately, and do not undersell it.** If the fix locks an operator
    out or requires them to act - re-hash a password, move a credential, change a
    config - it is MAJOR under this project's operator-cost rule, however small
-   the diff. 5.0.0 is a two-function change and a major release.
+   the diff. 5.0.0's breaking change is the worked example: the bcrypt 72-byte
+   refusal is a small diff in `hashpw.py` (`hash_bcrypt()`, `_verify_bcrypt()`,
+   and a new `check_password()`), and it forced a major release purely because
+   affected operators must re-run `hashpw.py`. Note that this is an argument
+   about the *breaking change*, not about release size:
+   `git diff --shortstat v4.0.0..v5.0.0` is 58 files, 8527 insertions, 458
+   deletions.
 6. **Write the CHANGELOG entry under `### Security`** with what was wrong, what
    an attacker could do, and what the operator must do. The existing Security
    entries are the model: they state the demonstrated impact, not a severity

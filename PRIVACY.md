@@ -27,10 +27,12 @@ verification steps, is [docs/data-retention.md](docs/data-retention.md).
 
 ## Read this first if you are installing the bot
 
-The shipped `config.ini.example` autoloads 67 modules. Six of them keep their
-own store of user data: `seen`, `tell`, `notes`, `remind`, `steam`,
-`linktitle`. A seventh, `location`, writes saved locations through the core
-store and logs them. The `privacy` module is **not** in that list.
+The shipped `config.ini.example` autoloads 67 modules. Five of them keep their
+own store of user data: `seen`, `tell`, `notes`, `remind`, `steam`. `location`
+keeps no file of its own but writes your saved location through the core store
+and logs it. `linktitle` persists nothing, and writes every URL it announces or
+skips, with the channel, into the application log. The `privacy` module is
+**not** in that list.
 
 A deployment that copies the template verbatim therefore collects user data and
 offers **no `.privacy`, `.forgetme`, `.optout`, or `.optin` command at all**.
@@ -47,7 +49,8 @@ This is recorded as item 4 in [docs/known-issues.md](docs/known-issues.md).
 All of it is plain files in the bot's working directory. There is no database
 and nothing is sent to a central service operated by this project. Every file
 below is written 0600 (owner-only) with one exception: `internets.log` takes
-whatever the process umask gives it, and its `.bak` siblings do too.
+whatever the process umask gives it, and so do the segments it rotates into
+(`internets.log.1` through `.3`).
 
 | What | Where it lands |
 | --- | --- |
@@ -61,6 +64,7 @@ whatever the process umask gives it, and its `.bak` siblings do too.
 | Shadow-ban entries (set by an admin) | `shadow_bans.json` |
 | Admin actions, with the admin's nick and hostmask | `audit.log` |
 | Application log lines, some carrying user data | `internets.log` |
+| Every IRC line in and out, if the operator enabled it | `[logging] debug_file` |
 
 ### Channel presence tracking (`users.json`)
 
@@ -150,12 +154,36 @@ Unlike the state files and `config.ini`, `internets.log` is created with the
 process umask and has no permission check. Nothing purges it. See item 15 in
 [docs/known-issues.md](docs/known-issues.md).
 
+### The optional debug log (`[logging] debug_file`)
+
+This one is off in the shipped template, and an operator can switch it on
+without telling anyone. When `[logging] debug_file` is set to a path (or
+`--debug-file` is passed), `botlog.py - _setup_logging()` adds a second
+rotating file handler at DEBUG level **with no level filter attached**. The
+main log only records DEBUG lines while debug is switched on; this file records
+them always.
+
+That matters because two DEBUG lines carry raw IRC traffic:
+`internets.py - IRCBot.run()` logs every inbound line as `<< ...`, and
+`sender.py - Sender._write_line()` logs every outbound line as `>> ...`. So the
+debug file holds **every channel message, every private message to and from the
+bot, and every command anyone runs**, not just the fraction other modules
+choose to log. One regex masks the argument after a credential verb such as
+`IDENTIFY`, on the inbound side through `internets.py - _redact_inbound()` and
+on the outbound side through `sender.py - redact_secrets()`, and only for the
+first match on a line. Nothing else is removed.
+
+It rotates at the same size and depth as the main log, nothing purges it, and
+`.forgetme` does not reach it.
+
 ### Held in memory only, lost on restart
 
 Your current hostmask (`IRCBot._nick_hosts`), rate-limiter windows, the
 geocoder result cache (24 hours, 1000 entries, holds the location strings
-users queried), and `linktitle`'s per-channel URL dedup map (300 seconds, 500
-entries).
+users queried), and `linktitle`'s URL dedup map, keyed by channel and URL with
+a 300-second window. The 500 in that map is a cleanup trigger, not a limit:
+crossing it sweeps out only the entries already older than the window, so the
+map can hold more than 500 (`modules/linktitle.py - LinkTitleModule._mark()`).
 
 ---
 
@@ -183,13 +211,32 @@ Specifics worth stating plainly:
   latitude/longitude to whichever weather provider the dispatcher selects.
   Which provider that is depends on the operator's configuration and on live
   provider health, so the same query can reach a different company on a
-  different day. Up to 32 provider packages exist; only `nws` and `openmeteo`
-  are present on a keyless install.
-- **Link titles.** With the `linktitle` module loaded, the bot fetches **every**
-  URL posted in a channel it watches, with no command and no confirmation. The
-  target site sees the request. For YouTube links it additionally queries
-  YouTube's oembed endpoint, or the YouTube Data API if the operator configured
-  a key.
+  different day. 32 provider packages ship. **Twelve of them need no
+  credential and register on a keyless install**: `currentuvindex`, `eccc`,
+  `gdacs`, `metno`, `nasapower`, `nifc`, `noaa_coops`, `nws`, `openmeteo`,
+  `pollendotcom`, `sunrisesunset`, `swpc`
+  (`weather_providers/__init__.py - configure()`, and the `requires_key` flag
+  on each provider class). The `[weather_providers] provider_priority` setting
+  is an ordering preference, not an allowlist: `configure()` appends every
+  unlisted provider after the listed ones, so leaving a provider out of it does
+  not stop it registering. Each of the twelve is called for the capabilities it
+  answers and is given your coordinates, with one exception verified here: the
+  space-weather provider fetches two fixed global NOAA files and does the
+  location match locally (`weather_providers/swpc/space_weather.py - fetch()`),
+  so your coordinates are not in that request. `pollendotcom` goes further and
+  reverse-geocodes your coordinates to a US ZIP through Nominatim before it
+  queries.
+- **Link titles.** With the `linktitle` module loaded, the bot fetches URLs
+  posted in a channel it watches, with no command and no confirmation. The
+  target site sees the request. It is not literally every URL
+  (`modules/linktitle.py - LinkTitleModule._should_skip()`): at most the first
+  three URLs in one message are considered, a fetch in a channel silences that
+  channel for 3 seconds, the same URL in the same channel is skipped for 300
+  seconds, and localhost-style hosts plus a list of image, audio, video,
+  archive and document extensions are skipped outright. Messages that start
+  with the command prefix are ignored. What is left is fetched without asking.
+  For YouTube links it additionally queries YouTube's oembed endpoint, or the
+  YouTube Data API if the operator configured a key.
 - **Network lookups.** `.ip`, `.rep`, `.dns`, `.whois`, `.asn`, `.headers`,
   `.ssl`, `.tcp`, `.down`, `.ipinfo` genuinely contact the target you name. The
   bot's own IP appears in that target's logs. `.ipinfo` and three other
@@ -231,7 +278,7 @@ looks like, in [docs/data-retention.md](docs/data-retention.md).
 | `steamids.json` | Indefinite |
 | `shadow_bans.json` | Indefinite |
 | `audit.log` | Indefinite |
-| `internets.log` | 4 files of 5 MB each |
+| `internets.log` | 4 files of 5 MiB each |
 
 Three carve-outs:
 
@@ -244,17 +291,27 @@ Three carve-outs:
    pruning entirely (`modules/seen.py - _prune_stale()`). The shipped
    `config.ini.example` has no `[seen]` section at all, so the 180-day default
    applies unless the operator adds one.
-3. **The audit log is never deleted.** It rotates to a new segment at 5 MB and
-   every segment is kept.
+3. **The audit log is never deleted.** It rotates to a new segment at 5 MiB
+   (`audit_log.py - _MAX_BYTES`) and every segment is kept.
 
 ---
 
 ## Your controls
 
-All four commands come from the `privacy` module and are **PM-only**: message
-the bot directly (`/msg <botnick> .privacy`), because answering in a channel
-would publish the data the command exists to protect. The command prefix shown
-here as `.` is configurable.
+All four commands come from the `privacy` module. Two of them are **PM-only**:
+`.privacy` and `.forgetme` refuse to run in a channel
+(`modules/privacy.py - PrivacyModule._require_pm()`), because answering in a
+channel would publish the data the command exists to protect. Message the bot
+directly for those: `/msg <botnick> .privacy`.
+
+`.optout` and `.optin` do **not** enforce that, despite the module docstring
+saying all four are PM-only. They work in a channel. Their reply is a NOTICE
+addressed to you rather than a channel message, so running them in public does
+not echo your data to the channel, but the command you typed is visible there
+like any other line. This mismatch is recorded in
+[docs/command-reference.md](docs/command-reference.md).
+
+The command prefix shown here as `.` is configurable.
 
 ### `.privacy`
 
@@ -265,6 +322,14 @@ and last-seen stamps, and your opt-out status
 
 It reports the core datasets only. It does not enumerate your tells, notes,
 reminders, or Steam registration.
+
+The channel list is narrower than what is stored. `cmd_privacy()` walks the
+channels the bot is **currently in** (`bot.active_channels`), so a row held for
+you in a channel the bot has since left is not shown, and neither is the
+sentinel row that `.optout` creates in the synthetic `"*"` channel
+(`store.py - Store.set_opt_out()`). `.forgetme` erases those rows even though
+`.privacy` did not disclose them: `store.py - Store.user_purge()` works across
+every stored channel, not just the active ones.
 
 ### `.optout` and `.optin`
 
@@ -309,6 +374,9 @@ This list is verified, not cautionary boilerplate.
   `.forgetme` run itself. Nothing purges it.
 - **Rotated log segments.** `internets.log.1` through `.3` are outside every
   erasure path.
+- **The debug log, if the operator turned it on.** Everything you said in a
+  channel the bot sits in, and everything you sent it privately, is in that
+  file verbatim.
 - **The audit log.** `audit.log` and its rotated `audit.log.<stamp>` segments
   are append-only and hash-chained. If you are an admin, your nick and hostmask
   are permanent there.
@@ -347,9 +415,11 @@ responsibility are yours.
 What you have to decide, at minimum:
 
 1. **Whether to load the collecting modules at all.** `seen`, `tell`, `notes`,
-   `remind`, `steam`, `linktitle`, and `location` are opt-in per deployment. A
-   bot with none of them loaded still tracks channel presence in `users.json`,
-   which is core behaviour you cannot switch off from config.
+   `remind`, and `steam` each keep their own file; `location` writes through
+   the core store; `linktitle` keeps no file but logs the URLs it saw. All
+   seven are opt-in per deployment. A bot with none of them loaded still tracks
+   channel presence in `users.json`, which is core behaviour you cannot switch
+   off from config.
 2. **Whether to load `privacy`.** Add it to `[bot] autoload`. Without it your
    users have no way to see or erase what you hold. See the notice at the top.
 3. **Retention windows.** `[bot] user_max_age_days` (default 90, floored at 1
@@ -359,7 +429,10 @@ What you have to decide, at minimum:
 4. **Log handling.** `internets.log` is created with your umask, holds data
    `.forgetme` cannot reach, and rotates by size only. Setting `UMask=0077` in
    the service unit is the immediate mitigation. Decide how long you keep
-   rotated segments and who can read them.
+   rotated segments and who can read them. Setting `[logging] debug_file` is a
+   much larger decision than it looks: it records every IRC line in and out,
+   permanently and regardless of the debug level, including private messages.
+   Leave it unset unless you are debugging, and delete the file afterwards.
 5. **Backups.** `.bak`, `.corrupt.*`, rotated logs, and audit segments all
    carry the same personal data as the live files, some at weaker permissions.
    An erasure request does not reach your backups unless you make it.

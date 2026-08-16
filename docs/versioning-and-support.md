@@ -17,13 +17,23 @@ and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) in its header, and
 the practice matches: five releases, all `MAJOR.MINOR.PATCH`, no pre-release or
 build-metadata suffixes, no patch release yet.
 
-| Tag | CHANGELOG date | Kind |
-|---|---|---|
-| `v5.0.0` | 2026-07-22 | Major |
-| `v4.0.0` | 2026-06-28 | Major |
-| `v3.0.0` | 2026-05-20 | Major |
-| `v2.6.0` | 2026-05-20 | Minor |
-| `v2.5.0` | 2026-05-19 | Minor |
+| Tag | Kind | CHANGELOG date (the release record) | Tag object created |
+|---|---|---|---|
+| `v5.0.0` | Major | 2026-07-22 | 2026-07-22 |
+| `v4.0.0` | Major | 2026-06-28 | 2026-06-28 |
+| `v3.0.0` | Major | 2026-05-20 | 2026-06-28 |
+| `v2.6.0` | Minor | 2026-05-20 | 2026-06-28 |
+| `v2.5.0` | Minor | 2026-05-19 | 2026-06-28 |
+
+**Read the CHANGELOG date, not the tag date.** Only two of those five tag
+objects were created on distinct days: four were written in one sitting on
+2026-06-28 and `v5.0.0` on 2026-07-22 (`git for-each-ref
+--format='%(taggerdate:iso8601)' refs/tags/v*`). `v2.5.0` and `v2.6.0` were
+applied retroactively to May commits, and `v3.0.0`'s own release commit is dated
+2026-06-28 despite a CHANGELOG heading of 2026-05-20. The CHANGELOG dates are
+the project's release record and this page uses them throughout; the tag
+metadata records when the tags were written, which is a different thing. A
+`git log` date range is not a reliable proxy for a release timeline here.
 
 Every tag is an annotated, GPG-signed tag whose message is `Internets vX.Y.Z`.
 Verify one with `git tag -v v5.0.0`. The tag carries a `v` prefix; the CHANGELOG
@@ -56,7 +66,8 @@ rather than derived from one source:
 | `pyproject.toml` | `version = "5.0.0"` |
 | `config.py - __version__` | the runtime value, re-exported by `internets.py`, `botlog.py`, `admin_cmds.py`, `console.py` |
 | `docs/conf.py` | `release`, the truncated `version` (MAJOR.MINOR), and `html_title` |
-| Prose | `README.md`, `config.ini.example`, and six `docs/*.md` pages |
+| Prose, guarded | `README.md` and five `docs/*.md` pages (below) |
+| Prose, unguarded | `config.ini.example`, `PRIVACY.md`, `docs/internals/config.md` |
 
 Three gates in `tests/run_tests.py` hold these together: `VERSION: __version__
 matches pyproject.toml`, `VERSION: __version__ is defined and follows semver`,
@@ -64,15 +75,27 @@ and `VERSION: every hand-written version literal in docs matches __version__`.
 The third scans `README.md`, `docs/conf.py`, `docs/deployment.md`,
 `docs/configuration.md`, `docs/providers.md`, and `docs/security-model.md` for
 any `X.Y.Z` on a line mentioning "Internets", "version", or "release", exempting
-lines that carry a comparison operator. A missed bump fails the suite instead of
-shipping.
+lines that carry a comparison operator. A missed bump in one of those six fails
+the suite instead of shipping.
 
 That guard's file list is hand-enumerated, which is the same maintenance shape
 that shipped broken wheels (see [release-process.md](release-process.md)). A
-doc page added later is not scanned unless someone adds it. This page and
-[release-process.md](release-process.md) are deliberately **not** candidates for
-that list: both discuss `3.0.0`, `4.0.0`, and `5.0.0` as history, exactly like
-`CHANGELOG.md`, which the guard also exempts.
+doc page added later is not scanned unless someone adds it, and **three files
+carrying a live current-version claim sit outside it today**:
+
+- `PRIVACY.md`, first line of the body: "Applies to: Internets IRC bot 5.0.0".
+  A stale value here mis-scopes a privacy notice.
+- `docs/internals/config.md`, which quotes `__version__ = "5.0.0"` and the
+  `--version` output `Internets 5.0.0`.
+- `config.ini.example`, whose User-Agent example is `Internets/5.0.0 (...)`.
+  `CONTRIBUTING.md` step 1 tells the releaser to move this one by hand; nothing
+  checks that they did.
+
+Adding the first two to the guard's tuple is a one-line change and would close
+the gap. This page and [release-process.md](release-process.md) are
+deliberately **not** candidates for that list: both discuss `3.0.0`, `4.0.0`,
+and `5.0.0` as history, exactly like `CHANGELOG.md`, which the guard also
+exempts.
 
 ## What a major release has actually meant
 
@@ -165,16 +188,26 @@ dependencies to be captured. See [dependencies.md](dependencies.md).
 
 :::{warning}
 **Known defect.** The committed `requirements.lock` was generated on Python
-3.14, which dropped `typing_extensions>=4.4`, so a `--require-hashes` install
-from the lock fails on every Python below 3.13 and the Tests workflow has been
-red on `main` since 2026-08-13. The supported *range* is unchanged; the
-currently committed lock does not honor it. Item 6 in
-[known-issues.md](known-issues.md).
+3.14, which dropped the marker-gated transitives (`typing_extensions>=4.4`,
+declared by the locked `aiohttp 3.14.3` for `python_version < "3.13"`, and
+`async-timeout` for `< 3.11`), so a `--require-hashes` install from the lock
+fails on every Python below 3.13 and the Tests workflow has been red on `main`
+since 2026-08-13. The supported *range* is unchanged; the currently committed
+lock does not honor it. Item 6 in [known-issues.md](known-issues.md); the full
+requirer table is in
+[dependencies.md](dependencies.md#regeneration-and-the-constraint-that-makes-it-fragile).
 :::
 
-Dropping a Python version is a MAJOR change under the operator-cost rule: an
-operator whose system interpreter is no longer in the matrix has to install a
-new one.
+:::{note}
+**Proposal, not established policy: dropping a Python version should be a
+MAJOR.** It follows from the operator-cost rule stated above - an operator whose
+system interpreter is no longer in the matrix has to install a new one, which is
+exactly the "needs operator action" test - but the project has never dropped a
+version and the rule is written down nowhere. `CONTRIBUTING.md` states the
+operator-cost rule and gives the bcrypt example; it says nothing about the
+Python matrix. Recorded here as a derivation for the maintainer to confirm or
+reject, not as an existing commitment.
+:::
 
 ## Config compatibility
 
@@ -245,26 +278,59 @@ versioned integrity envelope built by `store.py - _wrap_v2()`:
 {"schema": 2, "checksum": "<sha256>", "data": {}}
 ```
 
-`store.py - _unwrap()` decides what to do with what it finds:
+Two functions share the work, and it is worth keeping them apart because only
+one of them quarantines anything.
 
-| File shape | Result |
+`store.py - _unwrap()` inspects the payload. It branches on whether a `schema`
+key is present at the top level, and it either returns a payload or raises
+`_StoreRejected`. It never touches the filesystem:
+
+| File shape | `_unwrap()` result |
 |---|---|
-| `schema` == 2 with a matching checksum | Loaded |
-| No `schema` key (legacy v1 bare payload) | Accepted, and re-written as v2 on the next flush |
-| `schema` != 2 | `_StoreRejected`: the file is quarantined |
-| Envelope missing or failing its checksum | `_StoreRejected`: the file is quarantined |
+| `schema` == 2, `checksum` a string, checksum matches | Returns the inner `data` |
+| **No `schema` key at all** (legacy v1 bare payload) | Returns the payload unchanged; re-written as v2 on the next flush |
+| `schema` present and != 2 | `_StoreRejected("unknown schema version ...")` |
+| `schema` == 2 but `checksum` absent or not a string | `_StoreRejected("v2 envelope missing checksum")` |
+| `schema` == 2 with a mismatched checksum | `_StoreRejected("checksum mismatch")` |
+
+The second row is the one to be clear about: **a file with no envelope is the
+accepted legacy path, not a rejection.** `_StoreRejected` fires on a missing or
+wrong checksum only when a v2 envelope is actually present. A bare pre-4.0.0
+payload loads normally.
+
+`store.py - Store._read()` is the caller, and it is what quarantines. It adds
+two rejection causes of its own before `_unwrap()` is ever reached or after it
+returns, then catches everything in one place:
+
+| `_read()` check | Cause |
+|---|---|
+| `st_size > Store._MAX_FILE_SIZE` (10 MiB) | `_StoreRejected("exceeds size limit ...")` |
+| `type(data) is not type(default)` | `_StoreRejected("type list, expected dict")` and vice versa (BUG-051) |
+
+`_read()` catches `OSError`, `json.JSONDecodeError`, `UnicodeDecodeError` and
+`_StoreRejected` alike, calls `store.py - Store._quarantine()`, and returns the
+empty default. `_quarantine()` renames the file to
+`<name>.corrupt.<unix-timestamp>` so it stays recoverable.
 
 That is a real upgrade path in one direction only. A v1 file is silently
 upgraded. A file from a hypothetical future schema 3 is not downgraded, it is
 rejected.
 
-### The module-owned stores carry nothing
+### The unversioned stores carry nothing
 
-`seen.json`, `tells.json`, `notes.json`, `reminders.json`, `steamids.json`, and
-`shadow_bans.json` are bare JSON with an atomic write and no envelope, no
-version, and no checksum. `modules/notes.py - NotesModule.on_load()` is the
-representative shape: parse, coerce to the expected shape, and on any exception
-log a warning and start empty. The next save then overwrites the file.
+`seen.json`, `tells.json`, `notes.json`, `reminders.json` and `steamids.json`
+are module-owned; `shadow_bans.json` is **core-owned**, written by
+`internets.py - IRCBot._save_shadow_bans()` and read by
+`internets.py - IRCBot._load_shadow_bans()`, with its path taken from
+`[bot] shadow_bans_file`. No module touches it. It is grouped here because it
+shares the same compatibility properties, not because it shares an owner.
+
+All six are bare JSON with an atomic write (`mkstemp`, `chmod 0600`,
+`os.replace`) and no envelope, no version, and no checksum.
+`modules/notes.py - NotesModule.on_load()` is the representative shape: parse,
+coerce to the expected shape, and on any exception log a warning and start
+empty. `_load_shadow_bans()` does the same, down to the bare `except Exception`
+and the warning. The next save then overwrites the file.
 
 The compatibility consequence: these files have no version to disagree about, so
 they never *reject* anything, and a shape they cannot parse is data loss on the
@@ -337,8 +403,11 @@ The version-specific preflight this page adds:
 - [ ] Copy the deployment directory aside. It is the only rollback path, and the
       state-file hazards above are the reason.
 - [ ] Confirm the running Python is inside `requires-python` for the target.
-- [ ] After starting, grep the log for `Store: <path> unusable` before assuming
-      the state survived.
+- [ ] After starting, grep the log for `unusable` before assuming the state
+      survived. The line is emitted by `store.py - Store._quarantine()` as
+      `Store: <basename> unusable (<reason>) - quarantined to <basename>`; it
+      logs `p.name`, so grepping for the configured **path** finds nothing.
+      `grep -F 'unusable' internets.log` is the reliable form.
 
 ## Deprecation policy
 
@@ -392,15 +461,23 @@ There are no backport branches. Fixes land on `main` and reach users in the next
 tagged release; an older tag receives nothing. The remedy for a defect in an old
 tag is to upgrade.
 
-This is a single-maintainer project. `CODEOWNERS` is `* @brandontroidl`, one
-name, and every pull request auto-requests that one reviewer. Support is
+This is a single-maintainer project. `CODEOWNERS` is a single `* @brandontroidl`
+rule, and its own header comment states the intent: "auto-request review for
+every PR". Whether GitHub actually performs that request is a repository-side
+setting, not something the checked-out tree can show; treat the file as the
+declared intent and the GitHub settings as the enforcement. Support is
 best-effort by one person, on their own time. Concretely, and stated plainly
 rather than dressed up as a service level:
 
 - There is no response-time commitment for issues or pull requests.
 - `SECURITY.md` says to expect an acknowledgement of a private vulnerability
   report in about a week. That is an expectation the maintainer set, not a
-  guarantee, and it is the only timing statement anywhere in the repository.
+  guarantee. It is the only statement in the repository that commits a **human**
+  to a timeframe; the repository does carry other timing statements, all of them
+  machine schedules: `SECURITY.md` also describes `pip-audit` running weekly,
+  `.github/dependabot.yml` sets `interval: "daily"` for both ecosystems, and two
+  workflow crons fire weekly (`security.yml` Mondays 06:00 UTC, `codeql.yml`
+  Tuesdays 06:00 UTC).
 - There is no bug bounty.
 - There is no release schedule. Releases happen when there is something to
   release; the five tagged releases to date span 2026-05-19 to 2026-07-22.

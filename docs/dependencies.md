@@ -26,10 +26,17 @@ upstream release.
 
 ### The extras have their own gate
 
-The three floors sets can drift, and did. Before the fix recorded in the
-Unreleased CHANGELOG section, the `weatherkit` and `all` extras pinned
-`PyJWT>=2.10.1` and `cryptography>=44.0.0` while `requirements.txt` required
-`>=2.13.0` and `>=50.0.0`, so `pip install internets-irc[weatherkit]` could
+The three floor sets can drift, and did - twice, in two separate events the
+CHANGELOG records separately.
+
+| Event | Extras pinned | `requirements.txt` required |
+|---|---|---|
+| First (Unreleased, `### Security`) | `PyJWT>=2.10.1`, `cryptography>=44.0.0` | `>=2.13.0`, `>=48.0.1` |
+| Second (Unreleased, `### Fixed`) | `aiohttp`, `cryptography` left at the pre-bump floors | `>=3.14.3`, `>=50.0.0` |
+
+The `>=50.0.0` cryptography floor (PYSEC-2026-3552) is the *second* event's; at
+the time of the first, the floor was `>=48.0.1` (GHSA-537c-gmf6-5ccf). Either
+way the consequence was the same: `pip install internets-irc[weatherkit]` could
 resolve a `cryptography` this project's own requirements file calls unsafe.
 
 CI cannot catch that, because `security.yml` audits `requirements.lock` only and
@@ -51,7 +58,7 @@ full set, which is what a real deployment wants.
 
 | Package | Extra | Required? | Without it |
 |---|---|---|---|
-| `requests>=2.32.3` | none (core) | Yes | Nothing works. Every module HTTP call goes through `modules/base.py - fetch_json()`, which is built on it |
+| `requests>=2.32.3` | none (core) | Yes | Nothing works. Both the shared `modules/base.py - fetch_json()` helper and the direct call sites are built on it |
 | `aiohttp>=3.14.3` | `async` | No | Weather HTTP falls back to `requests` in a thread |
 | `argon2-cffi>=23.1.0` | `argon2` | Conditional | An `argon2$` password hash cannot be verified; admin auth fails closed |
 | `bcrypt>=4.2.0` | `bcrypt` | Conditional | A `bcrypt$` password hash cannot be verified; admin auth fails closed |
@@ -62,6 +69,25 @@ full set, which is what a real deployment wants.
 The `all` extra is the union of the six optional packages. The `dev` extra
 (`pytest`, `pytest-asyncio`, `pytest-cov`, `coverage`, `bandit[sarif]`,
 `pip-audit`, `build`) is tooling only and never reaches a deployment.
+
+:::{note}
+**`fetch_json()` is the preferred helper, not a chokepoint.** An AST walk over
+`modules/*.py` counting `requests.<verb>(...)` calls finds 35 call sites in 32
+files. One of those is `fetch_json()`'s own; the other **34, spread over 31
+module files, call `requests` directly and bypass the helper**. Twenty-four
+module files import `fetch_json`, and seven of those do both - the helper for
+the JSON paths, a direct call for a streamed or non-JSON one.
+
+That matters because `fetch_json()` is where the response size cap lives
+(`max_bytes`, read via `r.raw.read(max_bytes + 1)` before any decode or parse).
+A direct call site gets that bound only if it implements the stream-and-cap
+pattern itself. As of this writing all of them do: every one of the 34 passes
+`stream=`, there are 35 `.raw.read(` sites across `modules/` (the 34 plus
+`fetch_json()`'s own), and no module reads a response body via a bare `.json()`
+or `.text`. The invariant holds - but it holds by convention re-implemented at
+each site, not by a property the architecture enforces, and nothing in CI checks
+it. Treat a new direct call site as needing its own review.
+:::
 
 ### The conditional cases, precisely
 
@@ -129,10 +155,27 @@ the **lowest supported** Python or it is not valid across the supported range.
 :::{warning}
 **This has already failed in production, and is failing now.** The committed
 `requirements.lock` header records that it was generated with Python 3.14. That
-resolution dropped `typing_extensions>=4.4`, which `aiohttp` requires below
-Python 3.13, so every Python < 3.13 leg of the Tests workflow fails at `pip
-install -r requirements.lock --require-hashes` with "all requirements must have
-their versions pinned". CI has been red on `main` since 2026-08-13.
+resolution dropped the marker-gated transitives, so every Python < 3.13 leg of
+the Tests workflow fails at `pip install -r requirements.lock --require-hashes`
+with "all requirements must have their versions pinned". CI has been red on
+`main` since 2026-08-13.
+
+Two distributions are missing, and three separate declarations demand them.
+Taken from the metadata of the versions this lockfile actually pins:
+
+| Missing | Declared by | Marker |
+|---|---|---|
+| `typing_extensions>=4.4` | `aiohttp 3.14.3` | `python_version < "3.13"` |
+| `typing-extensions>=4.2` | `aiosignal 1.4.0` | `python_version < "3.13"` |
+| `typing-extensions>=4.1.0` | `multidict 6.7.1` | `python_version < "3.11"` |
+| `async-timeout<6.0,>=4.0` | `aiohttp 3.14.3` | `python_version < "3.11"` |
+
+`>=4.4` is the binding floor below 3.13. Note that it is version-sensitive:
+`aiohttp` gained the direct `typing_extensions` requirement in **3.14.0** and
+had none in 3.13.x, so checking this against an older installed `aiohttp`
+rather than against the locked 3.14.3 gives the wrong answer and makes the
+constraint look like it has no source. `async-timeout` is the transitive
+`scripts/regen-lockfile.sh` names by hand in its own error message.
 
 A second defect hides the first on Windows: the workflow's install step runs
 three `pip` commands in one `run:` block, and `pwsh` does not fail fast, so the
@@ -145,12 +188,86 @@ than the lock on Python 3.10 through 3.12. Item 6 in
 [internals/ci-and-packaging.md](internals/ci-and-packaging.md#findings).
 :::
 
-The 3.0.0 CHANGELOG entry records the same class of failure from the other
-direction: the lock was re-generated on 3.10 precisely so a hash-pinned install
-stays valid across the whole matrix, "3.14 alone drops aiohttp's conditional
-`typing-extensions` / `async-timeout`". The constraint is documented, was
-honored once, and was then violated. It is a procedure with no enforcement: no
-CI job checks the lockfile header against the supported floor.
+Two CHANGELOG entries record the same class of failure from the other
+direction, and they are distinct entries in distinct releases:
+
+- **4.0.0**, under `### Security`, on the 20-CVE dependency bump: the lock was
+  re-generated on 3.10 precisely so a hash-pinned install stays valid across the
+  whole matrix, "3.14 alone drops aiohttp's conditional `typing-extensions` /
+  `async-timeout`".
+- **3.0.0** is where the constraint was first written into the tooling:
+  `scripts/regen-lockfile.sh` "now requires Python 3.10 specifically and fails
+  loudly otherwise", because "a lock built on 3.14 silently omitted" the
+  `python_version < "3.11"` conditional transitives.
+
+The constraint is documented, was honored once, and was then violated. It is a
+procedure with no enforcement: no CI job checks the lockfile header against the
+supported floor.
+
+### The lockfile pins nothing until someone installs it
+
+A lockfile constrains a resolution. It does not constrain a machine. The
+installed environment can sit arbitrarily far from `requirements.lock` and
+nothing in this repository notices, because `security.yml`'s `pip-audit` job
+reads `requirements.lock` from the working tree and never inspects an
+environment.
+
+Measure the gap directly:
+
+```bash
+python -m pip list --format=json > /tmp/installed.json
+python - <<'PY'
+import json, re
+lock = {}
+for line in open("requirements.lock"):
+    m = re.match(r"^([A-Za-z0-9._-]+)==([^\s\\]+)", line)
+    if m:
+        lock[m.group(1).lower().replace("_", "-")] = m.group(2)
+inst = {p["name"].lower().replace("_", "-"): p["version"]
+        for p in json.load(open("/tmp/installed.json"))}
+for name, want in sorted(lock.items()):
+    have = inst.get(name)
+    if have != want:
+        print(f"{name}: locked {want}, installed {have or 'ABSENT'}")
+PY
+```
+
+Run on the maintainer's working host on 2026-08-15, that reported **15 of the
+21 locked distributions at a version other than the pin**: 13 behind
+(`aiohttp`, `argon2-cffi`, `argon2-cffi-bindings`, `attrs`, `bcrypt`,
+`certifi`, `charset-normalizer`, `cryptography`, `multidict`, `propcache`,
+`pycparser`, `requests`, `yarl`) and 2 ahead (`aiohappyeyeballs`, `idna`).
+
+Two of those are not merely stale, they sit **below the security floors
+`requirements.txt` itself declares**, which is the condition the floors exist to
+prevent:
+
+| Package | `requirements.txt` floor | Installed | Advisories the floor cites |
+|---|---|---|---|
+| `aiohttp` | `>=3.14.3` | 3.13.5 | PYSEC-2026-3545 / 3546 / 3547 |
+| `cryptography` | `>=50.0.0` | 46.0.7 | PYSEC-2026-3552 |
+
+`bcrypt` (4.3.0 installed, 5.0.0 locked) and `requests` (2.33.1 installed,
+2.34.2 locked) are behind the lock but still above their floors, so they are a
+reproducibility gap rather than an exposure.
+
+Three things follow, and they are the reason this belongs on a page about
+pinning:
+
+- **The drift is a predictable consequence of the advice two sections up.**
+  While the lock is unusable on 3.10 through 3.12, the documented workaround is
+  to install from `requirements.txt` - which has floors and no upper bounds, so
+  it resolves to whatever PyPI offers that day and never to the pinned set. A
+  broken lock does not just stop being enforced; it actively pushes deployments
+  off the pins.
+- **`scripts/sbom.sh` is the one tool here that sees the truth**, because it
+  deliberately reads the installed environment rather than the manifests. An
+  SBOM taken on a drifted host correctly reports the drifted versions - which is
+  the intended behavior, and also why an SBOM generated from an un-reconciled
+  environment is not a description of what the lockfile says ships.
+- **Reconciling is one command, and it should precede any release build or
+  SBOM:** `pip install -r requirements.lock --require-hashes` in the target
+  venv, once the lock is regenerated on 3.10.
 
 ## Vulnerability response
 
@@ -196,8 +313,15 @@ floor once it is set. The floors are a point-in-time judgment that ages.
 The practical response procedure, for a CVE against a runtime dependency:
 
 1. Raise the floor in `requirements.txt`, with the advisory ID in the inline
-   comment beside it (this is the established convention; every existing floor
-   has one).
+   comment beside it. This is the convention for a floor that a CVE set, and
+   four of the seven follow it: `requests` (CVE-2024-35195, CVE-2023-32681),
+   `aiohttp` (PYSEC-2026-3545 / 3546 / 3547), `PyJWT` (the 2026 PYSEC fixes,
+   subsuming CVE-2024-53861) and `cryptography` (PYSEC-2026-3552). The other
+   three - `argon2-cffi`, `bcrypt`, `defusedxml` - carry functional rationale
+   instead, because no advisory set them: bcrypt's `>=4.2.0` is "the Rust-backed
+   implementation with current wheels", and `defusedxml`'s is billion-laughs
+   hardening. A floor without an ID is not necessarily a documentation gap; it
+   may simply not have been CVE-driven.
 2. Raise the matching floor in every `pyproject.toml` extra that names the same
    package, including `all`. The floor-parity test fails if you miss one.
 3. `scripts/regen-lockfile.sh` on Python 3.10, and commit `requirements.txt`,
@@ -239,9 +363,31 @@ build`. It is not wired into any workflow, so an SBOM exists only when someone
 runs the script.
 
 **Static analysis on the bot's own code.** CodeQL runs the `security-extended`
-query pack; `bandit` runs twice per push, informationally at MEDIUM and above,
-then as a gate at HIGH severity with HIGH confidence, with SARIF uploaded to the
-Security tab either way.
+query pack. `bandit` runs **three** times per push, over the same tree with the
+same exclusions (`./tests`, `./.venv`, `./build`, `./dist`, `./.git`,
+`./__pycache__`) and only the thresholds differing:
+
+| Step | Flags | Effect |
+|---|---|---|
+| Informational | `-ll --exit-zero` | MEDIUM+ severity, any confidence; never fails |
+| Gate | `-iii -ll` | HIGH confidence and MEDIUM+ severity; fails the job |
+| SARIF | `-f sarif -o bandit.sarif \|\| true` | No thresholds, so LOW+ at any confidence; never fails |
+
+The SARIF step is `if: always()` and the upload follows it, so findings reach
+the Security tab whatever the gate does.
+
+:::{warning}
+**The workflow's own comment misdescribes its gate.** The step is named "Fail on
+HIGH-severity bandit findings" and its preceding comment says "HIGH severity AND
+HIGH confidence", but the flags are `-iii -ll`. In bandit, `-i` repeated sets
+*confidence* and `-l` repeated sets *severity*, so `-iii` is HIGH confidence
+while `-ll` is MEDIUM-and-above severity, not HIGH. The gate is therefore
+stricter than its own documentation claims: a MEDIUM-severity, HIGH-confidence
+finding blocks the merge, and a reader trusting the comment would not expect
+that. This is a defect in `.github/workflows/security.yml`, not in this page;
+raising it to `-lll` or correcting the comment are both one-line changes, and
+which is right is a maintainer decision.
+:::
 
 ## Third-party service governance
 
@@ -265,10 +411,21 @@ break geocoding for the whole channel, so failing the one lookup is cheaper. Its
 sibling control is the 24-hour TTL cache in `modules/geocode.py`, whose comment
 cites the same policy - Nominatim's terms require clients to cache.
 
-That UA value is `[secrets] weather_user_agent` and it is shared by every module
-HTTP call, so the operator's real email or URL is attached to every outbound
-request the bot makes, not only the geocoding ones. That is the intended design
-and it is recorded in [integrations.md](integrations.md#privacy-what-leaves-the-machine).
+That UA value is `[secrets] weather_user_agent`, and it is threaded through the
+module HTTP layer as the `ua` argument, so the operator's real email or URL is
+attached to nearly every outbound request the bot makes, not only the geocoding
+ones. That is the intended design and it is recorded in
+[integrations.md](integrations.md#privacy-what-leaves-the-machine).
+
+**One module opts out.** `modules/translate.py` hard-codes
+`headers={"User-Agent": "Mozilla/5.0"}` and never reads the configured value.
+It is the sole exception - every other `User-Agent` header in `modules/` passes
+the `ua` parameter through. The privacy direction of that exception is
+favorable (the operator's contact address does not reach the translation
+endpoint) but it is undocumented in the source, unexplained, and it means the
+statement "the configured UA goes out with every request" is not literally
+true. An operator auditing what identifies their bot upstream should know the
+one endpoint where it does not.
 
 **No other provider's terms are represented in code or in this repository.** No
 attribution string is emitted with any provider's data; no caching obligation
@@ -334,10 +491,21 @@ moved hosts after the original path began returning 403 behind Cloudflare.
 
 The observed pattern, which is a reasonable default procedure:
 
-1. **Confirm it is the provider, not the bot.** Weather commands fail over on
-   their own, so a user-visible weather failure means the whole chain is
-   exhausted. A single-source module replies with a fixed string and logs the
-   failure; check the log for the real status before assuming.
+1. **Confirm it is the provider, not the bot - and do not read a weather
+   failure as an exhausted chain.** Fallover works for only 3 of the 14
+   capabilities. `weather_providers/_dispatch.py - Dispatcher.dispatch()` moves
+   to the next provider on `result is None or (hasattr(result, "is_empty") and
+   result.is_empty())`, and only `WeatherResult` and `HourlyResult` implement
+   `is_empty()`. For the other eleven capabilities an empty result counts as
+   success and **ends the chain at the first provider**, so a user-visible
+   `.alerts`, `.marine`, `.aqi`, `.pollen` or `.astro` failure most likely
+   means the top-ranked provider returned empty, not that every provider was
+   tried. Check the log for which providers were actually dispatched before
+   concluding anything about the others. This is item 2 in
+   [known-issues.md](known-issues.md); until it is fixed, treat the provider
+   chain as live only for `current`, `forecast` and `hourly`. A single-source
+   module replies with a fixed string and logs the failure; check the log for
+   the real status before assuming.
 2. **Prefer replacing the source over removing the command.** Both `numberfact`
    and `spacex` kept their command surface unchanged across the swap. A command
    that vanishes is a visible regression for users; a command that changes its
