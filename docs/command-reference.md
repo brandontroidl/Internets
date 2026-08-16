@@ -805,8 +805,9 @@ Module `privacy` - key: none - 4 commands.
 - **`.optout`** - mark yourself opted out of future tracking. e.g. `.optout`
 - **`.optin`** - undo a previous opt-out. e.g. `.optin`
 
-  Note: the module docstring says all four are PM-only; only `.forgetme` and
-  `.privacy` actually enforce it, and no privacy command is rate-limited.
+  Note: only `.forgetme` and `.privacy` call `_require_pm()`; `.optout` and
+  `.optin` run anywhere and answer by NOTICE. No privacy command is
+  rate-limited.
   `.forgetme` also reports "tracking in 1 channel(s) (erased now)" for a user who
   was never tracked, because the opt-out sentinel row is counted.
 

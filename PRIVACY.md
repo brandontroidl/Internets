@@ -52,19 +52,20 @@ below is written 0600 (owner-only) with one exception: `internets.log` takes
 whatever the process umask gives it, and so do the segments it rotates into
 (`internets.log.1` through `.3`).
 
-| What | Where it lands |
-| --- | --- |
-| Nick, hostmask, first/last seen, per channel | `users.json` |
-| Last activity plus up to 60 characters of context | `seen.json` |
-| Your saved weather location | `locations.json` |
-| Messages you left for someone offline | `tells.json` |
-| Your personal notes | `notes.json` |
-| Your pending reminders | `reminders.json` |
-| Your registered Steam ID | `steamids.json` |
-| Shadow-ban entries (set by an admin) | `shadow_bans.json` |
-| Admin actions, with the admin's nick and hostmask | `audit.log` |
-| Application log lines, some carrying user data | `internets.log` |
-| Every IRC line in and out, if the operator enabled it | `[logging] debug_file` |
+| What | Why it is kept | Where it lands |
+| --- | --- | --- |
+| Nick, hostmask, first/last seen, per channel | Channel presence, so admin tools and `.privacy` can answer about you | `users.json` |
+| Last activity plus up to 60 characters of context | Answers `.seen <nick>` | `seen.json` |
+| Your saved weather location | So a weather command works with no argument | `locations.json` |
+| Messages you left for someone offline | Delivered when the recipient next speaks | `tells.json` |
+| Your personal notes | Recalled by `.notes` | `notes.json` |
+| Your pending reminders | Fired at the time you asked for | `reminders.json` |
+| Your registered Steam ID | So `.steam` works with no argument | `steamids.json` |
+| Shadow-ban entries (set by an admin) | Moderation: your commands are then silently ignored | `shadow_bans.json` |
+| Admin actions, with the admin's nick and hostmask | Tamper-evident accountability for privileged commands | `audit.log` |
+| Every command you run, with your nick, hostmask, and the text you passed it | Operational logging | `internets.log` |
+| Other application log lines, some carrying user data | Operational logging | `internets.log` |
+| Every IRC line in and out, if the operator enabled it | Protocol debugging | `[logging] debug_file` |
 
 ### Channel presence tracking (`users.json`)
 
@@ -135,16 +136,36 @@ admin sent. If you are not an admin, your nick can still appear here inside the
 
 ### The application log (`internets.log`)
 
-The bot's own log carries user-derived data at INFO level. Verified sites:
+The bot's own log carries user-derived data at INFO level. The broadest source
+is the command dispatcher, so read that one first:
 
+- **Every command you run is logged.**
+  `internets.py - IRCBot._handle_privmsg()` writes one INFO line per accepted
+  command holding the command name, **the whole argument you typed**, your nick,
+  your full hostmask, and the channel it came from or `(PM)`. That covers the
+  text of your `.tell`, your `.note`, your `.remind`, and the raw string you
+  gave `.regloc` - a private message to the bot is logged the same as a channel
+  one. Only credentials are masked: `.auth` and `.deauth` arguments are replaced
+  wholesale, and everything else is passed through
+  `sender.py - redact_secrets()`, which masks the text after the first
+  occurrence of `AUTHENTICATE`, `IDENTIFY`, `REGISTER`, `IDENT`, `OPER`, `PASS`,
+  or `AUTH`, once per line. An argument containing none of those verbs is logged
+  verbatim. See the note under `.pwn` in "What leaves the machine".
 - `modules/location.py - cmd_regloc()` logs `regloc <nick> -> '<what you
-  typed>' (<resolved place>)`.
-- `modules/linktitle.py` logs every announced and every skipped URL together
-  with the channel.
+  typed>' (<resolved place>)`, so a saved location is written twice.
+- `modules/linktitle.py - LinkTitleModule.on_raw()` logs every URL it announces
+  with the channel it announced it in, and every URL it skips without the
+  channel. Neither line carries the nick that posted the URL, but the command
+  lines above can supply it.
 - `modules/weather.py` logs the resolved place name, country, and
   latitude/longitude of every weather, alerts, history, and nowcast query. No
-  nick is on those lines, but they are timestamped alongside lines that carry
-  one.
+  nick is on those four lines, but they are timestamped alongside lines that
+  carry one.
+- `internets.py - IRCBot._handle_membership()` logs
+  `event=account_change nick=<nick> account=<account>` when the network reports
+  that you logged in to or out of a services account, pairing your nick with
+  your account name. This needs the `account-notify` capability, which the bot
+  requests.
 - `modules/channels.py` logs admin-requested joins and parts by nick, and the
   nick-to-channel pairs of its verification flow.
 - `modules/privacy.py` logs `forgetme <nick>: removed [...]`, so the erasure
@@ -152,7 +173,8 @@ The bot's own log carries user-derived data at INFO level. Verified sites:
 
 Unlike the state files and `config.ini`, `internets.log` is created with the
 process umask and has no permission check. Nothing purges it. See item 15 in
-[docs/known-issues.md](docs/known-issues.md).
+[docs/known-issues.md](docs/known-issues.md), which predates the command-line
+finding above and covers only the `regloc` and `linktitle` sites.
 
 ### The optional debug log (`[logging] debug_file`)
 
@@ -242,19 +264,33 @@ Specifics worth stating plainly:
   bot's own IP appears in that target's logs. `.ipinfo` and three other
   integrations use plaintext `http://`, so the query is visible to the network
   path.
-- **The operator's contact identifier.** The `weather_user_agent` value, which
-  is required to be a real email address or URL, is spliced into the
-  `User-Agent` header of essentially every module request. It identifies the
-  operator, not the user.
-- **Password checking is not an exception you have to trust.**
-  `modules/secinfo.py - _pwn_sync()` hashes the password locally and sends only
-  the **first five hex characters** of the SHA-1 digest. The password and the
-  full hash never leave the process.
+- **The operator's contact identifier.** The `weather_user_agent` value is
+  spliced into the `User-Agent` header of most outbound module requests. It
+  identifies the operator, not the user. Only the geocoder checks it:
+  `modules/geocode.py - _ua_has_contact()` refuses to call Nominatim unless the
+  string contains an `@` with a dot after it, or `http://`, or `https://`. Every
+  other module sends whatever is configured, unchecked.
+- **`.pwn` sends almost nothing, and then logs everything.** Over the network it
+  is exactly what it claims: `modules/secinfo.py - _pwn_sync()` hashes the
+  password locally and sends only the **first five hex characters** of the SHA-1
+  digest, so the password and the full hash never reach the breach service. The
+  command also refuses to run in a channel. But the dispatcher logs the argument
+  of every command before running it, and a password is not a credential *verb*,
+  so nothing redacts it: a `.pwn` in a private message writes your **plaintext
+  password** into `internets.log`, where nothing purges it, `.forgetme` cannot
+  reach it, and the file's permissions are whatever the operator's umask gave
+  it. Treat any password you have typed at this bot as disclosed to its
+  operator.
 
-Four things verified as **not** sent: the `.fx` conversion amount (only the
-currency codes go), the `.qr` payload (a link is built, no request is made),
-the full password or hash in `.pwn`, and **your IRC nick and channel** - no
-integration receives them.
+Four things the bot does **not** send: the `.fx` conversion amount (only the
+currency codes go, and the arithmetic is local), the `.qr` payload (the bot
+builds a link and makes no request), the full password or hash in `.pwn`, and
+your IRC nick and channel name - no module in this repository puts either into
+an outbound request.
+
+`.qr` has a second half worth knowing: the link the bot prints carries your
+payload inside its query string, so anyone who opens that link hands the payload
+to `api.qrserver.com`. The bot's restraint does not extend to the reader.
 
 Everything already sent upstream is outside every control in this document.
 `.forgetme` cannot recall it.
@@ -304,12 +340,11 @@ All four commands come from the `privacy` module. Two of them are **PM-only**:
 channel would publish the data the command exists to protect. Message the bot
 directly for those: `/msg <botnick> .privacy`.
 
-`.optout` and `.optin` do **not** enforce that, despite the module docstring
-saying all four are PM-only. They work in a channel. Their reply is a NOTICE
-addressed to you rather than a channel message, so running them in public does
-not echo your data to the channel, but the command you typed is visible there
-like any other line. This mismatch is recorded in
-[docs/command-reference.md](docs/command-reference.md).
+`.optout` and `.optin` work in a channel. Their reply is a NOTICE addressed to
+you rather than a channel message, so running them in public does not echo your
+data to the channel, but the command you typed is visible there like any other
+line, and it is logged like any other line. None of the four is rate-limited;
+see [docs/command-reference.md](docs/command-reference.md).
 
 The command prefix shown here as `.` is configurable.
 
@@ -369,9 +404,11 @@ you.
 
 This list is verified, not cautionary boilerplate.
 
-- **The application log.** `internets.log` holds your `.regloc` string, the
-  URLs `linktitle` announced for you with their channel, and the record of the
-  `.forgetme` run itself. Nothing purges it.
+- **The application log.** `internets.log` holds one line per command you ever
+  ran, with your nick, your hostmask, and the text you passed it; your `.regloc`
+  string a second time; the URLs `linktitle` announced, with their channel; and
+  the record of the `.forgetme` run itself. Nothing purges it. This is the
+  largest gap in `.forgetme` by volume.
 - **Rotated log segments.** `internets.log.1` through `.3` are outside every
   erasure path.
 - **The debug log, if the operator turned it on.** Everything you said in a
@@ -427,9 +464,13 @@ What you have to decide, at minimum:
    (default 180, `0` disables pruning). The template ships no `[seen]` section,
    so add one if you want to change it.
 4. **Log handling.** `internets.log` is created with your umask, holds data
-   `.forgetme` cannot reach, and rotates by size only. Setting `UMask=0077` in
-   the service unit is the immediate mitigation. Decide how long you keep
-   rotated segments and who can read them. Setting `[logging] debug_file` is a
+   `.forgetme` cannot reach, and rotates by size only. At the shipped INFO level
+   it already records every command every user runs, with their nick, hostmask,
+   and full argument text, which puts it closer to the debug file than its level
+   suggests and makes any password typed at `.pwn` readable to whoever can read
+   the file. Setting `UMask=0077` in the service unit is the immediate
+   mitigation. Decide how long you keep rotated segments and who can read them.
+   Setting `[logging] debug_file` is a
    much larger decision than it looks: it records every IRC line in and out,
    permanently and regardless of the debug level, including private messages.
    Leave it unset unless you are debugging, and delete the file afterwards.

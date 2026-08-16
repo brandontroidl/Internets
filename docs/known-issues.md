@@ -564,6 +564,33 @@ U+00B5 for the same unit prefix (identical glyph, unequal comparison), and
 
 ---
 
+## 21. The sanitizer completeness gate cannot see the modules it does not name
+
+**Symbol:** `tests/run_tests.py`, the canonical-sanitizer test
+
+The gate reads the source text of six hard-coded modules (`search`, `seen`,
+`tell`, `stocks`, `remind`, `location`) and asserts the literal string
+`strip_ctrl` appears in each, with `weather` allowed its own `_sanitize`. Its
+comment says it "catches a future module (or a removed call) that drifts".
+
+It cannot. Two limits:
+
+- The list is fixed, so a module outside it is invisible. That is precisely how
+  `modules/twitch.py` shipped with no sanitizer at all (item 20) while this
+  gate stayed green.
+- Within a listed module the assertion is a substring test over the whole file,
+  satisfied by an import line, a comment, or a docstring. It proves a mention,
+  not that every emitting path sanitizes.
+
+**Verified:** read the test body.
+
+**Fix shape:** enumerate the module population from disk rather than a literal
+list, and assert on the emitting call sites rather than file text. That is the
+same reverse-direction principle the documentation gates use: derive the
+population, then check each member.
+
+---
+
 ## Test gaps worth closing first
 
 Not defects, but the reason several of the above went unnoticed.

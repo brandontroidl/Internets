@@ -474,9 +474,9 @@ rather than dressed up as a service level:
   report in about a week. That is an expectation the maintainer set, not a
   guarantee. It is the only statement in the repository that commits a **human**
   to a timeframe; the repository does carry other timing statements, all of them
-  machine schedules: `SECURITY.md` also describes `pip-audit` running weekly,
-  `.github/dependabot.yml` sets `interval: "daily"` for both ecosystems, and two
-  workflow crons fire weekly (`security.yml` Mondays 06:00 UTC, `codeql.yml`
+  machine schedules: `.github/dependabot.yml` sets `interval: "daily"` for both
+  ecosystems, and two workflow crons fire weekly (`security.yml` Mondays 06:00
+  UTC, which is when bandit, `pip-audit`, and gitleaks re-run, and `codeql.yml`
   Tuesdays 06:00 UTC).
 - There is no bug bounty.
 - There is no release schedule. Releases happen when there is something to

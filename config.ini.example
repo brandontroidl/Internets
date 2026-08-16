@@ -9,26 +9,37 @@
 ;
 ;  Or run:  python -m secret_store init      # does the above for you
 ;
+;  This template carries the keys an operator normally sets.  The full
+;  reference - every key the code reads, with type, default, and when a
+;  change takes effect - is docs/configuration.md.
+;
 ;  config.ini is gitignored.  Edit it freely - your changes never get
 ;  committed.  Secrets live in the [secrets] section at the bottom of
-;  this file; the bot refuses to read them if perms are loose (anything
-;  other than 0o600).
+;  this file.  On POSIX the bot reads that section only when the mode is
+;  exactly 0600; looser AND stricter modes (0400 included) are refused.
+;  If the bot logs "config.ini is world-readable - consider: chmod 640",
+;  do not follow it - 640 makes [secrets] unreadable and the bot then
+;  runs keyless.  Use 600.  (docs/known-issues.md item 7.)
 ;
 ;  Personal non-secret overrides may also go in a separate config.local.ini
-;  overlay (also gitignored, loaded on top of this file by config.py).
+;  overlay (also gitignored, loaded on top of config.ini by config.py).
 ;
 ;  Secret lookup order (first hit wins):
 ;    1. environment variable:   INTERNETS_<NAME_UPPER>=value
-;    2. [secrets] section in this file (0o600 enforced)
+;    2. [secrets] section in config.ini (0600 enforced on POSIX)
 ;
-;  Visibility guarantees:
-;    - The bot never logs values from [secrets].
-;    - Outbound IRC messages are scrubbed for credential prefixes
-;      (PASS, IDENTIFY, OPER, AUTHENTICATE) before being logged.
-;    - `python -m secret_store get <name>` confirms presence only -
-;      it never prints the value (no flag does).
-;    - `python -m secret_store list` shows backend per secret, not the
-;      values themselves.
+;  What the bot does with secret values:
+;    - Log lines are masked after a credential verb (AUTHENTICATE,
+;      IDENTIFY, REGISTER, IDENT, OPER, PASS, AUTH), inbound and
+;      outbound alike.  Masking is log-only; the wire is unchanged.
+;      It keys on the verb, so a key that reaches the log some other
+;      way - inside a provider URL in an exception message, say - is
+;      not covered.  (docs/known-issues.md item 1.)
+;    - `python -m secret_store get <name>` reports presence, length and
+;      backend, never the value; no CLI flag prints it.
+;    - `python -m secret_store list` shows the backend per secret, not
+;      the values.  It lists only registered names, so a secret the
+;      registry does not know (nasa_api_key) will not appear.
 ; ────────────────────────────────────────────────────────────────────
 
 [irc]
@@ -52,6 +63,8 @@ oper_name =
 
 ; User modes to set on connect (after MOTD). Applied before OPER.
 ; Common modes: +i (invisible), +w (wallops), +x (host cloaking)
+; user_modes, oper_modes and oper_snomask accept only letters, +, - and
+; spaces; anything else aborts startup rather than being sent to the server.
 user_modes = +iwx
 
 ; Oper-only modes to set after successful OPER (381 numeric).
@@ -69,13 +82,24 @@ channels_file  = channels.json
 users_file     = users.json
 ; Prune user tracking entries older than this many days (default 90).
 user_max_age_days = 90
+; Nicks whose traffic is dropped silently (.shadow-ban).  Written 0600.
+shadow_bans_file = shadow_bans.json
 modules_dir    = modules
 ; Name of the IRC services bot for channel ownership verification.
 services_nick  = ChanServ
 ; Comma-separated list of modules to load automatically on startup.
 ; A loaded module that's missing its API key shows no commands in
 ; `.help` until the key is added to [secrets] below.
-autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes,netcalc,mathx,encode,devtools,physcalc,pkginfo,reflookup,ghinfo,dnsutils,secinfo,astro2,probe,satpass,scinews,ipintel,linktitle,scholar
+;
+; `privacy` is listed deliberately.  Seven of the modules here record
+; user-derived data (seen, tell, notes, remind, steam, location, and
+; linktitle's URL log), and `privacy` is what ships .forgetme, .optout,
+; .optin and .privacy.  Drop the collectors or keep privacy loaded; do
+; not run collection with no erasure command.  It does not reach the bot
+; log, which records announced URLs and nick-to-location pairs at INFO
+; (docs/known-issues.md item 4).  `health` adds .uptime plus the
+; admin-only .health subsystem snapshot.
+autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes,netcalc,mathx,encode,devtools,physcalc,pkginfo,reflookup,ghinfo,dnsutils,secinfo,astro2,probe,satpass,scinews,ipintel,linktitle,scholar,privacy,health
 
 [admin]
 ; Admin password hash for .load / .unload / .reload - generate with
@@ -121,13 +145,36 @@ default_country = us
 ;   air quality : airnow purpleair waqi openaq iqair
 ;   astronomy   : sunrisesunset      uv         : currentuvindex
 ;   alerts      : gdacs eccc         historical : nasapower
-;   wildfire    : nifc firms         space wx    : swpc
+;   wildfire    : nifc firms         space wx   : swpc
 ;   tides       : tidecheck noaa_coops
-provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, accuweather, openweathermap, weatherbit, weatherapi, pirateweather, stormglass, tomorrowio, worldweatheronline, weatherstack, metno, airnow, purpleair, waqi, openaq, iqair, sunrisesunset, currentuvindex, gdacs, eccc, nasapower, nifc, firms, swpc, tidecheck, noaa_coops
+;   pollen      : pollendotcom google_pollen
+provider_priority = nws, meteomatics, weatherkit, openmeteo, visualcrossing, accuweather, openweathermap, weatherbit, weatherapi, pirateweather, stormglass, tomorrowio, worldweatheronline, weatherstack, metno, airnow, purpleair, waqi, openaq, iqair, sunrisesunset, currentuvindex, gdacs, eccc, nasapower, nifc, firms, swpc, tidecheck, noaa_coops, pollendotcom, google_pollen
 
 [steam]
 ; Path for the nick → SteamID JSON cache (not a secret, just a path).
 steamids_file = steamids.json
+
+; ── Per-module state files ──────────────────────────────────────────
+; All four hold user-derived data (nicks, message text, timestamps).
+; `.forgetme` deletes the invoking nick's records from each of them via
+; the module's forget() hook, so relocating a file does not take it out
+; of erasure scope.  Omitting a section keeps the default path shown.
+; Retention limits per datum: docs/data-retention.md.
+
+[seen]
+file = seen.json
+; Drop last-seen entries older than this many days.  0 disables pruning.
+; A non-numeric value falls back to 180 rather than failing.
+max_age_days = 180
+
+[tell]
+file = tells.json
+
+[notes]
+file = notes.json
+
+[remind]
+file = reminders.json
 
 [idlerpg]
 ; IdleRPG XML endpoint - default is Rizon's.  Override if you point
@@ -146,8 +193,11 @@ api_url =
 [metrics]
 ; Optional Prometheus text-format exporter.  Off by default.
 ; Set enable = true to start an HTTP listener on host:port serving
-; /metrics in Prometheus text format.  NEVER bind to 0.0.0.0 - the
-; endpoint is unauthenticated and exposes internal counters.
+; /metrics in Prometheus text format.  The endpoint has no
+; authentication and exposes internal counters, so keep it on loopback
+; and put any remote access behind a reverse proxy.  An all-interfaces
+; host (0.0.0.0, ::, blank) is refused and metrics stay off with a
+; metrics_start_failed log line; a specific LAN address is NOT refused.
 enable = false
 host = 127.0.0.1
 port = 9779
@@ -161,18 +211,29 @@ backup_count = 3            ; keep 3 rotated copies (.1, .2, .3)
 ; Optional: separate debug log capturing ALL output including protocol
 ; traffic.  Leave blank to disable.
 debug_file =
+; Both files are created with the process umask, not 0600, and INFO
+; already records nicks with saved locations and announced URLs.
+; `.forgetme` does not reach either.  Restrict the directory yourself if
+; that matters.  (docs/data-retention.md, docs/known-issues.md item 4.)
 
 ; ════════════════════════════════════════════════════════════════════
 ;
 ;                         [secrets]  - sensitive
 ;
 ; Everything below is read by secret_store.py when no INTERNETS_* env
-; var overrides it.  Strict 0o600 enforced - the bot refuses to read
-; this file if perms are looser.
+; var overrides it.  On POSIX the mode must be exactly 0600 or the whole
+; section is refused (see the file header).
 ;
 ; Any of these can instead be supplied via an environment variable,
 ; which always wins over the file:
 ;     export INTERNETS_<NAME_UPPER>=value
+;
+; Upgrades only: cred() still falls back to a plaintext key left in a
+; per-module section by 2.4.0 and earlier ([imdb] [lastfm] [youtube]
+; [stocks] [twitch] [search] [ipintel] [satpass] [apod], [weather]
+; user_agent, and *_key in [weather_providers]).  Those sections are
+; deliberately absent here - a fresh install should put keys below, not
+; there.  `python -m secret_store migrate` moves an existing one across.
 ;
 ; ════════════════════════════════════════════════════════════════════
 
@@ -293,6 +354,13 @@ google_pollen_key =
 ; N2YO satellite tracking (.passes visible-pass predictions) - free key.
 ; https://www.n2yo.com/api/
 n2yo_api_key =
+
+; NASA api.nasa.gov key, used by .apod and .neo.  Blank falls back to
+; the shared DEMO_KEY, which is rate-limited per source IP.
+; This name is not in secret_store's registry, so `secret_store list`
+; and `migrate` both skip it; the env var and this section still work.
+; https://api.nasa.gov/
+nasa_api_key =
 
 ; Apple WeatherKit - Apple Developer Program (500K calls/month)
 ; Requires PyJWT + cryptography: pip install internets-irc[weatherkit]

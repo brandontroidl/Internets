@@ -264,19 +264,28 @@ traceback rather than the actionable message the other guards produce.
 
 ### Privacy in the application log
 
-Two paths put user data into `internets.log`, where `.forgetme` cannot reach
-it and where rotated copies persist:
+Three paths put user data into `internets.log`, where `.forgetme` cannot reach
+it and where rotated copies persist. The first is by far the broadest:
+
+> **Known defect** (privacy): `internets.py - _handle_privmsg()` logs one INFO
+> line per accepted command carrying the command name, the **full argument
+> text**, the invoking nick, the invoker's hostmask, and the channel or `(PM)`.
+> PMs to the bot are logged the same as channel lines, so the bodies of `.tell`,
+> `.note`, `.remind`, and `.regloc` all land here. The only masking is the
+> credential-verb pass described above, which is keyed on `IDENTIFY`/`OPER`/etc.
+> and therefore does not fire on an argument that is itself a secret - notably
+> `.pwn <password>`, whose plaintext argument is written to the log despite the
+> command being PM-only and sending only a hash prefix upstream.
 
 > **Known defect** (privacy): `modules/location.py - cmd_regloc()` logs
 > `regloc <nick> -> '<raw input>' (<resolved place>)` at **INFO**, pairing an
 > IRC nick with a self-reported location and its geocoded name.
 
 > **Known defect** (privacy): `modules/linktitle.py - on_raw()` logs every
-> announced URL and every skipped URL together with the target channel at
-> **INFO**, which accumulates channel browsing activity. The log line carries
-> the URL and the channel but not the speaking nick, so the exposure is
-> per-channel rather than per-user; correlating it with the same file's
-> `cmd=` lines closes that gap.
+> announced URL with its target channel, and every skipped URL without one, at
+> **INFO**, which accumulates channel browsing activity. Neither line carries
+> the speaking nick, so the exposure is per-channel rather than per-user;
+> correlating it with the same file's `cmd=` lines closes that gap.
 
 Both were surfaced during the documentation reconstruction (see
 [known issues](known-issues.md), batch B and batch H). Lowering them to DEBUG is
