@@ -97,7 +97,7 @@ capability and walks the chain until one returns data. Details:
 - **Three refresh scopes, deliberately distinct.** `.reload` for command modules,
   `.rehash`/SIGHUP for config values read at use time, `.restart` (re-exec, PID
   preserved) for everything else. Picking the wrong one succeeds quietly and
-  leaves stale code running. See [operations.md](operations.md#ops-refresh).
+  leaves stale code running. See [operations.md](operations.md#restart-rehash-reload-which-one).
 - **Observability is thin but sufficient.** A rotating log with per-subsystem
   debug control, four admin health commands (`.health`, `.stats`, `.audit`,
   `.providers`), and an optional Prometheus exporter of which four metrics are
@@ -140,7 +140,7 @@ Seven verified defects are open. They are ordered by impact here; none has been
 fixed, because each is a behavior change that belongs to the owner rather than to
 a documentation pass. Full evidence for all of them, plus a long tail of
 lower-severity findings, is in
-[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+[known-issues.md](known-issues.md).
 
 | # | Risk | Impact |
 |---|---|---|

@@ -355,6 +355,50 @@ Carried here so they are not lost. Each is confirmed against source.
 
 ---
 
+## 14. A packaged install cannot load modules or bootstrap its config
+
+**Symbols:** `config.py` `MODULES_DIR`, `internets.py - IRCBot.load_module()`,
+`pyproject.toml` package data
+
+`MODULES_DIR` defaults to the relative path `modules`, resolved against the
+current working directory, and `load_module()` loads by file path from it. A
+wheel or sdist install puts the package under `site-packages`, so on a
+package-only install every autoload entry fails with `'modules/<name>.py' not
+found` until `[bot] modules_dir` is pointed at the installed location by hand.
+
+Compounding it, `config.ini.example` is in neither the wheel nor the sdist, and
+`secret_store.py - _cmd_init()` reads that template from the working directory,
+so `python -m secret_store init` cannot bootstrap a packaged install either.
+
+**Verified:** confirmed `MODULES_DIR`'s CWD-relative default in `config.py` and
+the absence of `config.ini.example` from the built wheel in `dist/`.
+
+**Fix shape:** resolve `MODULES_DIR` against the package location when the
+CWD-relative path does not exist, and ship the template as package data. This is
+the same hand-enumerated-packaging failure family as the `py-modules` omission
+that shipped broken wheels in 3.0.0 and 4.0.0.
+
+---
+
+## 15. The bot log is unprotected and holds the data `.forgetme` cannot reach
+
+**Symbols:** `botlog.py` handler setup, `modules/linktitle.py`,
+`modules/location.py - cmd_regloc()`
+
+`config.ini` is fail-closed at 0600, but `internets.log` is created with the
+default umask and no permission check or warning. It carries nick-to-location
+pairs from `.regloc` and announced-URL-plus-channel records from `linktitle`,
+neither of which `.forgetme` can erase, and rotated log segments are outside its
+reach as well.
+
+**Verified:** read the handler construction and both logging sites.
+
+**Fix shape:** set `UMask=0077` in the service unit as an immediate mitigation;
+longer term, drop the identifiers from those two log lines or move them to
+DEBUG.
+
+---
+
 ## Test gaps worth closing first
 
 Not defects, but the reason several of the above went unnoticed.

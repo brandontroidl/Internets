@@ -208,7 +208,7 @@ fails closed, so at 0640 the `[secrets]` section is never read, `secret_store.ge
 returns the default for every name, and the bot runs with no NickServ password
 and no API keys behind a single `REFUSING to read` error line. The equality test
 also rejects *stricter* modes: 0400 fails the same way. Use `chmod 600`. Verified;
-recorded in [RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+recorded in [known-issues.md](known-issues.md).
 :::
 
 :::{warning}
@@ -299,7 +299,7 @@ Every line above that is not boilerplate is load-bearing:
 - `ExecReload` maps `systemctl reload` onto SIGHUP, which
   `internets.py - IRCBot._on_sighup()` handles as a config rehash without
   dropping the IRC link. It is not a restart; see
-  [operations.md](operations.md#ops-refresh) for which changes need which.
+  [operations.md](operations.md#restart-rehash-reload-which-one) for which changes need which.
 - `KillSignal=SIGTERM` (the default) reaches
   `internets.py - IRCBot._on_signal()`, which requests a graceful shutdown.
   `TimeoutStopSec` must exceed the shutdown sequence, whose fixed floor is the
@@ -341,7 +341,7 @@ allocate a TTY.
 `process_lock.py` exists to stop two instances from interleaving writes into the
 same JSON state files, whose temp-and-rename writes would otherwise clobber each
 other. Acquire-time behavior and stuck-lock recovery are in
-[operations.md](operations.md#ops-process-lock); what matters at deployment time
+[operations.md](operations.md#process-lock); what matters at deployment time
 is the interaction with re-exec.
 
 `os.execv` preserves the process ID. If the lockfile survived the exec, the new
@@ -400,7 +400,7 @@ and `modules/astro2.py`, is registered in neither `secret_store.py -
 KNOWN_SECRETS` nor `CONFIG_LOCATIONS`. It works through `get()` and through
 `INTERNETS_NASA_API_KEY`, but it does not appear in `secret_store list` or
 `status`, and `migrate` will not relocate it. Recorded in
-[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+[known-issues.md](known-issues.md).
 :::
 
 ## Upgrade
@@ -436,12 +436,14 @@ enables 67 modules including `seen`, `tell`, `linktitle`, `notes`, `remind`, and
 while shipping no `.forgetme`, `.optout`, `.optin`, or `.privacy` command: the
 right-to-erasure entry point is absent by default. Add `privacy` (and `health`)
 to your `autoload` before going live. Verified; recorded in
-[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+[known-issues.md](known-issues.md).
 :::
 
 (deploy-defect-lockfile)=
+### Known defect: the dependency lockfile
+
 :::{warning}
-**Known defect (dependency lockfile).** `requirements.lock` was generated on
+`requirements.lock` was generated on
 Python 3.14, violating the resolve-on-3.10 contract stated in
 `scripts/regen-lockfile.sh`, and consequently omits marker-gated transitives
 (`typing_extensions>=4.4`, pulled by `aiohttp`). Any `--require-hashes` install
