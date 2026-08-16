@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from .base import BotModule, fetch_json, help_row, strip_ctrl
+from .base import BotModule, fetch_json, help_row, scrub_secrets, strip_ctrl
 
 log = logging.getLogger("internets.lastfm")
 
@@ -87,7 +87,7 @@ def _lookup_sync(username: str, key: str, ua: str) -> str:
             f"{track_str}"
         )
     except Exception as e:
-        log.warning(f"Last.fm lookup: {e}")
+        log.warning("Last.fm lookup: %s", scrub_secrets(str(e), key))
         return "lookup failed"
 
 

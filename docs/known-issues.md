@@ -14,7 +14,15 @@ Severity is judged on user impact, not on how hard the fix is.
 
 ---
 
-## 1. Provider failures publish API keys to the channel
+## 1. Provider failures published API keys to the channel
+
+**FIXED 2026-08-16.** `modules/stocks.py - _try_providers()` now reports the
+provider name and the exception class only, never `str(e)`, and its debug line
+is scrubbed through the new `modules/base.py - scrub_secrets()`. The same
+helper is applied at the five sibling log sites in `imdb`, `lastfm`, `youtube`,
+and `steam` (two there). Pinned by `tests/test_stocks.py`, including a control
+that the reply still names what failed. The description below is the record of
+what was wrong.
 
 **Symbol:** `modules/stocks.py - _try_providers()`
 

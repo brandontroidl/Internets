@@ -193,6 +193,20 @@ def strip_ctrl(s: object, max_len: int = 400) -> str:
     return _IRC_CTRL_RE.sub("", text)[:max_len]
 
 
+def scrub_secrets(text: str, *secrets: str) -> str:
+    """Remove credentials from text destined for a log or a reply.
+
+    `requests` renders the full prepared URL in its exception text, and several
+    upstreams here carry their credential in the query string, so logging a
+    bare `str(exception)` writes the key to disk. Pass the credentials that
+    were in scope for the call.
+    """
+    for s in secrets:
+        if s:
+            text = text.replace(s, "[REDACTED]")
+    return text
+
+
 class BotModule:
     """
     Base class for all bot modules.

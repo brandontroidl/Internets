@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from .base import BotModule, fetch_json, help_row, strip_ctrl
+from .base import BotModule, fetch_json, help_row, scrub_secrets, strip_ctrl
 
 log = logging.getLogger("internets.imdb")
 
@@ -32,7 +32,7 @@ def _lookup_sync(title: str, key: str, ua: str) -> str:
             f"https://www.imdb.com/title/{strip_ctrl(d.get('imdbID', ''))}/"
         )
     except Exception as e:
-        log.warning(f"OMDb lookup: {e}")
+        log.warning("OMDb lookup: %s", scrub_secrets(str(e), key))
         return "lookup failed"
 
 

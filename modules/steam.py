@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .base import BotModule, fetch_json, help_row, strip_ctrl
+from .base import BotModule, fetch_json, help_row, scrub_secrets, strip_ctrl
 
 log = logging.getLogger("internets.steam")
 
@@ -84,7 +84,7 @@ def _status_sync(steamid: str, show_games: bool, key: str, ua: str) -> str:
     try:
         d = _get_status(steamid, key, ua)
     except Exception as e:
-        log.warning(f"Steam status: {e}")
+        log.warning("Steam status: %s", scrub_secrets(str(e), key))
         return "lookup failed"
 
     name = strip_ctrl(d.get("personaname", "?"))
@@ -144,7 +144,7 @@ def _register_sync(arg: str, key: str, ua: str) -> tuple[str | None, str]:
             return d["steamid"], d.get("personaname", arg)
         return None, "no user found"
     except Exception as e:
-        log.warning(f"Steam register: {e}")
+        log.warning("Steam register: %s", scrub_secrets(str(e), key))
         return None, "lookup failed"
 
 
