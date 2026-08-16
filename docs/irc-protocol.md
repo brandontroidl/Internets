@@ -184,7 +184,7 @@ parsed and discarded.
 
 ### Known defect: multiline `CAP LS 302` is mishandled
 
-Referenced in [RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md) and
+Referenced in [known-issues.md](known-issues.md) and
 [internals/internets.md](internals/internets.md#findings). Verified by direct regex
 probe against `IRCBot._RE_CAP`, not inferred.
 
@@ -664,7 +664,7 @@ numeric. `366` in particular is not used, so `_chanops` is seeded incrementally 
 ## 16. Known defects and gaps
 
 Stated plainly rather than described as working. See
-[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md) for the full findings list.
+[known-issues.md](known-issues.md) for the full findings list.
 
 - **Multiline `CAP LS 302` is mishandled** (section 4). The bot requests 302 and then
   cannot parse the continuation form; capability negotiation can terminate mid-list

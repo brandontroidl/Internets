@@ -316,7 +316,7 @@ to the contract.
 Fix shape, **owner decision, not applied**: give every result dataclass an
 `is_empty()`, or invert the dispatcher guard so a result must positively signal
 that it carries data. Either is a behaviour change on a live weather path and is
-out of scope for documentation. Tracked in `RECONSTRUCTION-LEDGER.md`.
+out of scope for documentation. Tracked in [known issues](known-issues.md).
 
 ## Reliability ranking
 

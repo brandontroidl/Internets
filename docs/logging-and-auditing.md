@@ -279,7 +279,7 @@ it and where rotated copies persist:
 > `cmd=` lines closes that gap.
 
 Both were surfaced during the documentation reconstruction (see
-`RECONSTRUCTION-LEDGER.md`, batch B and batch H). Lowering them to DEBUG is
+[known issues](known-issues.md), batch B and batch H). Lowering them to DEBUG is
 the obvious remediation, but that is an owner decision, not a documented
 behaviour.
 

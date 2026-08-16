@@ -277,7 +277,7 @@ record written without `v` is verified with unkeyed SHA-256 at **any** chain
 position. A writer to `audit.log` can therefore truncate at any record and append
 forged legacy-format records that chain correctly, and `verify()` reports the chain
 intact. This reduces the effective tamper evidence to the pre-3.0.0 scheme and
-contradicts the module docstring. Verified; recorded in `RECONSTRUCTION-LEDGER.md`.
+contradicts the module docstring. Verified; recorded in [known issues](known-issues.md).
 Candidate fixes: accept legacy records only before the first v2 record, or pin a
 cutover index.
 :::
@@ -328,7 +328,7 @@ flush, which means they carry no integrity check while they exist.
 `Store._write()` creates `<path>.bak` with `Path.write_bytes` and never chmods it,
 so on first creation it takes umask-default permissions, commonly 0644. The PII the
 0600-before-rename sequence protects in `users.json` is world-readable in
-`users.json.bak`. Verified; recorded in `RECONSTRUCTION-LEDGER.md`.
+`users.json.bak`. Verified; recorded in [known issues](known-issues.md).
 :::
 
 **Constraints.** Any new dataset must follow the whole pattern (own lock, own dirty
@@ -339,7 +339,7 @@ bot would resume tracking a user who asked it not to.
 
 ---
 
-## ADR-008: Daemon thread for the interactive console, not asyncio.to_thread
+## ADR-008: Daemon thread for the interactive console
 
 **Decision.** The console dispatch loop runs on an explicit
 `threading.Thread(daemon=True)` named `console-input`. Shutdown closes `sys.stdin`
@@ -413,7 +413,7 @@ still never return data for a given region.
 Pollen.com) must follow the same pattern. Returning empty must not stop the chain:
 `weather_providers/nifc` currently violates this by ending the dispatch outside US
 coverage so non-US queries never fall through to `firms` (recorded in
-`RECONSTRUCTION-LEDGER.md`).
+[known issues](known-issues.md)).
 
 ---
 

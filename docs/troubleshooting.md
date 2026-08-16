@@ -352,7 +352,7 @@ reports failure may have changed nothing at all.
 If the edit was to a helper (`modules/base.py`, `geocode.py`, `units.py`) or anything
 under `weather_providers/`, `.reload` will not pick it up at all: those are cached in
 `sys.modules`. Restart. See
-[administration.md](administration.md#admin-live-vs-restart).
+[administration.md](administration.md#decision-table-live-versus-restart).
 
 (api-backed-command-unavailable)=
 ## API-backed command unavailable

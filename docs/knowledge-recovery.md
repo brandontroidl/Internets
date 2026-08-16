@@ -1,299 +1,299 @@
-# Knowledge Recovery Binder
-
-This section documents knowledge that currently exists only in the code, in
-commit messages, or in the heads of the original developers. Each item is
-something a new maintainer would have to reverse-engineer from source without
-this document.
-
----
-
-## Hidden invariants
-
-### 1. The `_nick` value used for SASL is the runtime nick, not the config nick
-
-`internets.py:900` passes `self._nick` to `sasl_plain_payload`, not the
-startup constant `NICKNAME`. On a 433 nick-collision (nick already taken), the
-bot appends `_` or a random suffix. SASL PLAIN authenticates as the bumped
-nick, not the intended one. This is correct: NickServ knows the bot's account
-by its registered nick, but SASL PLAIN's `authzid` field (first NUL-delimited
-segment) is the session's current nick. Sending the original nick while the
-server assigned a different one would fail authentication.
-
-### 2. The `_prefix_modes` symbol map from ISUPPORT is parsed and discarded
-
-`parse_isupport_prefix` returns `(mode_set, symbol_map)`. The caller in
-`internets.py` keeps only the mode set and discards the symbol map (bound to
-`_`). The NAMES parser (`parse_names_entry`) uses a hardcoded `~&@%+` set
-instead. On a network advertising a prefix symbol outside this set, `lstrip`
-leaves the symbol attached and the nick in `_chanops` carries it. This is the
-one place the discarded symbol map would have earned its keep.
-
-### 3. `_NICKSERV_WAIT_TICKS * _NICKSERV_TICK` = the NickServ identification window
-
-The deferred rejoin waits up to `40 * 0.25 = 10 seconds`
-(`internets.py:177-178`) for NickServ identification to complete before
-rejoining saved channels. This is not documented anywhere as a 10-second
-window; you have to multiply the two constants. The wait uses
-`_stop.wait(timeout=_NICKSERV_TICK)` per tick so a shutdown during the wait
-breaks out immediately.
-
-### 4. NAMES only adds ops, never removes them
-
-`internets.py:982` uses `setdefault(chan, set())` and adds nicks to the chanop
-set. It never clears the set before processing a NAMES reply. A NAMES refresh
-on an already-joined channel cannot remove someone who was deopped in the
-interim. Removal happens only through MODE (the `-o`/`-a`/`-q` path) or when
-the channel is dropped entirely on PART/KICK. This means the `_chanops` set is
-a superset of reality after enough time without MODE traffic.
-
-### 5. The console's `help` command is dispatched but not listed in its own output
-
-`console.py:87` dispatches the `help` command. `_CONSOLE_HELP` (the string it
-prints) lists `debug`, `loglevel`, `status`, `shutdown`/`quit` but not `help`
-itself.
-
-### 6. `.rehash` clears admin sessions only on the happy path
-
-`cmd_rehash` (`admin_cmds.py:531`) has two early-return paths (config reload
-failure, bad hash prefix) that return before reaching `self._authed.clear()`.
-Admin sessions survive both. This means a config-file syntax error preserves
-the current auth state rather than defensively clearing it.
-
-### 7. Rate limiter's channel flood gate does not record over-budget attempts
-
-`RateLimiter.channel_check` (`store.py:554-559`): when a channel is over its
-burst budget, the new attempt is refused WITHOUT being recorded into the
-sliding window. This is deliberate: recording it would let an attacker keep
-the window pinned full indefinitely by spamming after the limit trips. The
-window drains naturally and recovers.
-
-### 8. `_auth_fails` is unbounded within a single lockout window
-
-The brute-force lockout tracks failures per nick. Pruning happens only when
-the dict exceeds `_AUTH_CLEANUP_THRESHOLD = 50` entries, and only discards
-entries older than `_AUTH_LOCKOUT`. A flood of distinct attacker-controlled
-nicks, each making one attempt within the same 300s window, all stay in the
-dict at once. The dict size within a single window is bounded only by the
-number of unique nicks that can reach `.auth` during that window.
-
-### 9. Postal codes never fall through to free-text geocoding
-
-`geocode.py`'s postal-code classifier (`_postal_kind`) returns a non-None kind
-for anything matching a postal pattern. The main `geocode()` function routes
-postal codes to structured lookups and never enters the free-text word-drop
-loop. This is deliberate: free-text search on a bare postal code returns
-wrong-country garbage (documented examples: "08000" to a random Ohio motel).
-If a postal lookup produces wrong results, fix the classifier or the structured
-resolver, never route it back through the free-text path.
-
-### 10. `user_max_age_days` is floored at 1 in `Store.__init__`
-
-`store.py:124-125`: a configured value of 0 or negative would set the prune
-cutoff to `now` and wipe every tracked user (including their opt-out flags)
-on the first flush. The floor prevents this. The same defense is duplicated
-in `config.py:100-103` for the rate-limiter cooldowns.
-
----
-
-## Implicit contracts
-
-### Module handler signature: `async def cmd_x(self, nick, reply_to, arg)`
-
-`arg` is `None` when the user types just the command with no argument, not an
-empty string. Modules must check `if not arg:` (which catches both `None` and
-empty) or `if arg is None:` specifically. The dispatch path in `internets.py`
-passes `None` explicitly when no argument text follows the command word.
-
-### `on_raw(line)` must be fast and must not raise
-
-`on_raw` is called synchronously on the event-loop thread for every inbound
-IRC line. A slow implementation blocks all dispatch. A raised exception is
-caught by the fanout loop (`internets.py:864-868`) so one module cannot break
-the pipeline, but it is logged as an error. Modules should do minimal work in
-`on_raw` and defer anything expensive.
-
-### `on_raw` never receives PING or PONG lines
-
-Both branches in `_process` return before the module fanout at line 878. A
-module's `on_raw` that expects to see keepalive traffic will never fire. A
-line consisting only of tags (empty string after `strip_tags`) does reach
-`on_raw`.
-
-### `setup(bot)` is the only module entry point
-
-There is no class auto-discovery. The loader calls `mod.setup(self)` and
-expects a `BotModule` instance back. A file with no top-level `setup`
-function is rejected at load.
-
-### `COMMANDS` values must name `async def` methods
-
-`BotModule.__init_subclass__` (`base.py:220`) validates at class-definition
-time that every value in `COMMANDS` names a method on the class and that it
-is a coroutine function. A typo or a sync handler raises `TypeError` at
-import/load, not at first invocation. This is verified by
-`inspect.iscoroutinefunction` (not the deprecated `asyncio` alias).
-
-### Provider methods must accept `**kw`
-
-The dispatcher forwards caller kwargs verbatim. A provider method without
-`**kw` raises `TypeError` on an unrelated caller's kwarg (e.g., `area=` for
-alerts) and is logged as a provider bug.
-
-### `strip_ctrl` is the sanitizer, not the sender
-
-The sender strips only `\r\n\x00` as a transport backstop. `strip_ctrl`
-(`base.py:177`) strips the full C0 range plus DEL. Any upstream-derived text
-reaching an IRC line must go through `strip_ctrl`. A module that
-intentionally includes `\x02` (bold) in assembled output must strip
-individual untrusted fields through `strip_ctrl` first, then strip only
-transport bytes (`\r\n\x00`) from the assembled line.
-
-### `fetch_json` returns `None` on 404 only when `allow_404=True`
-
-Without the flag, a 404 raises `HTTPError`. Modules that use lookup-or-miss
-semantics (dictionary word, Pokemon name, GreyNoise unseen IP) pass
-`allow_404=True` and check for `None`.
-
-### `cred()` returns empty string for unconfigured secrets, not `None`
-
-A module checking `if not cred(...)` catches both missing and placeholder
-values. `is_configured()` typically delegates to this check to hide the
-module's commands from `.help` when no key is set.
-
----
-
-## Ordering requirements
-
-### Import-time execution order
-
-`config.py` -> `secret_store.py` -> `botlog.py` -> everything else. Both
-`config.py` and `botlog.py` can `sys.exit(1)` before the event loop starts
-(missing config file, bad password hash prefix, invalid mode strings).
-
-### Registration then MOTD then channels
-
-The read loop (`internets.py:1168`) sends `PASS`/`CAP LS`/`NICK`/`USER` first.
-After the MOTD end (numeric 376 or 422), it: ends CAP if still busy, applies
-user modes, falls back to NickServ `IDENTIFY` if SASL didn't already identify,
-sends `OPER` if configured, and starts the keepalive and rejoin background
-tasks. The rejoin task waits up to 10s for NickServ identification before
-rejoining saved channels, so services have time to cloak before the bot joins
-channels and exposes its real host.
-
-### Graceful shutdown order
-
-`graceful_shutdown` (`internets.py:523`): save channels -> unload all modules
-(each gets `on_unload` to flush state) -> stop the store flush thread with a
-final write -> enqueue QUIT at priority 0 -> sleep 2s for the sender to drain
--> stop sender -> close socket -> cancel background tasks -> stop metrics ->
-flush logging handlers. This order is load-bearing: modules must unload before
-the store stops (so they can flush through the store), and logging handlers
-must flush last (so shutdown events are captured).
-
-### Lock release before `execv` on restart
-
-`_main` releases the process lock before `os.execv` (`internets.py:1444-1454`).
-`execv` preserves the PID, so leaving the lockfile in place would make the new
-process image see its own old PID as a live holder and refuse to start.
-
----
-
-## Timing assumptions
-
-### Keepalive: 90s ping interval, 240s pong timeout
-
-The bot sends `PING` every 90s. If no `PONG` is received within 240s, it
-assumes a half-open connection and forces a reconnect. These constants
-(`_PING_INTERVAL`, `_PONG_TIMEOUT`) are hardcoded, not configurable.
-
-### Backoff: 15s, 30s, 60s, 120s, 240s, then capped at 300s
-
-Reconnect backoff is `min(15 * 2^attempt, 300)` with +/-25% jitter via
-`random.SystemRandom`. The jitter prevents thundering herd on a network
-split affecting multiple bots. Attempt counter resets to 0 on every
-successful connect.
-
-### Store flush: every 30s
-
-The background flush thread writes dirty datasets every 30 seconds. Worst-case
-data loss on a hard crash is ~30s of user-tracking timestamps. Channel and
-location changes are also flushed on shutdown/restart/signal.
-
-### Command timeout: 60s
-
-Each command handler runs under `asyncio.wait_for(..., timeout=60)`. A
-wedged handler is cancelled after 60s, freeing one of the 50 task slots. The
-user receives a timeout notice.
-
-### Weather dispatch: 45s chain, 30s per call
-
-The full provider fallback chain has a 45s budget. Each individual provider
-call is capped at 30s (or the remaining chain budget, whichever is less).
-Both nest under the 60s command timeout.
-
-### Circuit breaker: 5 failures in 60s, 60s cooldown
-
-A provider that fails 5 consecutive times within a 60s window is removed
-from the dispatch chain. After a 60s cooldown, it re-enters as `half_open`
-and gets one probe call. Success -> closed (normal). Failure -> open (another
-60s cooldown). Auth failures (401/403) trip the breaker immediately.
-
-### Geocode cache: 24h TTL, 1000-entry LRU
-
-Per Nominatim ToS. Negative results (failed lookups) are also cached to
-prevent repeated hammering.
-
----
-
-## Things "everyone knows"
-
-### The bot runs from a deployed copy, not the repo checkout
-
-The live instance runs from `~/Desktop/bot (copy 1)` (per project memory),
-not from `~/Internets`. Deploys copy files to that directory. Check the
-process's `cwd` to confirm which copy is live.
-
-### `config.ini` and `config.ini.example` are different files with different purposes
-
-`config.ini.example` is the committed, credential-free template. `config.ini`
-is the gitignored live config with real values and the `[secrets]` section.
-Never edit `config.ini.example` with real values. Never commit `config.ini`.
-
-### `.restart` does a full process restart via `os.execv`
-
-It is not a soft reload. The entire Python interpreter is replaced. All
-`sys.modules` cache is cleared. This is the only way to pick up changes to
-helper modules, `config.py` constants, core files, or dependencies.
-
-### `config.local.ini` overlays `config.ini`
-
-It is read after `config.ini` and wins on conflicts. It is the place for
-non-secret personal overrides (e.g., `password_hash`). It is never committed.
-
-### The bot refuses to start as root
-
-`_entry()` checks `os.geteuid() == 0` on POSIX and exits unless
-`INTERNETS_ALLOW_ROOT=1` is set. This is a safety measure, not a hard
-requirement.
-
-### IRC credentials are never sent on plaintext connections
-
-`_tls_or_refuse` gates every credential send. On a plaintext connection,
-the bot logs CRITICAL and refuses. This is not configurable.
-
-### Module names are lowercase alphanumeric plus underscore
-
-The loader regex is `^[a-z][a-z0-9_]*$`. A module named `MyModule.py` or
-`my-module.py` will be rejected.
-
-### Weather providers register only when their key is present
-
-A keyed provider whose credential is missing in the secret store returns
-`None` from its factory and is never registered with the dispatcher. It
-does not appear in `.providers` output. Keyless providers (NWS, Open-Meteo,
-MET Norway, etc.) always register.
-
-### The `provider_priority` config key is an ordering, not an allowlist
-
-Omitting a provider from the list does not disable it. It registers and
-sorts last. To actually exclude a keyed provider, remove its key.
+# Knowledge recovery
+
+A method, not a fact sheet. It answers: the original context is gone, so how do
+you rebuild a trustworthy picture of this project without guessing, and how do
+you tell a claim you can rely on from one you cannot.
+
+Use it when a document and the code disagree, when a number in prose looks
+stale, when you need to know why something is the way it is, or when you are
+about to assert something about this system that somebody else will act on.
+
+The whole method reduces to one habit: derive from source, verify
+programmatically where a script can decide it, and treat every prose document
+including this one as evidence one step removed.
+
+## The authority order
+
+When two sources disagree, the higher one wins. This ordering is not a
+preference; it reflects how each source can go wrong.
+
+| Rank | Source | How it goes wrong |
+| --- | --- | --- |
+| 1 | The source code | Cannot be stale relative to itself. Can still be wrong about its own intent. |
+| 2 | The test suite | Encodes intended behavior and past incidents. Can pin a defect (see below). |
+| 3 | Config parsing code | Authoritative for what a key does. `config.ini.example` is a template and drifts from it. |
+| 4 | `docs/internals/` | Written from full source reads, symbol-cited, with findings sections. One step removed. |
+| 5 | The guide-level docs | Correct at the abstraction they describe. Furthest from the code. |
+
+Two qualifications that matter more than the ordering itself.
+
+**A test can be wrong in a specific, dangerous way.** A test written after the
+implementation asserts what the code does, not what it should do. This repo has a
+confirmed instance: `tests/test_physcalc.py - test_five_band` asserts the value
+produced by a defective resistor-code calculation in
+`modules/physcalc.py - _rc_from_bands()`. The test is green and the behavior is
+wrong. So a passing test proves the code and the test agree, not that either is
+correct. When a test looks like it merely restates the implementation, treat it
+as a change detector and go to the source.
+
+**A docstring is prose and gets the prose ranking, not the source ranking.**
+Several docstrings in this repo describe behavior the code does not have: the
+`secret_store` module docstring claims encryption at rest where the
+implementation is plaintext plus 0600 permissions, `audit_log`'s claims
+append-binary mode where `record()` opens text mode, and `hashpw`'s
+`_FAST_HASH_THRESHOLD_S` comment describes an automatic cost backoff that was
+never implemented. Read the body, not the docstring.
+
+## Regenerating the command inventory
+
+Never hand-count commands. `scripts/gen-command-reference.py` walks `modules/`,
+imports each file, instantiates each `BotModule` subclass without running
+`__init__` (the same technique `tests/test_help.py` uses, so no network, keys, or
+config are needed), folds aliases into their primary command, and reads the core
+set from `AdminCommandsMixin._CORE` and `_CORE_PUBLIC`.
+
+```
+scripts/gen-command-reference.py
+```
+
+The last line is the count:
+
+```
+Primary module commands: 165. Core public: 4. Core admin: 23.
+```
+
+It has a drift gate. This is the check to wire into any process that touches
+commands:
+
+```
+scripts/gen-command-reference.py --check docs/command-reference.md
+```
+
+It exits 1 and names every registered command absent from the document. Note
+what it does and does not prove: it proves no command is missing from the doc. It
+does not prove the doc has no invented commands, and it does not check
+descriptions.
+
+Two subtleties in the script that explain apparent count mismatches. Its `_SKIP`
+set excludes `__init__`, `base`, `geocode`, and `units` by name; `_netsafe` is
+excluded implicitly because it defines no `BotModule` subclass. And the count of
+modules yielded is not the count of modules with commands, because `linktitle`
+defines a loadable module that registers zero commands and runs entirely from the
+raw-line fanout.
+
+## Verifying counts programmatically
+
+Every count in this documentation set should be reproducible by a command. These
+are the ones the current numbers came from, with the answers as of 2026-08-15.
+
+Module files, and the module and command counts:
+
+```
+ls modules/*.py | wc -l                      # 75
+scripts/gen-command-reference.py | tail -1   # 165 / 4 / 23
+```
+
+Weather providers, three independent ways, which is why the number is trusted:
+
+```
+ls -d weather_providers/*/ | grep -v __pycache__ | wc -l          # 32
+grep -c "_reg(" weather_providers/__init__.py                     # 33 (32 + the def)
+grep -h "requires_key" weather_providers/*/__init__.py | sort | uniq -c
+```
+
+The last gives 12 keyless and 20 keyed. Verify the key gating by AST-walking the
+factories for a return-None path rather than trusting the attribute alone;
+`weatherkit` additionally needs PyJWT present, and `pollendotcom` is
+User-Agent-gated but registers unconditionally.
+
+Test files and secrets:
+
+```
+ls tests/test_*.py | wc -l                                        # 40
+python -c "import sys; sys.argv=['x']; import secret_store as s; \
+print(len(s.KNOWN_SECRETS), len(s.CONFIG_LOCATIONS))"             # 41 40
+```
+
+The `sys.argv` assignment is not cosmetic. `config.py` parses argv at import
+time and will exit on an unrecognized argument, which is why every script in
+this repo that imports it pins argv first.
+
+Two traps this project has already hit with counting.
+
+**A narrow glob is not the population.** The initial reconnaissance for this
+documentation pass globbed `weather_providers/*.py`, found five files, and
+concluded the provider layer was five files. The 32 provider implementations are
+in sub-packages, 135 files and 4427 lines, entirely missed. Before asserting a
+count, confirm you enumerated the right population, not the one your first
+pattern happened to match.
+
+**Validate the instrument before trusting its verdict.** When a check disagrees
+with what you believe, the check is as likely to be wrong as the target. The
+citation verifier described below produced 72 false failures on its first run
+from arbitrary basename resolution, and three more from instance attributes.
+Neither its passes nor its failures meant anything until it was trap-tested
+against a deliberately broken citation.
+
+## Finding out why a decision was made
+
+Four sources, in the order to try them.
+
+**`docs/design-decisions.md`** holds sixteen ADRs covering the choices whose
+obvious cleanup reintroduces a failure the project already had. If the thing you
+want to change is in there, read the entry before proposing anything: several
+of these look like accidental complexity and are not. ADR-003 (thread-local DNS
+pinning rather than an IP-literal adapter), ADR-010 (the single-source weather
+rule), and ADR-011 (a fresh module object per load with no `sys.modules` entry)
+are the three most often re-litigated.
+
+**`CHANGELOG.md`** is Keep a Changelog format and is unusually detailed: entries
+explain the failure that motivated a change, not just the change. It is the best
+source for "when did this behavior appear and what was it replacing."
+
+**`git log`** for the file, then the commit body. Commit messages in this repo
+carry reasoning. `git log -p --follow <file>` survives renames; `git log -S
+'<string>'` finds the commit that introduced or removed a specific line, which
+is usually faster than reading history forward.
+
+**Test names and docstrings** encode incidents. A test named for a bug number or
+carrying a comment about what it prevents is a record of something that happened.
+`tests/run_tests.py` in particular holds completeness gates, which exist because
+an enumeration drifted at least once.
+
+When none of these answers it, the honest form is to say the rationale is not
+recorded. `docs/internals/` follows this convention explicitly: where behavior
+looks questionable, the page says so in a findings section rather than inventing
+a rationale. Do not close that gap with a guess. An invented rationale is worse
+than an acknowledged unknown because the next reader cannot tell them apart.
+
+## Verifying documentation citations
+
+Two scripts, and they do different jobs. Understanding the difference is the
+point of this section.
+
+`scripts/remap-doc-citations.py` fixes line-number citations after an edit moved
+the lines. It builds an exact old-to-new line map with `difflib` by comparing a
+file at a git ref against the working tree, then rewrites `file.py:123`
+citations across `docs/*.md`, `README.md`, `CONTRIBUTING.md`, and `SECURITY.md`.
+
+```
+scripts/remap-doc-citations.py HEAD internets.py admin_cmds.py
+scripts/remap-doc-citations.py HEAD internets.py admin_cmds.py --apply
+```
+
+It reports without `--apply`, which is the intended first run. Lines deleted
+outright are reported as UNMAPPABLE and left alone, because a citation pointing
+at deleted code usually means the surrounding prose needs rewriting, not
+renumbering.
+
+**Renumbering is necessary and not sufficient.** A remapped citation is
+arithmetically correct and can still be wrong: it may have been wrong before the
+edit, or `difflib` may have mis-anchored when a block moved and was edited in
+the same commit, and an off-by-one still resolves to a real line. Nothing about
+a valid line number says the line means what the prose claims.
+
+`scripts/verify-doc-citations.py` checks meaning instead. It parses each cited
+file's AST and confirms the cited symbol actually exists as a module-level
+function, a class, a method of the named class, or an instance attribute
+assigned in a method.
+
+```
+scripts/verify-doc-citations.py            # full report, exit 1 on failure
+scripts/verify-doc-citations.py --summary  # counts only
+```
+
+Symbol citations get a PASS or a FAIL. Line citations get REVIEW, never PASS,
+even when the range is valid, because a line citation cannot be
+content-verified mechanically. That asymmetry is deliberate: it is what makes
+the line style visibly the one being retired.
+
+This is why citations in this corpus are symbol-primary
+(`internets.py - IRCBot._dispatch()`) with line numbers only as secondary
+navigation. A symbol citation survives edits above it and is mechanically
+checkable; a line citation is neither.
+
+Current state as of 2026-08-15: 1026 citations, of which 864 symbol citations
+Run `--summary` for the current numbers rather than trusting a figure written
+here; the totals move with every doc edit. What the shape of a healthy result
+looks like: zero symbol failures, zero missing files, zero out-of-range line
+citations, and a shrinking count of legacy line citations awaiting a human
+content check. At the first full pass on 2026-08-15 that was 864 symbol
+citations verified clean against 162 legacy line citations, 47 of them in
+`deployment.md`.
+
+The errors that pass found are a useful illustration of what only a content
+check catches. Four citations named a function that does not exist: one cited
+"main" where the real entry point is the private `_main`, one cited a line
+handler under an old name it was renamed away from, one cited an air-quality
+formatter under the name of the capability rather than the method, and one cited
+a constructor where the work actually happens in the module's `on_load` hook.
+Every one of those cited a real file at a plausible name, and a line-based check
+would have passed all four.
+
+## Re-deriving the module inventory
+
+Read the source, not the documentation, and note the four distinct populations
+that get confused with each other.
+
+| Population | How to get it | Count |
+| --- | --- | --- |
+| Files under `modules/` | `ls modules/*.py` | 75 |
+| Loadable modules | instantiate `BotModule` subclasses | 70 |
+| Modules registering commands | non-empty `COMMANDS` | 69 |
+| Modules in the shipped autoload | `[bot] autoload` in the template | 67 |
+
+The gaps between them are all meaningful. `base.py`, `geocode.py`, `units.py`,
+`_netsafe.py`, and `__init__.py` are infrastructure and define no module.
+`linktitle` is loadable but registers nothing, working entirely through the
+`on_raw` fanout. And the autoload list is a deployment choice, not a property of
+the code, which is how `privacy` came to be absent from it.
+
+For a specific module, `docs/internals/modules/<name>.md` is the per-file page.
+Its findings section is where anything questionable was recorded rather than
+explained away.
+
+## Re-deriving the provider inventory
+
+Providers are discovered by structure, not by a list, so the source of truth
+depends on the question.
+
+- **Which providers exist**: directories under `weather_providers/`, one package
+  each.
+- **Which are registered**: the factory calls in `weather_providers/__init__.py`.
+  A factory returning `None` when its key is absent is how key gating works.
+- **What each can answer**: `hasattr` on capability method names. There is no
+  declaration list. A misspelled `get_*` method is a capability that silently
+  does not exist, which is exactly the failure mode this discovery mechanism
+  buys convenience with.
+- **How they rank**: `weather_providers/_dispatch.py - DEFAULT_RELIABILITY`.
+  A capability absent from a provider's entry gets rank 99, silently last.
+
+A `hasattr` sweep over all 32 provider classes is the check that catches the two
+directions of reliability-table drift, and it found both: entries ranking a
+provider for a capability it does not implement (`meteomatics` for nowcast,
+`accuweather` for air quality) and a provider omitted from a capability it does
+implement (`stormglass` for current). Re-run that sweep after any provider
+change rather than reading the table.
+
+Per-provider pages are under `docs/internals/weather-providers/providers/`.
+
+## Recording what you learn
+
+Two rules that keep this method from having to be repeated.
+
+**Record the lapse, not only the plan.** A tracker naturally accumulates forward
+work and silently omits backward facts: a defect found and not fixed, work
+descoped, a gate skipped, a rename that stranded state. Those feel like history
+rather than items, so they never get written down, and because they are absent
+the next reader re-derives the same wrong picture.
+[known-issues.md](known-issues.md) is where that goes for
+this project; the prioritized version with impact statements is in
+[handoff](handoff.md).
+
+**Prefer a mechanical check to a written rule.** A constraint that lives only in
+prose gets violated and then distrusted. Where a decision can be machine-checked,
+pair it with the check: `gen-command-reference.py --check` for the command
+inventory, `verify-doc-citations.py` for citations, `verify_install.sh` for the
+packaged module list, and the completeness gates in `tests/run_tests.py` for
+enumerations that must stay in sync. Each of those exists because the prose
+version of the same rule failed at least once.

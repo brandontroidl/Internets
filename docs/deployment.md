@@ -1,394 +1,515 @@
-# Deployment and operations
+# Deployment
 
-Operations manual for Internets v5.0.0. Grounded in `console.py`, `process_lock.py`,
-`botlog.py`, `internets.py`, `config.py`, `metrics.py`, `store.py`, `audit_log.py`,
-`admin_cmds.py`. Read those alongside this.
+How to get Internets onto a host and keep it running there: installation shapes,
+platform support, the deployment directory and its permissions, running under a
+service manager, and the upgrade and rollback path.
 
-## Running the bot
+This is not the runbook. Day-to-day operation - starting and stopping, restart
+versus rehash versus reload, log review, audit review, health checking, the
+metrics endpoint, backup mechanics, the maintenance checklist - is
+[operations.md](operations.md), and it is linked from here rather than repeated.
+First-time bring-up from a clone is [getting-started.md](getting-started.md).
+Key-by-key config meaning is [configuration.md](configuration.md).
 
-Two equivalent entry points:
+| Subsystem this page touches | Internals reference |
+|---|---|
+| Entry point, module loading, restart | [internals/internets.md](internals/internets.md) |
+| Config and CLI parsing | [internals/config.md](internals/config.md) |
+| Secret resolution and file mode gate | [internals/secret_store.md](internals/secret_store.md) |
+| Single-instance lock | [internals/process_lock.md](internals/process_lock.md) |
+| Logging stack and startup validation | [internals/botlog.md](internals/botlog.md) |
+| Packaging, wheel contents, CI | [internals/ci-and-packaging.md](internals/ci-and-packaging.md) |
 
-```
-python internets.py            # run from a checkout
-internets                       # console_script (pyproject [project.scripts]: internets = "internets:_entry")
-```
+## What a deployment is
 
-Both land in `_entry()` (`internets.py:1471`). `_entry()` does, in order:
+One long-lived Python process, one IRC network, one host. There is no
+supervisor tree, no worker pool, no database, and no network listener except the
+optional metrics exporter. Everything the process owns lives as files in a single
+directory: the config, the process lock, four JSON state files, the module state
+files, the audit log with its key sidecar, and the rotating bot log.
 
-1. **Drop-root guard** (POSIX). If `os.geteuid() == 0` and `INTERNETS_ALLOW_ROOT != "1"`,
-   it logs `event=refused_root_start` and `sys.exit(1)`. Set `INTERNETS_ALLOW_ROOT=1`
-   to override (e.g. binding a port < 1024 without `setcap`). Windows has no euid;
-   the check is skipped there.
-2. **Acquire the process lock** at `./internets.pid` (resolved to absolute), as a
-   context manager around `asyncio.run(_main(lock))`. `LockHeld` -> log
-   `Another bot instance is already running` and `sys.exit(1)`.
-3. On `KeyboardInterrupt` after the loop: log `event=keyboard_interrupt`, `sys.exit(130)`
-   (128 + SIGINT). No traceback. Other exceptions are deliberately NOT buried.
+That directory is the unit of deployment. Back it up, move it, or restore it and
+you have moved the bot.
 
-`config.py` reads `config.ini` (and the optional `config.local.ini` overlay) at
-**import time**, before `_main` runs. A missing/unreadable `config.ini` raises
-`SystemExit` with an actionable message (`config.py:72`) pointing at
-`python -m secret_store init`. `botlog.py` (also import-time) then validates the admin
-hash and config modes and can `sys.exit(1)` before the loop ever starts - see
-[Startup validation](#startup-validation).
+(deploy-install)=
+## Installation shapes
 
-### CLI arguments
+Two shapes are supported, and they differ in more than convenience.
 
-Parsed in `config.py:115` (`argparse`). All optional:
-
-| Flag | Effect |
-|------|--------|
-| `--version` | Print `Internets 5.0.0` and exit. |
-| `--debug [SUBSYSTEM ...]` | No args = global debug (all subsystems). With args = per-subsystem, e.g. `--debug weather store`. Applied in `botlog.py:150`. |
-| `--loglevel LEVEL` | Base level: `DEBUG`/`INFO`/`WARNING`/`ERROR`. Overrides `[logging] level`. |
-| `--debug-file PATH` | Write ALL output at DEBUG to a separate rotating file. Overrides `[logging] debug_file`. |
-| `--no-console` | Disable the interactive stdin console (for daemons). |
-
-`--debug` subsystem names are normalized to `internets.<name>` unless they already
-start with `internets`.
-
-### The interactive console
-
-When stdin is an interactive TTY and `--no-console` is not set, `_main` starts a console
-task (`internets.py:1382`). It runs the dispatch loop on a **daemon thread**
-(`console.py:140`), not `asyncio.to_thread`, because `input()` parks on a blocking
-`read(0)` that nothing short of process death interrupts; a non-daemon thread would hang
-`asyncio.run()`'s `shutdown_default_executor()` forever on exit (`console.py:101` docstring).
-
-`should_skip_console()` (`console.py:42`) returns True when `sys.stdin.isatty()` is False
-(systemd, `docker run` without `-it`, piped/redirected stdin) or stdin is gone. In that
-case `_main` logs `Console skipped: stdin is not a TTY`. On entry the console logs a loud
-`event=console_active` WARNING: it grants **admin-equivalent capability without
-authentication** to anyone with stdin access (debug, loglevel, status, shutdown). Run
-daemonized deployments with `--no-console`, or under a dedicated unprivileged user with
-no shared shell.
-
-Console commands (`_console_dispatch_loop`, `console.py:58`; dispatch chain at
-`console.py:83`): `help`, `debug`,
-`loglevel`, `status`, `shutdown`/`quit`. They are safe to call off-loop:
-`apply_debug`/`apply_loglevel` touch RLock-guarded logging state; `_print_status` reads
-bot fields through their own `threading.Lock` accessors; `request_shutdown` uses
-`loop.call_soon_threadsafe`. The loop exits on EOF (Ctrl-D), Ctrl-C, stdin close, or a
-`shutdown`/`quit` command. `status` has no IRC equivalent - it prints version, nick,
-channels, modules, admins, and log state.
-
-## Process lock (single-instance enforcement)
-
-`process_lock.py`. Prevents two instances racing on the JSON state files (locations /
-channels / users / shadow_bans), whose tmp-and-rename writes would clobber each other.
-
-- Lockfile `./internets.pid` stores `pid|start_time|hostname` (`process_lock.py:209`).
-  The path is resolved at `acquire()` time against the then-current CWD, not at
-  construction, so a relative path tracks the startup CWD (`process_lock.py:131`). It is
-  NOT `.resolve()`d, so a not-yet-existing parent dir is tolerated.
-- Creation is atomic via `os.open(..., O_CREAT | O_EXCL | O_WRONLY, 0o644)`. Losing the
-  `O_EXCL` race raises `LockHeld` (`process_lock.py:204`).
-- **Stale detection** on an existing lockfile (`process_lock.py:153`):
-  - Same hostname -> probe liveness with `os.kill(pid, 0)`. Alive -> refuse (`LockHeld`).
-    `ProcessLookupError`/`ESRCH` -> dead -> remove stale file and continue.
-    `PermissionError` (process owned by another user) -> treated as **alive** (conservative
-    refusal beats clobbering state).
-  - Different hostname (shared NFS / Docker volume) -> cannot probe -> treated as alive ->
-    refuse. The operator deletes the lockfile by hand if sure the other host is dead.
-  - Unreadable/corrupt lockfile -> log and remove, continue.
-  - Non-POSIX without `psutil` -> fail-open: log and take the lock.
-- `release()` (`process_lock.py:220`) re-reads the file and only unlinks if it still
-  contains our PID; a PID mismatch logs `not releasing ... pid mismatch` and skips. It is
-  idempotent.
-
-**Restart interaction:** `os.execv` preserves the PID. The restart path releases the lock
-*before* `execv` (`internets.py:1451`); otherwise the new image would see its own
-preserved PID as a live holder and refuse to start. See [Restart](#restart-execv).
-
-**Recovering a stuck lock:** if the bot was `kill -9`'d on the same host, the next start
-auto-clears the stale file (dead PID). If the file names a *different* host, or the PID was
-reused by an unrelated live process, startup refuses - delete `internets.pid` manually
-after confirming no instance is running.
-
-## Logging
-
-`botlog.py`. The `internets` logger is configured at import time (`_setup_logging`,
-`botlog.py:112`), set to `DEBUG`, handlers cleared then rebuilt:
-
-- **Main rotating file** -> `LOG_FILE` (`[logging] log_file`), `RotatingFileHandler` at
-  `LOG_MAX` bytes, `LOG_BACKUPS` old copies. Handler level DEBUG; the `DebugFilter`
-  decides what passes.
-- **Console stream** -> stdout, same formatter and filter.
-- **Optional debug file** -> only if `LOG_DEBUG` is set (`[logging] debug_file` or
-  `--debug-file`). Same rotation params, captures everything at DEBUG regardless of base
-  level (no `DebugFilter` attached). Useful for protocol diagnostics.
-
-Rotation defaults (`config.py:144`): `LOG_MAX` = `[logging] max_bytes` (default
-`5242880`, 5 MB), `LOG_BACKUPS` = `[logging] backup_count` (default `3`). So the main log
-occupies at most ~4 files (`log` + `.1`..`.3`). The debug file rotates with the same
-caps. Format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s`.
-
-**Log injection defense:** `_SafeFormatter` (`botlog.py:28`) strips C0 controls (except
-TAB), DEL, and C1 from `record.msg` and `record.args` on a *copy* of the record, so
-attacker-supplied strings can't forge log lines. Exception tracebacks survive (rendered
-into `exc_text`, not `msg`).
-
-### Runtime log control
-
-The `DebugFilter` (`botlog.py:64`) passes a record if level >= `base_level`, OR
-`global_debug` is on, OR the record's logger name matches an enabled subsystem prefix.
-Subsystem set is `threading.Lock`-guarded. Control it three ways, all hitting the same
-filter instance:
-
-- IRC admin: `.loglevel`, `.loglevel <logger> LEVEL`, `.debug [on|off]`,
-  `.debug <subsystem> [off]`.
-- Console: `loglevel`, `debug` (same handlers via `apply_loglevel`/`apply_debug`).
-- CLI at startup: `--loglevel`, `--debug`.
-
-Setting a base level via `.loglevel LEVEL` also forces `global_debug` off
-(`botlog.py:278`). `.rehash` resets the base level from `[logging] level` and clears all
-debug subsystems (`admin_cmds.py:548`).
-
-(startup-validation)=
-### Startup validation (can refuse to boot)
-
-`botlog.py` runs these at import, before the loop:
-
-- `_validate_hash()` (`botlog.py:180`): reads `[admin] password_hash` via
-  `reload_config()`. Empty -> WARNING, auth disabled, bot still runs (first-run before
-  `hashpw.py`). Non-empty but prefix not in `scrypt`/`bcrypt`/`argon2` -> `log.critical`
-  + `sys.exit(1)` (an unrecognized prefix would make `verify_password` raise on every
-  auth, silently disabling admin; fail-closed is louder). The invalid prefix is NOT echoed.
-- World-readable `config.ini` (POSIX, `st_mode & 0o004`) -> WARNING suggesting `chmod 640`.
-- `user_modes`/`oper_modes`/`oper_snomask` must match `^[a-zA-Z+\- ]*$` or `sys.exit(1)`.
-
-## Configuration for a deploy
-
-Single merged `config.ini`, **0600**, holds everything: server/nick/modules plus a
-`[secrets]` section. `config.ini.example` is the committed credential-free template -
-never edit it with real values. An optional gitignored `config.local.ini` overlays
-non-secret personal values on top.
-
-`config.py` loads `config.ini` then overlays `config.local.ini` if present
-(`reload_config`, `config.py:43`). configparser `read()` only overrides keys present in
-the re-read file, so **every reload path must go through `reload_config()`** - re-reading
-`config.ini` alone would clobber a `password_hash` that lives only in the overlay with the
-template's empty placeholder. Reads are pinned to UTF-8 (the example file uses non-ASCII
-header glyphs; the platform locale would raise `UnicodeDecodeError`).
-
-### Secrets
-
-Lookup order, first hit wins (`config.py:24`, `_secret_or_cfg`):
-
-1. `INTERNETS_<NAME>` environment variable.
-2. `config.ini` `[secrets]` section - read **only** when perms are exactly `0600`; the
-   store fails closed (returns empty) on looser perms.
-3. Legacy plaintext field in the value's own non-secret section (`_secret_or_cfg`,
-   `config.py:24`), e.g. `[irc] nickserv_password` (`config.py:86`) - consulted only when
-   both the env var and `[secrets]` are empty.
-
-Secrets covered: NickServ/SASL/server/oper passwords, every provider/API key, the
-`weather_user_agent` contact identifier. Manage via `python -m secret_store`
-(`init`/`status`/`list`/`get`/`set`/`delete`/`migrate`). `get` never prints the value -
-extract for rotation with `python -c "import secret_store; print(secret_store.get('<name>'))"`.
-
-**Never** create, restore, or hand-edit `config.ini`, `config.local.ini`, or any
-secret/PII file without explicit per-file approval. These files are not in the repo and
-must not be.
-
-Migrating from an old separate `secrets.ini`:
+### From a checkout (the primary path)
 
 ```bash
-{ echo; cat secrets.ini; } >> config.ini
-shred -u secrets.ini
-chmod 600 config.ini
-```
-
-Then restart (env vars still win over the file). OS-keyring support was removed in 3.0.0.
-
-## Reload vs restart
-
-Three distinct refresh mechanisms with different scopes. Picking the wrong one is the
-classic gotcha.
-
-### `.reload` / `.reloadall` - command modules only
-
-`reload_module` = `unload_module` then `load_module` (`internets.py:500`). `load_module`
-(`internets.py:448`) builds a *fresh* module object every time via
-`importlib.util.spec_from_file_location` + `module_from_spec` + `exec_module`. It does NOT
-populate or consult `sys.modules` for the `modules.<name>` entry, so editing a command
-module file and running `.reload <name>` picks up the new source immediately. All module
-operations hold `self._mod_lock`.
-
-**The trap:** helper modules under `modules/` that command modules `import` (notably
-`modules/geocode.py` and `modules/units.py`, and anything in `weather_providers/`) ARE
-cached in `sys.modules` after their first import. `exec_module` re-runs the command
-module's top-level `import geocode`, but Python returns the already-cached helper object -
-your edits to `geocode.py` do **not** take effect. A full process restart is the only way
-to refresh a helper or any non-command module. The same applies to `config.py`'s
-import-time constants and to core files (`internets.py`, `sender.py`, `store.py`, etc.).
-
-`load_module` guards: module name must match `^[a-z][a-z0-9_]*$`; the resolved path must
-stay inside `MODULES_DIR` (symlink/traversal escape -> rejected); the module must expose
-`setup(bot)`; a command-name collision with another loaded module is rejected (the second
-loser, not the incumbent). Failures return a generic "see log for details" to IRC.
-
-### `.rehash` / SIGHUP - config only, no link drop
-
-`.rehash` (`admin_cmds.py:531`) and SIGHUP (`_on_sighup`, `internets.py:1327`) both call
-`reload_config()` to re-read `config.ini` + `config.local.ini` into the live `cfg`, then
-clear all admin sessions defensively. What this refreshes: values read at use-time, e.g.
-`command_prefix` via `_cmd_prefix()` (`internets.py:585`), which is why the core reads the
-prefix live instead of the frozen import-time `CMD_PREFIX`.
-
-What it does **NOT** refresh: the import-time credential constants `NS_PW`/`OPER_PW`/
-`SERVER_PW` and other module-level constants in `config.py`. A live on-wire credential
-reload is intentionally out of scope; the SIGHUP log says so
-(`note=defensive_no_cred_reload`). Changing a password or any import-time constant needs a
-full restart. `.rehash` also re-validates the hash prefix and resets the log base level.
-
-### Restart (execv)
-
-`.restart` (`admin_cmds.py:520`) sets `bot._restart_flag = True` then `request_shutdown`.
-After `graceful_shutdown` completes and tasks drain, `_main` (`internets.py:1437`) closes
-logging file handlers (clean rotation across the restart), **releases the process lock**
-(PID survives `execv`, see [Process lock](#process-lock-single-instance-enforcement)),
-then re-execs:
-
-- POSIX: `os.execv(sys.executable, [sys.executable] + sys.argv)` - replaces the image.
-- Windows: `subprocess.Popen(...)` then `sys.exit(0)` (execv doesn't replace the process
-  on NT).
-
-`argv` is preserved, so CLI flags carry across the restart. A restart is required for any
-change outside a command module's own source: helper modules, `config.py` constants, core
-files, dependency upgrades.
-
-### Graceful restart from the shell
-
-Send SIGINT or SIGTERM (`_on_signal`, `internets.py:1312`) and relaunch. Both trigger
-`request_shutdown`; the handler is idempotent (a second signal during shutdown is logged
-and ignored). SIGHUP is rehash, not shutdown - do not use it to restart. On POSIX the
-handlers are installed via `loop.add_signal_handler` (`internets.py:1130`/`1116`); Windows has no
-such API and relies on `KeyboardInterrupt`.
-
-```
-kill -INT "$(cat internets.pid | cut -d'|' -f1)"   # graceful; sender drains QUIT, store flushes
-# then relaunch
+git clone https://github.com/brandontroidl/Internets
+cd Internets
+pip install -r requirements.txt
 python internets.py
 ```
 
-`graceful_shutdown` (`internets.py:523`) order: save channels -> unload all modules (each
-gets `on_unload` to flush its own state) -> stop the store flush thread with a final write
--> enqueue `QUIT` at priority 0 -> sleep `_SHUTDOWN_DRAIN_S` (2.0s) for the sender to drain
--> stop sender -> close socket -> cancel background tasks -> stop the metrics server if
-running -> flush logging handlers.
+The checkout is both the code and the deployment directory. `modules/`,
+`weather_providers/`, and `config.ini.example` are all present at the paths the
+code expects, so nothing needs pointing at anything.
 
-## Health / metrics endpoint
+`requirements.txt` installs the full runtime stack and carries the security
+floors, each annotated with the advisory it closes. `pyproject.toml` splits the
+same set: `requests` alone is unconditional under `[project] dependencies`,
+while `aiohttp`, `bcrypt`, `argon2-cffi`, `PyJWT`, `cryptography`, and
+`defusedxml` are extras. That split is deliberate - each of the six enables a
+feature and degrades to unavailable rather than failing the import - so a
+minimal install is possible, and the floors must be kept identical in both files
+or an extras install can resolve a version the requirements file calls unsafe.
 
-`metrics.py`. **Off by default** - zero network footprint until explicitly enabled. The
-registry singleton accepts increments regardless, but starts no listener until
-`enable()` + `expose()`.
+### From a built wheel or sdist (console script)
 
-Enable in `config.ini` / `config.local.ini` (`internets.py:1363`):
+`pyproject.toml` declares `[project.scripts] internets = "internets:_entry"`, so
+a package install puts an `internets` command on `PATH`. Build and verify with
+`scripts/verify_install.sh`, which builds both artifacts, installs the wheel into
+a throw-away venv, hash-checks every installed file against the wheel's `RECORD`,
+and confirms all thirteen declared top-level modules import.
 
-```ini
-[metrics]
-enable = true
-host = 127.0.0.1
-port = 9779
+```bash
+./scripts/verify_install.sh
+pip install dist/internets_irc-5.0.0-py3-none-any.whl
 ```
 
-`_main` calls `registry.enable()` then `registry.expose(host, port)`. A failure here logs
-`event=metrics_start_failed` and is non-fatal.
+Two gaps make this shape more work than it looks, both verified against the built
+artifacts in `dist/`:
 
-**Bind guard (rejects all-interfaces binds):** `expose()` (`metrics.py:256`) refuses to start unless
-`enable()` was called, and **rejects any all-interfaces bind** - empty host, `0.0.0.0`,
-`::`, `::0`, IPv4-mapped `::ffff:0.0.0.0`, whitespace variants - by parsing the host with
-`ipaddress` and testing `is_unspecified`, raising `ValueError`. Only empty/unspecified hosts
-are refused; any specific address binds, including a routable interface IP - loopback is the
-intended default, not an enforced constraint; bind `127.0.0.1` and front with a reverse proxy
-to expose off-host. This is an auth-less internal endpoint. The HTTP handler serves Prometheus text exposition at
-`GET /metrics` only (everything else 404s) on a daemon thread; idempotent (a second
-`expose` no-ops). `registry.shutdown()` stops it (joined with a 2s timeout) and is called
-in `graceful_shutdown`.
+- **The template is not packaged.** Neither the wheel nor the sdist contains
+  `config.ini.example` (nor `requirements.txt` or `CHANGELOG.md`); only the
+  thirteen top-level modules listed in `pyproject.toml`
+  `[tool.setuptools] py-modules` plus the `modules` and `weather_providers`
+  packages ship. `secret_store.py - _cmd_init()` copies `config.ini.example`
+  from the current directory and exits 2 with "re-clone the repo" when it is
+  absent, so `python -m secret_store init` cannot bootstrap a package-only
+  install. Copy the template out of the source tree by hand.
+- **Modules are loaded by file path, not by import.**
+  `internets.py - IRCBot.load_module()` builds each module from
+  `MODULES_DIR / f"{name}.py"`, and `config.py - MODULES_DIR` defaults to the
+  relative path `modules`, resolved against the working directory. A wheel
+  install puts the `modules` package in `site-packages`, where that default does
+  not reach it, and every autoload entry fails with `'modules/<name>.py' not
+  found.` Point `[bot] modules_dir` at the installed package directory:
 
-Metric series are pre-registered (`_register_defaults`, `metrics.py:193`):
-counters `internets_commands_total`, `internets_provider_calls_total`,
-`internets_provider_quota_used`, `internets_reconnects_total`,
-`internets_dropped_messages_total`, `internets_audit_records_total`; gauges
-`internets_module_loaded`, `internets_provider_active`, `internets_sender_queue_depth`,
-`internets_authed_admins_count`.
+  ```ini
+  [bot]
+  modules_dir = /srv/internets/venv/lib/python3.12/site-packages/modules
+  ```
 
-`.stats` (admin) also surfaces runtime counters, queue depth, memory, and audit-log record
-count over IRC without any HTTP exporter.
+  Verified working: loading from that directory succeeds because the loader
+  names the module `modules.<name>`, and the `modules` package is importable
+  from `site-packages`, so the relative imports inside each module resolve.
 
-## Persistence and backup files
+The implication is that a package install still needs a deployment directory
+holding `config.ini` and the state files, and still needs one absolute path in
+the config. It gains a versioned, hash-verifiable artifact and loses the
+self-contained directory.
 
-All paths default to the CWD; override under `[bot]`. The store
-(`store.py`) loads each JSON file into memory at startup and a background thread flushes
-dirty datasets every `_FLUSH_INTERVAL` = 30s (`store.py:39`). Each dataset has its own
-lock. Worst-case loss on hard crash is ~30s of user-tracking timestamps; channel and
-location changes are also flushed on shutdown/restart/signal.
+### Editable install for development
 
-| File (default) | `[bot]` key | Contents | Notes |
+`pip install -e ".[dev]"` adds pytest, coverage, bandit, pip-audit, and build on
+top of the checkout, and keeps the checkout as the source of truth for both code
+and paths. Use it for development, not for a production host.
+
+## Platform support
+
+The claim carried in `README.md` and [index.md](index.md) is Linux, macOS,
+FreeBSD, Windows, WSL/WSL2, Cygwin, MinGW, and MSYS2, on Python 3.10 through
+3.14. Distinguish claim from coverage before you rely on it:
+
+| Platform | Status |
+|---|---|
+| Linux, macOS, Windows | Tested in CI on Python 3.10-3.14 (`.github/workflows/tests.yml` matrix) |
+| FreeBSD, WSL, Cygwin, MinGW, MSYS2 | Claimed, no CI leg; POSIX-shaped platforms exercise the same code paths as Linux |
+
+Note that the Tests workflow is currently red on `main` - see
+[Known defect: dependency lockfile](#deploy-defect-lockfile) - so "tested in CI"
+describes the matrix, not a passing run today.
+
+Platform-dependent behavior, all of it in three places:
+
+- **POSIX file modes.** `secret_store.py - perms_ok()` returns
+  `(True, "windows (acl-based)")` on `os.name == "nt"` and enforces an exact
+  0600 elsewhere. `audit_log.py` and `store.py - Store._write()` likewise skip
+  `chmod` on Windows. A Windows deployment gets no permission enforcement from
+  the bot; ACLs are yours to set.
+- **Signals.** `internets.py - IRCBot.run()` installs handlers with
+  `loop.add_signal_handler` for SIGINT, SIGTERM, and SIGHUP, which exists only
+  on POSIX. Windows has no SIGHUP, so `.rehash` over IRC is the only rehash
+  route there, and shutdown arrives as `KeyboardInterrupt`.
+- **Restart.** `internets.py - _main()` re-execs with `os.execv` on POSIX and
+  falls back to `subprocess.Popen` plus `sys.exit(0)` on Windows, which
+  detaches the new process from the old one's supervisor.
+- **Stale lock liveness.** `process_lock.py - _pid_is_alive()` probes with
+  `os.kill(pid, 0)` on POSIX and tries `psutil` on Windows, failing open with a
+  warning when `psutil` is absent.
+
+The drop-root guard is also POSIX-only; see below.
+
+(deploy-workdir)=
+## The deployment directory and why it matters
+
+Every path the process uses is relative to the working directory at the moment
+it is resolved. Nothing is derived from the location of the source file.
+
+| Path | Resolved by | When |
+|---|---|---|
+| `config.ini` | `config.py - CONFIG_PATH` | import time |
+| `config.local.ini` | `config.py - reload_config()` | import time and every rehash |
+| `config.ini` as secret store | `secret_store.py - SECRETS_FILE` | import time |
+| `modules/` | `config.py - MODULES_DIR` | import time, per module load |
+| `internets.pid` | `internets.py - _entry()` (`Path("./internets.pid").resolve()`) | at startup |
+| `locations.json`, `channels.json`, `users.json`, `shadow_bans.json` | `[bot]` keys, default bare filenames | at startup |
+| `audit.log`, `audit.log.key` | `audit_log.py - AuditLog` defaults | first record |
+| the bot log | `[logging] log_file` | import time |
+
+Consequences that bite in practice:
+
+- **A service unit must set `WorkingDirectory`.** Without it the manager's
+  default directory (`/` for a system unit) becomes the deployment directory,
+  `config.ini` is not found, and `config.py` raises `SystemExit` before the loop
+  starts. The failure is loud, which is the good case; the bad case is a unit
+  whose working directory points at a *different* checkout, where the bot starts
+  cleanly against another config and another state set.
+- **Interactive administration must `cd` first.** `python -m secret_store status`
+  run from your home directory reports on a `config.ini` that is not the one the
+  bot reads.
+- **A relative `modules_dir` follows the working directory too.** Use an
+  absolute path for any package install.
+
+`internets.py - _entry()` resolves the lock path to an absolute path at startup,
+while `process_lock.py - ProcessLock._resolved_path()` resolves a relative path
+at acquire time rather than at construction. Both land on the startup working
+directory.
+
+## File layout and permissions
+
+A running deployment directory, with the mode each file actually gets:
+
+| File | Mode | Set by | Holds |
 |---|---|---|---|
-| `locations.json` | `locations_file` | per-nick saved locations | written 0600 (POSIX); user-supplied data |
-| `channels.json` | `channels_file` | joined channel list | restored on reconnect; saved first in shutdown |
-| `users.json` | `users_file` | per-channel nick/hostmask/seen (PII) | written 0600; pruned > `user_max_age_days` (default 90) on flush |
-| `shadow_bans.json` | `shadow_bans_file` | shadow-banned nicks (lowercased) | loaded at init (`internets.py:257`) |
-| `steamids.json` | `[steam] steamids_file` | steam nick->ID map | module-managed |
-| `internets.pid` | (fixed) | process lock | see [Process lock](#process-lock-single-instance-enforcement) |
+| `config.ini` | 0600 required | operator (`secret_store.py - _cmd_init()` creates it 0600) | settings and `[secrets]` |
+| `config.local.ini` | 0600 by convention | operator | overlay, typically `password_hash` |
+| `audit.log`, `audit.log.key` | 0600 | `audit_log.py` | admin action trail, HMAC key |
+| `locations.json`, `channels.json`, `users.json`, `shadow_bans.json` | 0600 | `store.py - Store._write()` chmods the temp file before the rename | user data, PII in `users.json` |
+| `*.json.bak` | umask default | `store.py - Store._write()` (no chmod) | previous good copy |
+| `*.json.corrupt.*` | mode of the original | `store.py - Store._quarantine()` | quarantined file |
+| the bot log and its rotations | umask default | `logging.handlers.RotatingFileHandler` | operational log |
+| `internets.pid` | 0644 | `process_lock.py - ProcessLock.acquire()` (`O_CREAT \| O_EXCL`, 0o644) | `pid\|start_time\|hostname` |
 
-**Atomic writes** (`store._write`, `store.py:192`): write to a `*.tmp` in the same dir,
-`fdopen`+`json.dump` a v2 checksum envelope, `chmod 0600` the tmp *before* the rename (so
-the final file is never momentarily world-readable), copy the current good file to
-`<name>.bak` (one-deep backup), then `os.replace(tmp, target)`. `os.replace` is atomic on
-POSIX, best-effort on NTFS.
+Set the directory itself to 0700 owned by the bot user. That is the only control
+covering the three rows whose modes the bot does not manage.
 
-**Corruption handling** (`store._read`/`_quarantine`, `store.py:150`): a file over 10 MB
-(`_MAX_FILE_SIZE`), bad JSON, bad envelope checksum, or wrong top-level type is **not**
-silently reset (that would let the next flush clobber the only copy). Instead it is moved
-aside to `<name>.corrupt.<unixtime>` and the dataset starts from default. Recover by
-inspecting the `.corrupt.*` or `.bak` files by hand.
+:::{warning}
+**Known defect (self-contradicting permission advice).** `botlog.py` warns at
+startup, when `config.ini` is world-readable, with the literal text
+`config.ini is world-readable - consider: chmod 640 config.ini`. Following it
+breaks the deployment: `secret_store.py - perms_ok()` tests `mode != 0o600` and
+fails closed, so at 0640 the `[secrets]` section is never read, `secret_store.get()`
+returns the default for every name, and the bot runs with no NickServ password
+and no API keys behind a single `REFUSING to read` error line. The equality test
+also rejects *stricter* modes: 0400 fails the same way. Use `chmod 600`. Verified;
+recorded in [RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+:::
 
-### Audit log
+:::{warning}
+**Known defect (backup permissions).** `store.py - Store._write()` copies the
+previous good file to `<name>.bak` with `Path.write_bytes` and never chmods it,
+so on first creation it takes umask-default permissions, typically 0644, while
+the live file is 0600. The PII in `users.json` is world-readable in
+`users.json.bak`. Until it is fixed, a 0700 deployment directory is the
+containment, and `chmod 600 *.bak` belongs in the maintenance checklist. See
+[operations.md](operations.md#state-files-and-backup).
+:::
 
-`audit_log.py`. Append-only, HMAC-chained log of privileged admin actions, default
-`./audit.log` (`audit_log.py:121`), each record `chmod 0600`. Every admin command records
-via `admin_cmds._audit` -> `audit_log.default().record(...)`.
+:::{warning}
+**Known defect (log file permissions).** The bot log gets umask-default
+permissions with no check and no warning, unlike `config.ini`. It is not an
+empty file from a privacy standpoint: `location.py - LocationModule.cmd_regloc()`
+logs nick-to-location pairs and `linktitle.py - LinkTitleModule` logs announced
+URLs with their channel, and `.forgetme` cannot reach either. Treat the log as
+user-data-bearing: keep it inside the 0700 directory, and set the bot user's
+umask to 077 in the service unit.
+:::
 
-- **HMAC key sidecar** `audit.log.key` (`audit_log.py:123`), generated 0600 on first use
-  (32 bytes, `O_WRONLY|O_CREAT|O_TRUNC, 0o600`). The chain lets you detect tampering with
-  the log alone; an attacker who copies only `audit.log` (a backup) cannot forge a valid
-  continuation without the key. An invalid/short existing key is backed up to
-  `audit.log.key.bad` and regenerated.
-- **Rotation:** at `_MAX_BYTES` = 5 MB (`audit_log.py:55`) the log renames to
-  `audit.log.<timestamp>` and a fresh chain starts from genesis. Each rotated segment keeps
-  its own independent chain.
+## Running as an unprivileged user
 
-**Back up together:** `audit.log`, `audit.log.key`, the rotated `audit.log.*` segments,
-the JSON state files, and `config.ini` (securely - it holds secrets). The `.bak` and
-`.corrupt.*` files are recovery artifacts; keep them until you've confirmed the live files
-are good.
+`internets.py - _entry()` refuses to start when `os.geteuid() == 0` unless
+`INTERNETS_ALLOW_ROOT=1` is set in the environment. Refusal logs
+`event=refused_root_start` and exits 1; the override logs
+`event=root_start_allowed` at WARNING on every start, deliberately, so an
+overridden deployment cannot become quiet.
 
-## Upgrade procedure
+Create a dedicated account. There is no reason to hold the override: the only
+scenario the guard's own message names is binding a port below 1024, which the
+bot never does - it makes an outbound IRC connection and, when metrics are
+enabled, binds a port you choose (default 9779). If you truly need a privileged
+port for something adjacent, `setcap CAP_NET_BIND_SERVICE` on the interpreter is
+the narrower tool.
 
-0. **Read the CHANGELOG entry for the version you are moving to, first.**
-   Breaking changes and the operator action they require are recorded there, not
-   here. A major release can require you to do something before the bot will
-   authenticate you again - v5.0.0, for instance, stops accepting a bcrypt
-   password longer than 72 UTF-8 bytes, and the only symptom is `.auth`
-   answering `wrong password.`
+The guard is POSIX-only. A container running as root inside its namespace still
+trips it, which is intended: set `INTERNETS_ALLOW_ROOT=1` explicitly in the
+container environment, or better, add a `USER` line to the image.
 
-1. Stop the bot gracefully: `.shutdown` from IRC/console, or `kill -INT <pid>`. Confirm
-   `internets.pid` is gone (or stale-cleared on next start).
-2. `git pull`.
-3. If `requirements.txt` / `pyproject.toml` changed, refresh the environment:
-   `pip install -r requirements.txt` (or `pip install -e ".[dev]"` for the dev extras).
-   Review the lockfile diff before trusting it.
-4. If `config.ini.example` gained keys you need, merge them into your `config.ini` by hand
-   (never copy real values into the example). Keep `config.ini` at 0600.
-5. Run the standalone suite as a smoke test: `python tests/run_tests.py`.
-6. Start: `python internets.py` (re-add any `--no-console` / `--debug` flags your service
-   uses).
+## Running as a service
 
-A `git pull` that only touched command modules under `modules/` can be picked up with
-`.reloadall` **without** a restart - but only the command modules themselves, not helpers
-(`geocode.py`, `units.py`), `config.py`, core files, or `weather_providers/`. When in
-doubt, restart: `sys.modules` caching makes partial reloads silently stale (see
-[Reload vs restart](#reload-vs-restart)).
+### systemd
+
+```ini
+[Unit]
+Description=Internets IRC bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=internets
+Group=internets
+WorkingDirectory=/srv/internets
+UMask=0077
+ExecStart=/srv/internets/venv/bin/python internets.py --no-console
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/internets
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Every line above that is not boilerplate is load-bearing:
+
+- `WorkingDirectory` is mandatory, per
+  [The deployment directory](#deploy-workdir).
+- `--no-console` is the daemonization requirement. `console.py - should_skip_console()`
+  already returns True whenever `sys.stdin.isatty()` is False, which covers a
+  normal unit (systemd gives it `/dev/null`), so the flag is redundant in the
+  common case and cheap insurance in the rest: a unit with
+  `StandardInput=tty`, a `docker run -it`, or a hand-run `systemd-run --pty`
+  hands the console to whoever holds that terminal. The console is
+  **admin-equivalent with no authentication** - `shutdown`, `debug`, `loglevel`,
+  `status` - which is why `internets.py - _main()` logs `event=console_active` at
+  WARNING when it starts. Pass the flag and treat an unexplained
+  `event=console_active` in a service log as an incident.
+- `ExecReload` maps `systemctl reload` onto SIGHUP, which
+  `internets.py - IRCBot._on_sighup()` handles as a config rehash without
+  dropping the IRC link. It is not a restart; see
+  [operations.md](operations.md#ops-refresh) for which changes need which.
+- `KillSignal=SIGTERM` (the default) reaches
+  `internets.py - IRCBot._on_signal()`, which requests a graceful shutdown.
+  `TimeoutStopSec` must exceed the shutdown sequence, whose fixed floor is the
+  2 s sender drain in `internets.py - IRCBot.graceful_shutdown()`.
+- `Restart=on-failure` with a non-trivial `RestartSec`. Exit 1 covers both a
+  held process lock and a rejected config, and both are permanent until a human
+  intervenes; a one-second restart interval turns either into a hot loop.
+- `UMask=0077` is what protects the three files the bot writes without a chmod
+  (the `.bak` copies and the log), per the defects above.
+
+`Type=simple` is correct even though the bot re-execs itself on `.restart`:
+`os.execv` preserves the PID, so systemd's `MainPID` stays valid and the restart
+is invisible to the manager. That is also why the lock must be released before
+the exec, and it is handled - see [Process lock](#deploy-lock).
+
+### Other managers and containers
+
+The requirements generalize to any supervisor: unprivileged user, working
+directory set, stdin off a TTY, SIGTERM to stop, enough stop timeout for the
+shutdown sequence. Two constraints are easy to get wrong:
+
+- **Do not treat `internets.pid` as a supervisor PID file.** It is a
+  mutual-exclusion lock; `process_lock.py - ProcessLock.release()` deletes it on
+  a clean exit, and a supervisor that recreates or restores it blocks the next
+  start.
+- **A container's hostname must be stable.**
+  `process_lock.py - ProcessLock.acquire()` refuses a lockfile written by a
+  different hostname, because it cannot probe a foreign PID. A container whose
+  hostname changes per start therefore refuses to start on any lockfile a crash
+  left behind, and needs it removed by hand.
+
+The repository ships no container image. If you build one, mount the deployment
+directory as a volume, set `WORKDIR` to it, run as a non-root `USER`, and do not
+allocate a TTY.
+
+(deploy-lock)=
+## Process lock and the restart path
+
+`process_lock.py` exists to stop two instances from interleaving writes into the
+same JSON state files, whose temp-and-rename writes would otherwise clobber each
+other. Acquire-time behavior and stuck-lock recovery are in
+[operations.md](operations.md#ops-process-lock); what matters at deployment time
+is the interaction with re-exec.
+
+`os.execv` preserves the process ID. If the lockfile survived the exec, the new
+image would find its own PID in it, probe it as alive, and refuse to start -
+a self-deadlock on every restart. `internets.py - _main()` therefore closes the
+log handlers, calls `ProcessLock.release()`, and only then re-execs. A failure to
+release logs `event=restart_lock_release_failed` and the exec proceeds anyway,
+which produces exactly that deadlock on the next boot; if a `.restart` never
+comes back, look for that event and delete `internets.pid`.
+
+Two deployment-shaped hazards follow:
+
+- **Shared filesystems.** Two hosts mounting the same deployment directory over
+  NFS or a shared Docker volume cannot probe each other's PIDs, so the lock
+  degrades to "refuse anything from another hostname". That is the safe
+  direction, but it means a failover needs manual lock removal. Do not run two
+  hosts against one directory.
+- **PID reuse after a hard kill.** Stale detection clears a lockfile whose PID
+  is dead on this host. It cannot tell a reused PID from the original - the
+  recorded `start_time` is the lock acquisition time, not the OS process start
+  time, and nothing consults it - so a reused PID produces a refusal that only a
+  human can clear.
+
+:::{warning}
+**Known defect (concurrency window).** The stale-reclaim path in
+`process_lock.py - ProcessLock.acquire()` is examine, unlink, then exclusive
+create, which is not atomic. Two processes starting simultaneously over the same
+stale lockfile can interleave and both acquire. The window is microseconds and
+only reachable after a crash left a stale file, but a service manager restarting
+a crashed unit is exactly the situation that produces one. Recorded in
+[internals/process_lock.md](internals/process_lock.md#findings).
+:::
+
+## Environment variables
+
+The environment is a first-class configuration surface, and for secrets it is the
+highest-priority one.
+
+| Variable | Read by | Effect |
+|---|---|---|
+| `INTERNETS_<NAME>` | `secret_store.py - get()` | Supplies any secret; wins over `config.ini[secrets]` |
+| `INTERNETS_ALLOW_ROOT` | `internets.py - _entry()` | `1` permits starting as root |
+| `INTERNETS_ALLOW_TLS12` | `internets.py - IRCBot._connect()` | `1` lowers the TLS floor from 1.3 to 1.2 and logs a warning |
+| `INTERNETS_ARGON2_MEM_MIB`, `INTERNETS_ARGON2_TIME`, `INTERNETS_BCRYPT_ROUNDS` | `hashpw.py` | Hash cost parameters at generation time only |
+
+Environment secrets suit containers and any host whose config file is templated
+by a deployment tool: nothing lands on disk, and `secret_store.py - get()`
+applies the same blank-and-placeholder filtering to the environment tier as to
+the file tier, so an exported `changeme` is not treated as a value. The cost is
+that `secret_store.py - status()` can enforce a file mode but nothing equivalent
+on a process environment.
+
+:::{warning}
+**Known defect (invisible secret).** `nasa_api_key`, read by `modules/apod.py`
+and `modules/astro2.py`, is registered in neither `secret_store.py -
+KNOWN_SECRETS` nor `CONFIG_LOCATIONS`. It works through `get()` and through
+`INTERNETS_NASA_API_KEY`, but it does not appear in `secret_store list` or
+`status`, and `migrate` will not relocate it. Recorded in
+[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+:::
+
+## Upgrade
+
+The procedure itself, step by step with its verification points, is
+[operations.md](operations.md#upgrade-procedure). Deployment-level notes:
+
+- Read the CHANGELOG entry for the target version before anything else. A major
+  release can require operator action before the bot will authenticate you again:
+  5.0.0 began rejecting a bcrypt password longer than 72 UTF-8 bytes, and the
+  only symptom is `.auth` answering `wrong password.`
+- Upgrade the deployment directory, not around it. A checkout deployment upgrades
+  with `git pull` in place; a package deployment installs the new wheel into the
+  venv and leaves the directory untouched, but then must re-point
+  `[bot] modules_dir` if the Python version in the venv path changed.
+- `config.ini.example` gaining keys is not automatic. Merge new keys into your
+  `config.ini` by hand and never copy real values into the template. Note that
+  the template is incomplete in both directions: it omits `[tell]`, `[notes]`,
+  `[remind]`, `[seen]`, and `[bot] shadow_bans_file` though the code reads them,
+  and omits whole sections (`[imdb]`, `[lastfm]`, `[youtube]`, `[stocks]`,
+  `[twitch]`, `[search]`, `[ipintel]`, `[satpass]`, `[apod]`) whose per-module
+  ini fallbacks are therefore unreachable on a fresh install. See
+  [configuration.md](configuration.md).
+- Only command modules under `modules/` can be picked up without a restart, via
+  `.reloadall`. Helpers, providers, `config.py`, and core files need a full
+  restart. When in doubt, restart.
+
+:::{warning}
+**Known defect (privacy template).** The `autoload` list in `config.ini.example`
+enables 67 modules including `seen`, `tell`, `linktitle`, `notes`, `remind`, and
+`steam` - all of which record user-derived data - but does **not** include
+`privacy`. A deployment that uses the shipped template verbatim tracks users
+while shipping no `.forgetme`, `.optout`, `.optin`, or `.privacy` command: the
+right-to-erasure entry point is absent by default. Add `privacy` (and `health`)
+to your `autoload` before going live. Verified; recorded in
+[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+:::
+
+(deploy-defect-lockfile)=
+:::{warning}
+**Known defect (dependency lockfile).** `requirements.lock` was generated on
+Python 3.14, violating the resolve-on-3.10 contract stated in
+`scripts/regen-lockfile.sh`, and consequently omits marker-gated transitives
+(`typing_extensions>=4.4`, pulled by `aiohttp`). Any `--require-hashes` install
+from the lock on Python 3.10 through 3.12 fails, and the Tests workflow has been
+red on `main` since 2026-08-13. Install from `requirements.txt`, or regenerate
+the lock per the script, until this is fixed. Recorded in
+[internals/ci-and-packaging.md](internals/ci-and-packaging.md#findings).
+:::
+
+## Rollback
+
+Rolling back is stopping the bot, restoring the previous code, and starting it
+again. The code is stateless between versions; the state files are not, and they
+are what to think about.
+
+1. Stop gracefully and confirm `internets.pid` is gone.
+2. Copy the whole deployment directory aside before touching anything. This is
+   the rollback's only recovery path, and it is cheap.
+3. Restore the previous code: `git checkout <previous-tag>` for a checkout, or
+   reinstall the previous wheel into the venv for a package install. Reinstall
+   dependencies if `requirements.txt` moved between the two versions - a
+   downgrade that leaves newer libraries in place is not the version you tested.
+4. Start, and check the log for `Store: <path> unusable` lines before assuming
+   the state survived.
+
+The state-file format itself is not the hazard: `store.py - Store._read()` has
+accepted both the v2 checksum envelope and a legacy bare payload since the
+initial commit. The hazard is the *handling* of a rejected file. Quarantine
+arrived in 5.0.0 (CHANGELOG, "Store quarantine instead of clobber"); before it,
+`Store._read()` reset to empty on a checksum, size, shape, or parse failure and
+the next flush overwrote the only copy. So a rollback below 5.0.0 turns one bad
+read into permanent loss of locations, channel state, and opt-out flags -
+restore the state files from the copy taken in step 2 rather than letting an
+older binary rewrite them.
+
+The audit log does not roll back. `audit_log.py - AuditLog.record()` appends to
+one chain that `AuditLog.verify()` walks from genesis, with no version-scoped
+segment boundary, so a rollback simply continues the existing chain.
+
+## Backing up a deployment
+
+Full mechanics, including what has to be captured together and the 30-second
+flush window, are in [operations.md](operations.md#what-to-back-up). The
+deployment-level summary: the whole directory is the backup unit, `config.ini`
+inside it holds every secret so the backup inherits that sensitivity,
+`audit.log` and `audit.log.key` must travel together or neither is verifiable,
+and `internets.pid` must **not** be restored - a restored lockfile refuses the
+next start.
+
+A backup you have never restored is not a verified recovery path. Restore into a
+scratch directory, start the bot with `--no-console` against a test nick, and
+confirm it reaches the channel list you expect, at least once per quarter.
+
+## Deployment checklist
+
+- [ ] Dedicated unprivileged user; `INTERNETS_ALLOW_ROOT` unset.
+- [ ] Deployment directory 0700, owned by that user, and named in
+      `WorkingDirectory`.
+- [ ] `config.ini` mode exactly 0600. Not 0640, whatever the startup warning says.
+- [ ] `modules_dir` absolute and correct for the install shape.
+- [ ] `autoload` includes `privacy` and `health`.
+- [ ] Service unit passes `--no-console`, sets `UMask=0077`, and has a
+      `RestartSec` that will not hot-loop.
+- [ ] `python -m secret_store status` run *from the deployment directory* reports
+      the file readable and the expected names resolving.
+- [ ] Metrics either disabled or bound to loopback behind an authenticating proxy;
+      the exporter has no authentication of its own
+      ([operations.md](operations.md#metrics-endpoint)).
+- [ ] Backup configured, and one restore rehearsed.
+- [ ] `.health`, `.audit verify`, and `.stats` all answer after the first start
+      ([operations.md](operations.md#health-checking)).

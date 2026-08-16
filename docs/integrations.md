@@ -427,7 +427,7 @@ provider fails on the same call - a network outage, a 401, a 429 - publishes
 every configured finance key to the channel and to the logs.
 `sender.redact_secrets` is log-only and does not scrub PRIVMSG.
 
-Verified and reproduced; recorded in `RECONSTRUCTION-LEDGER.md`. The fix shape
+Verified and reproduced; recorded in [known issues](known-issues.md). The fix shape
 is to append the provider name and exception class only, never `str(e)` - the
 same discipline `weather_providers/pirateweather/_codes.py` already applies.
 The same URL-bearing `log.warning` pattern exists in `imdb`, `lastfm`,

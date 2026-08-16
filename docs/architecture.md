@@ -73,7 +73,7 @@ is non-daemon and lives on the default executor, so `asyncio.run`'s
 `loop.shutdown_default_executor()` waits forever for a worker parked in `input()`
 and the process hangs on its last log line. The rationale is recorded at the call
 site in `internets.py - _main()` and in `console.py`; see
-[ADR-008](design-decisions.md#adr-008-daemon-thread-for-the-interactive-console-not-asynciotothread).
+[ADR-008](design-decisions.md#adr-008-daemon-thread-for-the-interactive-console).
 
 ### 2.2 Offloading is a convention, not an enforcement
 
@@ -89,7 +89,7 @@ the loader or the dispatcher checks it.
 synchronously on the loop thread (the sibling `cmd_bignum` uses `to_thread`
 correctly). A composite that survives trial division falls into an unbounded
 Pollard rho, so a pasted 100-digit semiprime stalls the entire bot for every user.
-Verified; recorded in `RECONSTRUCTION-LEDGER.md`. The 60 s command timeout does
+Verified; recorded in [known issues](known-issues.md). The 60 s command timeout does
 not help: `asyncio.wait_for` cannot interrupt a synchronous call.
 :::
 
@@ -395,7 +395,7 @@ transport errors embed the full request URL including `token=` and `apikey=`
 query parameters, so a network outage while keys are configured publishes every
 finance API key to the channel.
 `sender.py - redact_secrets()` is log-only and does not scrub PRIVMSG bodies.
-Verified empirically and reproduced; see `RECONSTRUCTION-LEDGER.md`.
+Verified empirically and reproduced; see [known issues](known-issues.md).
 :::
 
 ### 7.2 Weather provider layer
@@ -486,7 +486,7 @@ silent corruption.
   own `v` field, so records rewritten without `v` verify under unkeyed SHA-256 at
   any chain position. A writer to `audit.log` can rewrite the chain from any point
   and `verify()` still reports it intact, reducing tamper evidence to the
-  pre-3.0.0 scheme. All three are recorded in `RECONSTRUCTION-LEDGER.md`.
+  pre-3.0.0 scheme. All three are recorded in [known issues](known-issues.md).
 :::
 
 Full formats, retention rules, and recovery procedures:

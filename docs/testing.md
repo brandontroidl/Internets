@@ -435,7 +435,7 @@ resolve-on-3.10 contract in `scripts/regen-lockfile.sh` (the lock header reads
 Verified live on 2026-08-15: the last three pushes to `main` (workflow runs
 31669351519, 31848012132, 31848249036) all failed. The fix is to regenerate the
 lock on a 3.10 interpreter per the script. This is a dependency-surface change
-and an owner decision, not documentation work; see `RECONSTRUCTION-LEDGER.md`.
+and an owner decision, not documentation work; see [known issues](known-issues.md).
 
 Secondary, same root cause: on the Windows legs the three pip commands share
 one `run:` block and pwsh does not stop on a failing command, so the lockfile

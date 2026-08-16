@@ -609,7 +609,7 @@ regrouped to mirror those `.help` categories.
 
 - New shared `modules.base.help_row(prefix, usage, desc)` formatter; **all
   command modules migrated to it** so `.help <module>` output aligns
-  uniformly (previously each module hand-padded to a different column, 18–50)
+  uniformly (previously each module hand-padded to a different column, 18-50)
   and renders correctly in both monospace and proportional IRC clients.
 - Normalized alias notation to `.cmd/.alias` everywhere (was a mix of
   `.cmd/.alias` and `.cmd / .alias`); surfaced previously-hidden short

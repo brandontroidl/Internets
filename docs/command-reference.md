@@ -297,7 +297,7 @@ Module `mathx` - key: none, no network - 9 commands.
 - **`.isprime <n>`** - primality test plus the next prime. e.g. `.isprime 97`
   **Known defect:** this runs synchronously on the event loop and falls through to an
   unbounded Pollard rho for large composites, so a pasted 100-digit semiprime hangs
-  the whole bot. Verified; see [RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+  the whole bot. Verified; see [known-issues.md](known-issues.md).
 - **`.factor <n>`** - prime factorisation. e.g. `.factor 360`
 - **`.gcd <a> <b> [...]`** - GCD and LCM. e.g. `.gcd 84 132`
 - **`.base <n> <from> <to>`** - convert between bases 2 to 36. e.g. `.base ff 16 10`
@@ -659,7 +659,7 @@ Module `stocks` - key: at least one finance provider key **required** - 2 comman
 errors embed the full request URL including `token=` and `apikey=` query parameters,
 so an outage while keys are configured publishes those keys to the channel.
 `redact_secrets()` is log-only and does not scrub PRIVMSG. See
-[RECONSTRUCTION-LEDGER.md](../RECONSTRUCTION-LEDGER.md).
+[known-issues.md](known-issues.md).
 
 ## Fun
 

@@ -12,6 +12,18 @@ institutional memory.
 - **License:** ISC
 - **Source:** <https://github.com/brandontroidl/Internets>
 
+## Where to start
+
+| You are | Read |
+|---|---|
+| New to the project | [executive](executive.md), then [getting-started](getting-started.md) |
+| Running it | [deployment](deployment.md), [operations](operations.md), [troubleshooting](troubleshooting.md) |
+| Administering it | [administration](administration.md), [command-reference](command-reference.md) |
+| Reviewing its security | [security-model](security-model.md), [known-issues](known-issues.md), then [internals](internals/index.md) |
+| Extending it | [writing-modules](writing-modules.md), [writing-providers](writing-providers.md) |
+| Inheriting it | [handoff](handoff.md), [knowledge-recovery](knowledge-recovery.md) |
+| Changing the code | [internals](internals/index.md) for the file you are touching |
+
 ```{toctree}
 :maxdepth: 2
 :caption: I. Executive
@@ -24,6 +36,8 @@ executive
 :caption: II. Architecture
 
 architecture
+irc-protocol
+state-and-persistence
 ```
 
 ```{toctree}
@@ -31,6 +45,7 @@ architecture
 :caption: III. Security
 
 security-model
+logging-and-auditing
 ```
 
 ```{toctree}
@@ -39,6 +54,11 @@ security-model
 
 deployment
 configuration
+operations
+administration
+troubleshooting
+metrics-and-observability
+integrations
 ```
 
 ```{toctree}
@@ -46,10 +66,12 @@ configuration
 :caption: V. Development
 
 getting-started
+command-reference
 modules
 writing-modules
 providers
 writing-providers
+testing
 contributing
 ```
 
@@ -72,6 +94,7 @@ knowledge-recovery
 :maxdepth: 2
 :caption: VIII. Project
 
+known-issues
 changelog
 security-policy
 ```

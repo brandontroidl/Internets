@@ -97,7 +97,7 @@ Every file on disk is a v2 envelope, pretty-printed with `indent=2`:
 {
   "schema": 2,
   "checksum": "<sha256 hex of canonical-JSON of data>",
-  "data": { ... }
+  "data": {"...": "dataset payload"}
 }
 ```
 
