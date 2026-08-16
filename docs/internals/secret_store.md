@@ -274,7 +274,7 @@ component of `CONFIG_LOCATIONS` is not consulted (see Findings). Uses
 
 ## Implementation walk
 
-- **Module docstring, imports, logger** (`secret_store.py:1-46`): contract summary
+- **Module docstring, imports, and the `secret_store.py - log` logger**: contract summary
   (contains the stale encryption claim - Findings), stdlib imports, the
   `internets.secrets` logger.
 - **Constants** (`ENV_PREFIX`, `SECRETS_FILE`, `KNOWN_SECRETS`, `CONFIG_LOCATIONS`,

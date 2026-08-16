@@ -240,8 +240,9 @@ minted hash must verify the entered password and must reject `"wrong"`, otherwis
 
 ## Implementation walk
 
-- **Docstring and imports** (`hashpw.py:1-50`): usage, algorithm comparison table,
-  the stable-default rationale, env tunables, OWASP 2024 reference parameters.
+- **Docstring, imports, and the `hashpw.py - log` logger**: usage, algorithm
+  comparison table, the stable-default rationale, env tunables, OWASP 2024 reference
+  parameters.
 - **Argon2 parameter block** (`_ARGON2_*` constants, `_env_int`, `_argon2_params`):
   validation and configuration; the long comment records the GPU-throughput reasoning
   behind 128 MiB.
@@ -262,8 +263,8 @@ minted hash must verify the entered password and must reject `"wrong"`, otherwis
   comment above the threshold constants claims automatic cost backoff that the code
   does not perform (Findings).
 
-All code is reachable; the `else` branch of `main()`'s per-algorithm timing echo
-(`hashpw.py:407-408`) is unreachable while `_ALGOS` holds exactly the three handled
+All code is reachable; the `else` branch of the per-algorithm timing echo in
+`hashpw.py - main()` is unreachable while `_ALGOS` holds exactly the three handled
 algorithms, but it is a harmless default arm for a future addition rather than dead
 logic.
 

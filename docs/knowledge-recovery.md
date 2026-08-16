@@ -207,19 +207,19 @@ even when the range is valid, because a line citation cannot be
 content-verified mechanically. That asymmetry is deliberate: it is what makes
 the line style visibly the one being retired.
 
-This is why citations in this corpus are symbol-primary
-(`internets.py - IRCBot._dispatch()`) with line numbers only as secondary
-navigation. A symbol citation survives edits above it and is mechanically
-checkable; a line citation is neither.
+This is why every citation in this corpus is now symbol-only
+(`internets.py - IRCBot._dispatch()`). A symbol citation survives edits above it
+and is mechanically checkable; a line citation is neither. Where a location has
+no enclosing symbol - a module docstring, an import block - the prose names the
+file and describes the location in words rather than carrying a line number.
 
-Current state as of 2026-08-15: 1026 citations, of which 864 symbol citations
 Run `--summary` for the current numbers rather than trusting a figure written
-here; the totals move with every doc edit. What the shape of a healthy result
-looks like: zero symbol failures, zero missing files, zero out-of-range line
-citations, and a shrinking count of legacy line citations awaiting a human
-content check. At the first full pass on 2026-08-15 that was 864 symbol
-citations verified clean against 162 legacy line citations, 47 of them in
-`deployment.md`.
+here; the totals move with every doc edit. What a healthy result looks like:
+zero symbol failures, zero missing files, and zero line citations of any kind.
+The first full pass on 2026-08-15 verified 864 symbol citations clean against
+162 legacy line citations, 47 of them in `deployment.md`; the conversion of the
+remaining line citations finished on 2026-08-16, and `remap-doc-citations.py` is
+kept only for the case where a line citation is reintroduced.
 
 The errors that pass found are a useful illustration of what only a content
 check catches. Four citations named a function that does not exist: one cited

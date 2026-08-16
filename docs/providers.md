@@ -243,7 +243,8 @@ for a location outside US AQI coverage). Both punish themselves in the health
 score for correct behaviour.
 
 The gate that decides "no usable data, try the next one" is a single expression
-at `_dispatch.py:417`, and it is the subject of the next section.
+inside `weather_providers/_dispatch.py - Dispatcher.dispatch()`, and it is the
+subject of the next section.
 
 ## Known defect: fallback is disabled for 11 of 14 capabilities
 
@@ -257,7 +258,9 @@ if result is None or (hasattr(result, "is_empty") and result.is_empty()):
     continue
 ```
 
-`_dispatch.py:417`. The `hasattr` guard means a result type that does not define
+That is the per-provider result check in
+`weather_providers/_dispatch.py - Dispatcher.dispatch()`. The `hasattr` guard
+means a result type that does not define
 `is_empty()` can never be judged empty. Only two of the 13 result dataclasses
 define it:
 

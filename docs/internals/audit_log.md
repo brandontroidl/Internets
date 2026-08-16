@@ -43,7 +43,8 @@ Deliberately not here:
 Dependencies (all stdlib): `hashlib`, `hmac`, `json`, `logging`, `os`,
 `secrets`, `threading`, `datetime`, `pathlib`. One optional soft dependency:
 `record()` best-effort increments `metrics.registry.audit_records_total`
-(`metrics.py:213`) inside a broad try/except, so a missing or broken metrics
+(registered in `metrics.py - MetricsRegistry._register_defaults()`) inside a
+broad try/except, so a missing or broken metrics
 module never affects auditing.
 
 Dependents:

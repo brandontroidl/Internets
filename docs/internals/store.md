@@ -27,7 +27,9 @@ Deliberately not here:
 
 - Seen-tracking with message text. `modules/seen.py` keeps its own separate
   store and file; it only calls back into `Store.is_opted_out()` to honour
-  opt-outs (`modules/seen.py:154,255,352`).
+  opt-outs (`modules/seen.py - SeenModule._record()`,
+  `modules/seen.py - SeenModule._purge_opted_out()`,
+  `modules/seen.py - SeenModule.cmd_seen()`).
 - Enforcement of the opt-out flag. `Store` records the flag; consumers
   (`modules/seen.py`, `modules/weather.py - cross-user lookup`) decide what it
   gates. See Findings for a comment in this file that overstates this.
@@ -43,18 +45,19 @@ External/stdlib only: `hashlib`, `json`, `logging`, `os`, `tempfile`,
 
 Dependents:
 
-- `internets.py` - constructs both classes (`internets.py:259` and
-  `internets.py:265`) and is the only writer of user-tracking events
+- `internets.py` - constructs both classes (`internets.py - IRCBot.__init__()`)
+  and is the only writer of user-tracking events
   (JOIN/PART/QUIT/NICK/KICK/PRIVMSG handlers call `user_join`, `user_part`,
   `user_quit`, `user_rename`). It also proxies `loc_get`/`loc_set`/`loc_del`/
-  `channel_users` as thin bot methods (`internets.py:462-465`) so modules do
-  not touch `self._store` directly (though some do; see below).
+  `channel_users` as thin one-line bot methods (`internets.py - IRCBot.loc_get()`
+  and its three siblings) so modules do not touch `self._store` directly
+  (though some do; see below).
 - `modules/location.py` - `.setloc`/`.myloc`/`.delloc` via the bot proxies.
 - `modules/weather.py` - reads saved locations; checks `is_opted_out` via
   `getattr(self.bot, "_store", ...)` before a cross-user `-n <nick>` lookup.
 - `modules/privacy.py` - `.forgetme`/`.privacy`/`.optout`/`.optin`; calls
   `set_opt_out`, `is_opted_out`, `user_purge` (the latter directly on
-  `bot._store`, `modules/privacy.py:158`).
+  `bot._store`, `modules/privacy.py - PrivacyModule.cmd_forgetme()`).
 - `modules/channels.py` - `.users` output from `channel_users`.
 - `modules/seen.py` - opt-out checks only.
 - `modules/health.py` - introspects the dirty flags for `.health` output
@@ -66,17 +69,19 @@ tracking, pruning, flush/atomic-write, and the per-nick limiter windows.
 ## Lifecycle
 
 - Imported once by `internets.py` (`from store import Store, RateLimiter`).
-- `Store` is constructed in the bot's `__init__` (`internets.py:259`) with
+- `Store` is constructed in the bot's `__init__` (`internets.py - IRCBot.__init__()`) with
   paths from `[bot]` config: `locations_file` (default `locations.json`),
   `channels_file` (default `channels.json`), `users_file` (default
   `users.json`), and `user_max_age_days` (default 90). Construction reads all
   three files synchronously, then starts the daemon flush thread
   (`store-flush`).
-- `RateLimiter` is constructed immediately after (`internets.py:265`) with
-  `FLOOD_CD` / `API_CD` from `config.py` (`flood_cooldown` default 3s,
-  `api_cooldown`; both already floored at 1 in `config.py:102-103` and floored
+- `RateLimiter` is constructed immediately after, in the same
+  `internets.py - IRCBot.__init__()`, with `FLOOD_CD` / `API_CD` from
+  `config.py` (`flood_cooldown` default 3s, `api_cooldown`; both already
+  floored at 1 by `config.py - FLOOD_CD` / `config.py - API_CD` and floored
   again in the constructor).
-- Shutdown: the bot's teardown calls `Store.stop()` (`internets.py:557`),
+- Shutdown: the bot's teardown calls `Store.stop()`
+  (`internets.py - IRCBot.graceful_shutdown()`),
   which sets the stop event and performs one final synchronous `flush()`. The
   flush thread is a daemon and is not joined; it exits on its next wakeup or
   dies with the process.
@@ -88,7 +93,7 @@ tracking, pruning, flush/atomic-write, and the per-nick limiter windows.
 | File (config key) | Payload (the `data` field) | Written by | Read by |
 | --- | --- | --- | --- |
 | `locations.json` (`locations_file`) | `{"<nick lowercased>": "<raw location string>"}` | `flush()` when `_dirty_locs` | `Store.__init__` only |
-| `channels.json` (`channels_file`) | sorted `["#chan", ...]` | `flush()` when `_dirty_chans` | `Store.__init__`; consumed via `channels_load()` on reconnect rejoin (`internets.py:839`) |
+| `channels.json` (`channels_file`) | sorted `["#chan", ...]` | `flush()` when `_dirty_chans` | `Store.__init__`; consumed via `channels_load()` on reconnect rejoin (`internets.py - IRCBot._deferred_rejoin()`) |
 | `users.json` (`users_file`) | `{"<channel lowercased>": {"<nick lowercased>": {"nick", "hostmask", "first_seen", "last_seen", "opted_out"}}}` | `flush()` when `_dirty_users` (prunes first) | `Store.__init__` only |
 
 Every file on disk is a v2 envelope, pretty-printed with `indent=2`:
@@ -149,8 +154,8 @@ file: `chmod 0o600` on the temp file before the atomic replace (POSIX only,
 `_write`), the 90-day inactivity prune, hard deletion via `user_purge()`
 (the `.forgetme` path - removes rows immediately rather than stamping
 `last_seen`), and the `opted_out` column. The `.bak` copy does not get the
-same permission treatment (see Findings). `README.md:526` documents the user
-tracking behaviour publicly.
+same permission treatment (see Findings). The Privacy section of
+`docs/state-and-persistence.md` documents the user-tracking behaviour publicly.
 
 ## Concurrency
 
@@ -266,7 +271,8 @@ lock, own dirty flag, `_read` with a matching-type default, a branch in
 ### `RateLimiter`
 
 Three independent throttling windows over in-memory timestamp maps.
-Constructed once (`internets.py:265`); no persistence, no thread of its own.
+Constructed once (`internets.py - IRCBot.__init__()`); no persistence, no
+thread of its own.
 `_cleanup(now)` runs lazily inside every check, at most once per
 `_CLEANUP_INTERVAL` (300s), evicting expired per-nick stamps and channel
 windows so the maps cannot grow without bound. Class constants:
@@ -316,24 +322,30 @@ Module-level helpers:
   with `first_seen`/`last_seen`/`opted_out=False`, or refresh `last_seen`,
   `hostmask`, display `nick` on an existing record (preserving `first_seen`
   and `opted_out`, back-filling `opted_out` on legacy records). Called on
-  observed JOIN (`internets.py:1058`) and on channel PRIVMSG
-  (`internets.py:1131`); NAMES/353 is deliberately not used (`README.md:526`).
+  observed JOIN (`internets.py - IRCBot._handle_membership()`) and on channel
+  PRIVMSG (`internets.py - IRCBot._handle_privmsg()`); NAMES/353 is
+  deliberately not used (see the Privacy section of
+  `docs/state-and-persistence.md`).
 - `user_part(channel, nick)` / `user_quit(nick)` - stamp `last_seen` on the
   one channel record / on every channel record for the nick. No-op if
   untracked.
 - `user_purge(nick)` - hard-delete every record of the nick across all
   channels (including the `"*"` sentinel), drop emptied channels, return the
   row count. The `.forgetme` erasure path; deliberately distinct from
-  `user_quit`, which records activity rather than erasing it
-  (`modules/privacy.py:160-163`).
+  `user_quit`, which records activity rather than erasing it (see the
+  fail-loud `AttributeError` branch in
+  `modules/privacy.py - PrivacyModule.cmd_forgetme()`).
 - `user_rename(old, new, hostmask)` - re-key the record in every channel that
   tracks `old`, updating display nick, hostmask, `last_seen`. Also used as an
-  in-place metadata refresh via `user_rename(n, n, hm)` on account-change
-  events (`internets.py:1028,1050`). If `new` was already tracked in a
-  channel, its record is overwritten (see Findings).
+  in-place metadata refresh via `user_rename(n, n, hm)` on CHGHOST and
+  account-change events (`internets.py - IRCBot._handle_membership()`). If
+  `new` was already tracked in a channel, its record is overwritten (see
+  Findings).
 - `channel_users(channel)` - deep-enough copy (per-entry `dict()`) of one
-  channel's records. Callers: `.users` (`modules/channels.py:152`), `.privacy`
-  and `.forgetme` reporting (`modules/privacy.py:148,232`).
+  channel's records. Callers: `.users`
+  (`modules/channels.py - ChannelsModule.cmd_users()`), `.privacy` and
+  `.forgetme` reporting (`modules/privacy.py - PrivacyModule.cmd_privacy()`
+  and `modules/privacy.py - PrivacyModule.cmd_forgetme()`).
 - `set_opt_out(nick, value)` - set the flag on every tracked record of the
   nick; if none exist, create a sentinel record under synthetic channel `"*"`
   (empty hostmask) so the preference survives a restart even before the user
@@ -349,17 +361,17 @@ Module-level helpers:
   elapsed. Callers hold `_lock`.
 - `flood_check(nick, is_admin=False)` - True if the nick issued a command
   within `flood_cd` seconds; otherwise stamps now and returns False. Admins
-  return False without stamping. Wired as `bot.check_flood`
-  (`internets.py:394`); a positive answer produces the "slow down" notice
-  (`internets.py:630`).
+  return False without stamping. Wired as
+  `internets.py - IRCBot.flood_limited()`; a positive answer produces the
+  "slow down" notice in `internets.py - IRCBot._dispatch()`.
 - `api_check(nick)` - same shape with the longer `api_cd` window; gates the
-  expensive geocode/weather paths (`internets.py:397`).
+  expensive geocode/weather paths (`internets.py - IRCBot.rate_limited()`).
 - `channel_check(channel, threshold=None)` - sliding-window count for real
   channels only (prefix `# & + !`; PMs return False so only per-nick limits
   apply there). Filters the window, refuses at >= cap without recording the
-  refused attempt, records otherwise. `internets.py:405` always calls it with
-  the default threshold (20 per 10s); the parameter is exercised only by
-  tests.
+  refused attempt, records otherwise. `internets.py - IRCBot.channel_limited()`
+  always calls it with the default threshold (20 per 10s); the parameter is
+  exercised only by tests.
 
 ## Implementation walk
 

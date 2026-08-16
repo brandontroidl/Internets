@@ -38,6 +38,7 @@ executive
 architecture
 irc-protocol
 state-and-persistence
+data-retention
 ```
 
 ```{toctree}
@@ -97,6 +98,7 @@ knowledge-recovery
 known-issues
 changelog
 security-policy
+privacy
 ```
 
 ```{toctree}

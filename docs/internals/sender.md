@@ -47,8 +47,9 @@ Dependencies:
 
 Dependents:
 
-- `internets.py` - constructs `Sender` in `IRCBot._connect()` (one per connection,
-  `internets.py:777-779`), funnels all output through `IRCBot.send()` ->
+- `internets.py` - constructs `Sender` in `internets.py - IRCBot._connect()` (one per
+  connection, replacing any previous sender), funnels all output through
+  `IRCBot.send()` ->
   `Sender.enqueue()`, and imports `redact_secrets` for inbound log redaction.
 - `tests/test_sender.py` - exercises the whole module against a fake `StreamWriter` with
   a real event loop and real queue.
@@ -151,7 +152,8 @@ instance state; it resets to a full bucket every `start()`.
 - Applied at: (a) the outbound debug log in `_write_line()`; (b) inbound
   PRIVMSG/NOTICE trailing text via `internets.py - _redact_inbound()` (scoped to the
   trailing so `ident@host` in a prefix cannot false-match `IDENT`); (c) command audit
-  logging (`internets.py:1149-1150`), which fully masks `auth`/`deauth` arguments and
+  logging (`internets.py - IRCBot._handle_privmsg()`), which fully masks
+  `auth`/`deauth` arguments and
   runs `redact_secrets` over every other command argument (notably `.raw`).
 - Known over-redaction (documented in the module comment): a standalone verb in relayed
   chat text ("pass", "auth") masks the rest of the logged line; accepted as the safe side.
@@ -263,31 +265,32 @@ priority-1 traffic; unlimited rate for priority 0. Pinned by
 
 ## Implementation walk
 
-- `sender.py:1-11` (module docstring): states the priority scheme, bucket parameters,
+- The module docstring of `sender.py`: states the priority scheme, bucket parameters,
   and thread-safety contract. Matches the implementation.
-- `sender.py:20-42` (redaction constants): comment block explaining the single-verb-list
-  design and both directions of use; `_SECRET_VERBS` tuple; `_RE_SECRET` built
-  longest-first so `IDENTIFY` beats `IDENT` and `AUTHENTICATE` beats `AUTH` at the same
-  position. Security enforcement.
-- `sender.py:45-54` (`redact_secrets`): formatting/security; one `re.sub` with
+- The redaction constants `sender.py - _SECRET_VERBS` and `sender.py - _RE_SECRET`,
+  under a comment block explaining the single-verb-list design and both directions of
+  use; the pattern is built longest-first so `IDENTIFY` beats `IDENT` and
+  `AUTHENTICATE` beats `AUTH` at the same position. Security enforcement.
+- `sender.py - redact_secrets()`: formatting/security; one `re.sub` with
   `count=1`.
-- `sender.py:56` (logger): the `internets.sender` child logger, targetable by the
+- `sender.py - log`: the `internets.sender` child logger, targetable by the
   console's per-subsystem debug.
-- `sender.py:59-69` (`_bump_dropped`): error-isolated metrics bump; lazy import keeps
+- `sender.py - _bump_dropped()`: error-isolated metrics bump; lazy import keeps
   metrics optional.
-- `sender.py:72-94` (`Sender` class header, constants, `__init__`): initialization;
-  constants documented above.
-- `sender.py:96-112` (`start` / `stop`): lifecycle; queue replacement and task
-  cancel.
-- `sender.py:114-126` (`_drop`): drop accounting, both counters, both guarded.
-- `sender.py:128-170` (`_safe_put`): the overflow policy; the only place the queue
+- The `sender.py - Sender` class header, its `CAPACITY` / `REFILL` / `MAX_QUEUE`
+  constants, and `sender.py - Sender.__init__()`: initialization; constants documented
+  above.
+- `sender.py - Sender.start()` / `sender.py - Sender.stop()`: lifecycle; queue
+  replacement and task cancel.
+- `sender.py - Sender._drop()`: drop accounting, both counters, both guarded.
+- `sender.py - Sender._safe_put()`: the overflow policy; the only place the queue
   bound is felt. Contains the deliberate private-attribute access (`_q._queue`) with
   its justification comment.
-- `sender.py:172-178` (`enqueue`): thread-safe producer; lock-then-schedule.
-- `sender.py:180-203` (`_MAX_IRC_LINE`, `_write_line`): protocol formatting and
-  security enforcement (injection strip, byte cap, log redaction), then the guarded
-  buffered write.
-- `sender.py:205-240` (`_drain`): the token bucket and consumer loop; protocol
+- `sender.py - Sender.enqueue()`: thread-safe producer; lock-then-schedule.
+- `sender.py - Sender._MAX_IRC_LINE` and `sender.py - Sender._write_line()`: protocol
+  formatting and security enforcement (injection strip, byte cap, log redaction), then
+  the guarded buffered write.
+- `sender.py - Sender._drain()`: the token bucket and consumer loop; protocol
   processing and flow control. The 0.25 s `get` timeout exists solely to run the
   refill branch while idle so a post-idle burst has a full bucket.
 

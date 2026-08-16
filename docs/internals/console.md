@@ -21,14 +21,14 @@ Belongs here:
 Deliberately not here:
 
 - Whether the console runs at all - `internets.py - _main()` combines the operator
-  opt-out (`--no-console`) with `should_skip_console()` (`internets.py:1416-1420`).
+  opt-out (`--no-console`) with `should_skip_console()` before creating the task.
 - The semantics of `debug` / `loglevel` - `botlog.py - apply_debug()` /
   `apply_loglevel()`, shared with the IRC-side admin commands so both surfaces mutate
   the same `botlog.log_filter`.
 - Shutdown mechanics - `internets.py - IRCBot.request_shutdown()` /
   `graceful_shutdown()`; the console only requests.
 - Unblocking the `input()` call at shutdown - `internets.py - _main()` closes
-  `sys.stdin` (`internets.py:1454-1460`), which makes `input()` raise `EOFError`.
+  `sys.stdin` once the bot task has finished, which makes `input()` raise `EOFError`.
 
 ## Dependencies and dependents
 
@@ -60,7 +60,7 @@ Dependents:
    `asyncio.wait(..., FIRST_COMPLETED)` fires and it calls
    `bot.request_shutdown("Console exited")` - console exit is coupled to bot shutdown,
    so Ctrl-D on the console terminates the whole bot, by design
-   (`internets.py:1423-1428`).
+   (`internets.py - _main()`).
 5. Conversely, when the *bot* exits first, `main()` closes `sys.stdin` to unblock the
    `input()` syscall and cancels the console task with a 3 s timeout; if the thread
    still never returns, `daemon=True` means it cannot hold up interpreter exit.
@@ -77,7 +77,8 @@ the bot's stop event (via `request_shutdown`). Nothing persistent.
 - Two execution contexts: the async `run_console()` coroutine on the event loop, and the
   `console-input` daemon thread doing all reads and dispatches.
 - Why a raw daemon thread and not `asyncio.to_thread` (docstring of `run_console()`,
-  corroborated by the shutdown comment in `internets.py:1439-1453`): `input()` parks the
+  corroborated by the task-cancellation comment block in `internets.py - _main()`):
+  `input()` parks the
   thread on a blocking `read(0)` syscall that task cancellation cannot interrupt. A
   `to_thread` worker runs on the default executor as a *non-daemon* thread, and
   `asyncio.run()`'s cleanup calls `loop.shutdown_default_executor()`, which waits for
@@ -142,7 +143,7 @@ Defense-in-depth beyond the docstring:
 
 - Auto-skip when stdin is not a TTY (`should_skip_console()`), preventing piped input
   from driving the console under systemd/Docker/redirection. Gated in
-  `internets.py:1416` together with the explicit `--no-console` opt-out.
+  `internets.py - _main()` together with the explicit `--no-console` opt-out.
 - A WARNING-level `event=console_active` line at startup so the log records that an
   unauthenticated control surface is live, with the pid.
 
@@ -185,7 +186,7 @@ logs any escape exception, and in `finally` schedules `done.set` onto the loop, 
 against a closed loop. The coroutine then awaits `done` and re-raises
 `CancelledError` on cancellation with nothing to clean up (the thread is daemonized).
 The docstring carries the full to_thread/`shutdown_default_executor` rationale
-(mirrored at the call site, `internets.py:1447-1453`).
+(mirrored at the call site in `internets.py - _main()`).
 
 ### `_print_status(bot) -> None`
 
@@ -197,24 +198,24 @@ base log level plus global-debug flag, and active debug subsystems from
 
 ## Implementation walk
 
-- `console.py:1-14` (module docstring): the security model; matches the implementation
+- The module docstring of `console.py`: the security model; matches the implementation
   and the gating at the call site.
-- `console.py:16-28` (imports): `TYPE_CHECKING` import of `IRCBot` avoids the runtime
-  circular import with `internets.py`; compatibility.
-- `console.py:30-37` (`_CONSOLE_HELP`): the help text; matches the dispatch table
-  exactly (verified command-by-command).
-- `console.py:39` (logger): uses the root `"internets"` logger, not a
-  `internets.console` child, so console log lines cannot be targeted by per-subsystem
-  debug; minor asymmetry with other modules.
-- `console.py:42-59` (`should_skip_console`): validation / security enforcement;
+- The module-level import block: the `TYPE_CHECKING` import of `IRCBot` avoids the
+  runtime circular import with `internets.py`; compatibility.
+- `console.py - _CONSOLE_HELP`: the help text; matches the dispatch table exactly
+  (verified command-by-command).
+- `console.py - log`: uses the root `"internets"` logger, not a `internets.console`
+  child, so console log lines cannot be targeted by per-subsystem debug; minor
+  asymmetry with other modules.
+- `console.py - should_skip_console()`: validation / security enforcement;
   fail-safe returns.
-- `console.py:62-102` (`_console_dispatch_loop`): control flow + dispatch; the
+- `console.py - _console_dispatch_loop()`: control flow + dispatch; the
   docstring's thread-safety inventory is the load-bearing part.
-- `console.py:105-151` (`run_console`): concurrency bridge; the daemon-thread
+- `console.py - run_console()`: concurrency bridge; the daemon-thread
   rationale, the loud startup warning (security enforcement), `_wrap`'s
   exception/finally structure (error handling), and the `CancelledError` passthrough
   (cleanup).
-- `console.py:154-169` (`_print_status`): formatting; lock usage as described above.
+- `console.py - _print_status()`: formatting; lock usage as described above.
 
 ## Findings
 

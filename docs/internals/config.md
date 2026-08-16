@@ -179,8 +179,9 @@ Consequences of parsing at import:
   sys.argv = _SAVED_ARGV
   ```
 
-  This is exactly what `tests/test_config.py:28-32` and
-  `tests/test_botlog.py:25-30` do, and what `tests/test_config.py`'s
+  This is exactly what the module-level argv-pinning preamble in
+  `tests/test_config.py` and `tests/test_botlog.py` does, and what
+  `tests/test_config.py`'s
   `reimport` fixture re-does around every `importlib.reload(config)`. Any new
   test file that imports the bot's module graph must copy the pattern.
 - Non-test embedders (scripts importing bot modules) inherit the same

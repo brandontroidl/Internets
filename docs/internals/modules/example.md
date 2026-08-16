@@ -66,7 +66,8 @@ Each teaching block was checked against the implementation it describes:
   from `.help` while keeping dispatch live so an admin can add a key later.
 - **`on_raw` caveat** (header, lines 10-13): "must be fast" matches the sync
   read-path fanout; "never raise - wrap the body" is stricter than the actual
-  contract (the fanout in `internets.py:888` catches and logs at debug), which is
+  contract (the fanout in `internets.py - IRCBot._process()` catches and logs at
+  debug), which is
   the right direction for advice - a raising `on_raw` is silently swallowed, so
   wrapping with real logging is how a module keeps its own errors observable.
 - **`forget()` guidance** (lines 140-145): matches `base.py - BotModule.forget()`

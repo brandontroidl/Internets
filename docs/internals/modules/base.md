@@ -99,7 +99,8 @@ else is subclass state. Persistent per-user state (locations, seen, tells) lives
 - `on_load` / `on_unload` / `on_raw` are synchronous and run on the event-loop thread.
   `on_raw` runs in the IRC read path for every line; a slow `on_raw` delays all
   processing. Exceptions from `on_raw` are caught and logged at debug by the fanout
-  loop (`internets.py:888`), so a raising `on_raw` degrades silently rather than
+  loop (`internets.py - IRCBot._process()`), so a raising `on_raw` degrades silently
+  rather than
   crashing the bot.
 - `fetch_json`, `resolve_public`, and `cred` are thread-safe by construction (no shared
   mutable state); they are routinely called from `asyncio.to_thread` workers.

@@ -71,14 +71,15 @@ real coverage:
 - `internets.py` helper tests: `ChannelSet`, `_backoff`, nick-change tracking,
   `is_admin` fail-closed branches, inbound redaction. `internets.py` has no
   `tests/test_*.py` file.
-- The source-grep sanitizer completeness gate: `security: modules that emit
-  upstream/user text route it through a sanitizer` (`tests/run_tests.py:234`)
-  fails when a security-relevant module drops `modules.base.strip_ctrl`.
-- The dependency-floor gate: `DEPS: pyproject extras never sit below the
-  requirements.txt security floors` (`tests/run_tests.py:2598`).
-- The version-consistency gates: `internets.__version__` against
-  `pyproject.toml` and against every hand-written version literal in the docs
-  (`tests/run_tests.py:2639`, `:2684`).
+- The source-grep sanitizer completeness gate in `tests/run_tests.py`, registered
+  as `security: modules that emit upstream/user text route it through a
+  sanitizer`; it fails when a security-relevant module drops
+  `modules.base.strip_ctrl`.
+- The dependency-floor gate in `tests/run_tests.py`, registered as `DEPS:
+  pyproject extras never sit below the requirements.txt security floors`.
+- The version-consistency gates in `tests/run_tests.py`, registered as `VERSION:
+  __version__ matches pyproject.toml` and `VERSION: every hand-written version
+  literal in docs matches __version__`.
 - Async-architecture contract checks (provider methods are coroutines,
   `weather_providers.get_weather` / `get_forecast` are async).
 
@@ -214,7 +215,9 @@ not you write a dedicated test file. Satisfy them first.
    limit, and alias separators must be normalized (`bofh/.excuse`, written via
    `modules.base.help_row`). The gate instantiates every `BotModule` subclass
    without running `__init__`, so no network, keys, or config are needed.
-2. **Sanitizer completeness gate** (`tests/run_tests.py:234`). A module that
+2. **Sanitizer completeness gate** (the `security: modules that emit
+   upstream/user text route it through a sanitizer` test in
+   `tests/run_tests.py`). A module that
    emits upstream or user-derived text must reference
    `modules.base.strip_ctrl`. Note this is a source-text grep: it proves a call
    site exists, not that the emitted string passes through it.

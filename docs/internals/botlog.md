@@ -34,7 +34,8 @@ Deliberately not here:
   the five `LOG_*` constants, `LOG_FMT`, and the three mode strings. Importing
   `botlog` therefore transitively triggers `config.py`'s import-time work,
   including `argparse.parse_args()` on the live `sys.argv` (tests must pin argv
-  first; `tests/test_botlog.py:25-30` does exactly that).
+  first; the module-level argv-pinning preamble in `tests/test_botlog.py` does
+  exactly that).
 - Dependents:
   - `internets.py` imports `log`, `log_filter`.
   - `admin_cmds.py` imports `log_filter`, `get_hash`, `apply_debug`,

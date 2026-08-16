@@ -43,7 +43,8 @@ Deliberately not here:
 
 Imported once by `internets.py` at startup. Functions are called per inbound line during
 `IRCBot._process()` / `IRCBot._handle_numeric()`; `sasl_plain_payload()` is called once
-per SASL negotiation (`internets.py:921`). No initialization, no teardown.
+per SASL negotiation (`internets.py - IRCBot._handle_cap()`). No initialization, no
+teardown.
 
 ## State
 
@@ -59,8 +60,8 @@ on the event-loop thread inside the inbound line handler.
 
 - `parse_isupport_chanmodes()` and `parse_isupport_prefix()` return `None` on malformed
   input rather than raising or returning a partial result; `IRCBot._handle_numeric()`
-  logs `event=isupport_malformed` and keeps the current table
-  (`internets.py:961-976`).
+  logs `event=isupport_malformed` and keeps the current table (the 005 branch of
+  `internets.py - IRCBot._handle_numeric()`).
 - `parse_mode_changes()` never raises on short argument lists: `take_param()` returns
   `None` once `args` is exhausted (a server sending fewer parameters than the mode
   string implies yields `param=None` for the tail).
@@ -127,7 +128,8 @@ Parses `PREFIX=(modes)symbols` into `(mode_set, {symbol: mode})` via
   map zips only `min(len(modes), len(symbols))` pairs; the mode set still contains all
   modes.
 - Note: the only production caller keeps just the mode set and discards the symbol map
-  (`internets.py:976`, `self._prefix_modes, _ = parsed`) - see Findings.
+  (`internets.py - IRCBot._handle_numeric()`, `self._prefix_modes, _ = parsed`) - see
+  Findings.
 
 ### `parse_mode_changes(mode_str, args, prefix_modes, chanmode_types) -> list[tuple[bool, str, str | None]]`
 
@@ -148,8 +150,8 @@ point: `tests/test_protocol.py - TestParseModeChanges.test_loq_desync_fix` pins 
 incident (`+Loq` on a server where `L` is type B) where a missing `L->B` entry shifted
 every following parameter and corrupted chanop tracking. Exhausted `args` yield
 `param=None` (no exception). The caller applies only prefix-mode changes with a non-None
-param to the chanop set (`internets.py - IRCBot._handle_numeric()`,
-`internets.py:1008-1020`).
+param to the chanop set (the channel-MODE branch of
+`internets.py - IRCBot._handle_numeric()`).
 
 The "unknown -> no parameter" fallback means an unadvertised parameterized mode would
 still shift subsequent parameters; the defense is the default tables plus the
@@ -162,32 +164,32 @@ Strips leading membership prefix symbols from a NAMES entry using the hard-coded
 (op). Voice (`+`) and halfop (`%`) do not count as op
 (`TestParseNamesEntry.test_voice_not_op`, `test_halfop_not_op`). `lstrip` handles
 multi-prefix (`~&@nick`). All-prefix entry returns `(entry, False)` as a guard. Caller:
-353 handling in `IRCBot._handle_numeric()` (`internets.py:999-1007`).
+the 353 branch of `internets.py - IRCBot._handle_numeric()`.
 
 ### `sasl_plain_payload(nick, password) -> str`
 
 Builds the SASL PLAIN initial response: base64 of `\0<nick>\0<password>` - an empty
 authzid, `nick` as authcid, per RFC 4616. UTF-8 encoded before base64
-(`TestSaslPlainPayload.test_unicode`). Caller: `internets.py:921` inside the
-`AUTHENTICATE +` handler.
+(`TestSaslPlainPayload.test_unicode`). Caller: the `AUTHENTICATE +` branch of
+`internets.py - IRCBot._handle_cap()`.
 
 ## Implementation walk
 
-- `protocol.py:1-11` (docstring + imports): states the no-state/no-I/O charter;
-  compatibility (`from __future__ import annotations`).
-- `protocol.py:14-18` (`strip_tags`): protocol processing; single partition.
-- `protocol.py:21-49` (`parse_isupport_chanmodes`): validation (group count), then
+- The module docstring and import block of `protocol.py`: states the no-state/no-I/O
+  charter; compatibility (`from __future__ import annotations`).
+- `protocol.py - strip_tags()`: protocol processing; single partition.
+- `protocol.py - parse_isupport_chanmodes()`: validation (group count), then
   protocol processing (group-to-type mapping). The long docstring documents the
   incident-derived reason for the structural check.
-- `protocol.py:52-68` (`parse_isupport_prefix`): validation (regex), protocol
+- `protocol.py - parse_isupport_prefix()`: validation (regex), protocol
   processing (set + zip map). Docstring documents the `None` vs `(set(), {})`
   distinction.
-- `protocol.py:71-106` (`parse_mode_changes`): protocol processing; a small state
+- `protocol.py - parse_mode_changes()`: protocol processing; a small state
   machine (`adding` flag, `arg_idx` cursor) with the type table driving parameter
   consumption. `take_param()` centralizes the exhaustion guard.
-- `protocol.py:109-119` (`parse_names_entry`): protocol processing; prefix strip +
+- `protocol.py - parse_names_entry()`: protocol processing; prefix strip +
   op-set intersection, with the empty-nick guard.
-- `protocol.py:122-125` (`sasl_plain_payload`): security/protocol formatting; encode
+- `protocol.py - sasl_plain_payload()`: security/protocol formatting; encode
   then base64.
 
 Every line of the file is accounted for above; there is no dead code.
@@ -195,7 +197,8 @@ Every line of the file is accounted for above; there is no dead code.
 ## Findings
 
 - questionable | protocol.py - parse_isupport_prefix() | The symbol map it builds is
-  discarded by the only production caller (`internets.py:976` unpacks it into `_`), and
+  discarded by the only production caller
+  (`internets.py - IRCBot._handle_numeric()` unpacks it into `_`), and
   `parse_names_entry()` instead hard-codes `~&@%+` with a hard-coded op subset `~&@`;
   on a server whose PREFIX advertises non-standard symbols (or maps `&` to something
   other than admin), NAMES-based chanop tracking diverges from MODE-based tracking,

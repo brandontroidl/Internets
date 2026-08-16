@@ -91,7 +91,8 @@ absence is tolerable (diagnostics), directly where it is not.
 - Imported once at bot startup (`internets.py` imports the mixin at module load;
   importing `admin_cmds` transitively imports `config`, which parses CLI args and
   reads `config.ini` - the test file has to pin `sys.argv` around the import for
-  exactly this reason, `tests/test_admin_cmds.py:28-36`).
+  exactly this reason - the module-level argv-pinning preamble in
+  `tests/test_admin_cmds.py`).
 - No instances of its own: the class is mixed into `IRCBot`, so its "constructor"
   is `IRCBot.__init__`.
 - Handlers are invoked as asyncio tasks by `IRCBot._dispatch()` ->

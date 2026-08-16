@@ -137,10 +137,11 @@ migration surface, not a supported place to put a new key.
 | `weather_user_agent` | `INTERNETS_WEATHER_USER_AGENT` | `[weather] user_agent` |
 
 ```{warning}
-**`nasa_api_key` is not registered.** `modules/apod.py:69` and
-`modules/astro2.py:376` read the secret name `nasa_api_key`, but that name
-appears in neither `secret_store.KNOWN_SECRETS` nor `CONFIG_LOCATIONS`
-(`secret_store.py:57-129`). `secret_store.get()` does not gate on the registry,
+**`nasa_api_key` is not registered.** `modules/apod.py - ApodModule.on_load()`
+and `modules/astro2.py - Astro2Module.on_load()` read the secret name
+`nasa_api_key`, but that name appears in neither
+`secret_store.py - KNOWN_SECRETS` nor `secret_store.py - CONFIG_LOCATIONS`.
+`secret_store.get()` does not gate on the registry,
 so setting the value works and the env override resolves - but the key is
 invisible to `python -m secret_store list` and to `status()`, and
 `python -m secret_store migrate` will not relocate it out of `config.ini`. An
@@ -173,7 +174,7 @@ Two consequences worth knowing before changing it:
    disabled by a compliance check rather than a missing key.
 2. **The ini fallback path resolves to two different places.** Modules read the
    legacy location `[weather] user_agent` (via `modules.base.cred`), while
-   `weather_providers/__init__.py:438 - _f_pollendotcom()` reads
+   `weather_providers/__init__.py - _f_pollendotcom()` reads
    `[weather_providers] weather_user_agent`. Both consult the same secret-store
    name first, so a store-resident value is consistent; only the pre-migration
    ini fallback diverges.
@@ -194,10 +195,10 @@ visible to the network path.
 
 | Integration | Endpoint | Why |
 | --- | --- | --- |
-| `modules/ipinfo.py:54` | `http://ip-api.com/json/<target>` | Free tier is HTTP-only; TLS requires the paid `pro.ip-api.com` |
-| `modules/iss.py:19-20` | `http://api.open-notify.org/iss-now.json`, `/astros.json` | Upstream offers no TLS endpoint |
-| `modules/idlerpg.py:82` | `http://idlerpg.rizon.net/xml.php` | Default endpoint; overridable via `[idlerpg] api_url` |
-| `modules/reflookup.py:512` | `http://export.arxiv.org/api/query` | The only cleartext URL in `reflookup`; the other seven backends are HTTPS |
+| `modules/ipinfo.py - _lookup_sync()` | `http://ip-api.com/json/<target>` | Free tier is HTTP-only; TLS requires the paid `pro.ip-api.com` |
+| `modules/iss.py - _NOW` / `modules/iss.py - _PEOPLE` | `http://api.open-notify.org/iss-now.json`, `/astros.json` | Upstream offers no TLS endpoint |
+| `modules/idlerpg.py - IdlerpgModule.on_load()` | `http://idlerpg.rizon.net/xml.php` | Default endpoint; overridable via `[idlerpg] api_url` |
+| `modules/reflookup.py - _arxiv_fetch_xml()` | `http://export.arxiv.org/api/query` | The only cleartext URL in `reflookup`; the other seven backends are HTTPS |
 
 None of the four carries a credential, so no key is exposed by the scheme
 itself. What is exposed is the query: the IP or hostname a user asked about
@@ -205,9 +206,12 @@ itself. What is exposed is the query: the IP or hostname a user asked about
 free-text search (`reflookup`). `iss` sends no user data.
 
 `weather_providers/weatherstack/` carried the same problem with a credential
-attached and was fixed: `current.py:5`, `forecast.py:7`, and `historical.py:7`
-each carry the comment `# fix: was http:// - leaked access_key in plaintext
-query string`, and `_B` is now `https://api.weatherstack.com`. The module
+attached and was fixed: the base-URL constants
+`weather_providers/weatherstack/current.py - _B`,
+`weather_providers/weatherstack/forecast.py - _B`, and
+`weather_providers/weatherstack/historical.py - _B` each carry the comment
+`# fix: was http:// - leaked access_key in plaintext query string`, and each is
+now `https://api.weatherstack.com`. The module
 docstring in `weather_providers/__init__.py` still describes Weatherstack as
 "basic, plaintext HTTP - least preferred", which is stale; the transport is
 HTTPS and only the accuracy ranking still applies.

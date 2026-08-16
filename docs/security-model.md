@@ -523,8 +523,8 @@ rename overwrites silently, so two rotations inside the same second destroy a
 segment.
 
 **No durability.** `record()` writes with a buffered text-mode append and does
-not call `os.fsync`. A comment at `admin_cmds.py:270` states that it fsyncs;
-that comment is stale. The module docstring's "append-binary mode" is also
+not call `os.fsync`. A comment in `admin_cmds.py - AdminCommandsMixin.cmd_auth()`
+states that `record()` fsyncs; that comment is stale. The module docstring's "append-binary mode" is also
 wrong - `record()` opens text mode `"a"` for the non-creation path.
 
 **Tail truncation is undetectable** from the file alone, as the module docstring
