@@ -31,6 +31,12 @@ import sys
 
 PLACEHOLDERS = {"file.py", "foo.py", "module.py"}
 LINE_RE = re.compile(r"`([\w/\._-]+\.py):(\d+)(?:-(\d+))?`")
+# Bare prose line ranges: "- Lines 42-103: ..." or "(lines 96-101)". These rot
+# exactly like a backticked line citation but match neither pattern above, so
+# they were invisible to this checker until a conversion pass surfaced 108 of
+# them, one already pointing past the end of its file. The enclosing document
+# names the source file, so range-check against that.
+PROSE_RE = re.compile(r"(?:^|\()\s*-?\s*[Ll]ines?\s+(\d+)(?:\s*[-\u2013]\s*(\d+))?", re.M)
 SYM_RE = re.compile(r"`([\w/\._-]+\.py) - ([\w\.]+)(\(\))?`")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -138,7 +144,7 @@ def resolve(cited: str, doc: pathlib.Path) -> pathlib.Path | None:
 def main() -> int:
     summary_only = "--summary" in sys.argv
     counts = {"symbol_ok": 0, "symbol_fail": 0, "line_review": 0,
-              "line_fail": 0, "file_missing": 0}
+              "line_fail": 0, "file_missing": 0, "prose_ok": 0, "prose_fail": 0}
     failures: list[str] = []
 
     for doc in doc_files():
@@ -188,6 +194,28 @@ def main() -> int:
                 else:
                     counts["line_review"] += 1
 
+    # Bare prose line ranges, checked against the source file the internals
+    # page documents (docs/internals/<stem>.md -> <stem>.py).
+    for doc in doc_files():
+        if "internals" not in doc.parts:
+            continue
+        rel = doc.relative_to(REPO)
+        src = resolve(doc.stem + ".py", doc)
+        if src is None:
+            continue
+        total = len(src.read_text(encoding="utf-8").splitlines())
+        for i, ln in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            for m in PROSE_RE.finditer(ln):
+                start = int(m.group(1))
+                end = int(m.group(2) or m.group(1))
+                if end > total or start < 1:
+                    counts["prose_fail"] += 1
+                    failures.append(
+                        f"{rel}:{i} PROSE RANGE past EOF: lines {start}-{end} "
+                        f"but {src.name} has {total}")
+                else:
+                    counts["prose_ok"] += 1
+
     if not summary_only:
         for f in failures:
             print(f)
@@ -199,7 +227,10 @@ def main() -> int:
     print(f"  line in-range   : {counts['line_review']} (needs human content check)")
     print(f"  line OUT OF RANGE: {counts['line_fail']}")
     print(f"  missing file    : {counts['file_missing']}")
-    bad = counts["symbol_fail"] + counts["line_fail"] + counts["file_missing"]
+    print(f"  prose ranges ok : {counts['prose_ok']}")
+    print(f"  prose PAST EOF  : {counts['prose_fail']}")
+    bad = (counts["symbol_fail"] + counts["line_fail"] + counts["file_missing"]
+           + counts["prose_fail"])
     return 1 if bad else 0
 
 

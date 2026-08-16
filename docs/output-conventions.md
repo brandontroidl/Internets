@@ -123,7 +123,7 @@ reply.
 | ` - ` | most | label-to-value or a qualifier inside one field |
 
 `modules/weather.py - _format_hourly()` uses ` :: `. `modules/imdb.py` and
-`modules/crypto.py` use ` | `. `modules/encode.py - _codepoint()` is a good
+`modules/crypto.py` use ` | `. `modules/encode.py - _unicode()` is a good
 model of the dense form:
 
 ```

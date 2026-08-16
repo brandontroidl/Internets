@@ -180,7 +180,7 @@ Do not claim it is monitored.
 is not recorded destroys the property the audit chain exists to provide.
 
 **Why.** Every admin command routes through
-`admin_cmds.py - AdminCommandsMixin._audit_action()`, which calls
+`admin_cmds.py - AdminCommandsMixin._audit()`, which calls
 `audit_log.AuditLog.record()`. `record()` catches `OSError`, logs
 `audit_log: write failed: <ExceptionType>` at ERROR, and re-raises. The caller
 catches everything and logs `audit_log record failed: ...` at WARNING, because

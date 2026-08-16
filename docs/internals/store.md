@@ -403,7 +403,7 @@ Module-level helpers:
   re-key, snapshot. All lowercase-keyed, all single-lock.
 - Lines 422-461: the opt-out column - fan-out write across all records plus
   the `"*"` sentinel, any-channel read.
-- Lines 464-563: `RateLimiter` - constants, floored constructor, lazy
+- `RateLimiter` (from its class statement to end of file) - constants, floored constructor, lazy
   cleanup, and the three check methods, ending with the
   refuse-without-recording rule that stops an attacker from pinning a
   channel's window full.

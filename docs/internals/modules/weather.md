@@ -342,7 +342,7 @@ real incident recorded in its comments and each test-covered in
   `_weather_cmd`, plus alerts/history/nowcast/providers longhand.
 - Lines 870-900: `help_lines()` (formatting; the row helper pads inside the
   bold codes so columns align).
-- Lines 903-905: `setup()`.
+- The module-level `setup()` factory that `IRCBot.load_module()` calls.
 
 ## Findings
 
