@@ -65,6 +65,15 @@ seen.json
 tells.json
 notes.json
 reminders.json
+# Silently-dropped nicks and their reasons (internets.py, written 0600).
+shadow_bans.json
+# store.py quarantines a state file it cannot parse as
+# <name>.corrupt.<epoch> rather than deleting it - same PII, same rule.
+*.corrupt.*
+# Atomic-write temp files. store.py uses tempfile.mkstemp(suffix=".tmp")
+# and the module state writers use "<name>.json.tmp"; a crash mid-write
+# leaves one behind holding the same data as the file it replaces.
+*.tmp
 # Process lockfile from process_lock.py - never commit.
 internets.pid
 
@@ -74,9 +83,9 @@ internets.pid
 # email).  It's ignored so real credentials never get committed.
 # config.ini.example is the credential-free template that lives in git.
 #
-# Other secret-store backends (any of these wins over the file):
-#   - the OS keyring (no file artefact)
-#   - INTERNETS_<NAME> env vars (sometimes via .env / .envrc)
+# The only other secret source is an INTERNETS_<NAME> env var, which wins
+# over the file and is sometimes exported from .env / .envrc (below).
+# The OS keyring backend was removed in 3.0.0 and leaves no artefact.
 config.ini
 config.ini.tmp
 config.ini.bak

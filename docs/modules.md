@@ -70,15 +70,16 @@ IRCBot.autoload_modules()`). `[bot] modules_dir` selects the directory and
 defaults to `modules`.
 
 A module on disk but absent from `autoload` is inert until an admin runs
-`.load <name>`. The shipped `config.ini.example` autoloads 67 of the 70
-modules; `example`, `health`, and `privacy` are omitted.
+`.load <name>`. The shipped `config.ini.example` autoloads 69 of the 70
+modules; only `example`, the module-writing skeleton, is omitted.
 
 :::{warning}
 Omitting `privacy` from `autoload` removes `.forgetme`, `.privacy`, `.optout`,
 and `.optin` from the running bot. `.forgetme` is the right-to-erasure entry
-point that fans `forget()` across every loaded module, so a deployment that
-copies `config.ini.example` verbatim ships with no user-facing erasure command.
-Add `privacy` (and `health`, for the operator snapshot) to the autoload list.
+point that fans `forget()` across every loaded module, so a deployment without
+it ships no user-facing erasure command. The template lists `privacy` and
+`health`, but `config.ini` is not regenerated on upgrade: a deployment carrying
+an autoload line from an earlier release still omits both.
 :::
 
 `.modules` reports what is loaded, with a per-module command count, then lists

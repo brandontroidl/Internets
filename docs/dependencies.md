@@ -118,10 +118,10 @@ commands vanish: `.irpg`, `.sci`, and the whole `reflookup` set (`.wiki`,
 the top, so a missing package costs seven commands to protect one.
 
 :::{note}
-`requirements.txt` annotates `defusedxml` as "used by `modules/qdb.py`". That is
-stale: `modules/qdb.py`'s own docstring records that it HTML-scrapes and does no
-XML parsing at all. The real consumers are the three modules above. The comment
-dates from 2.5.0, when `qdb` did parse XML.
+`requirements.txt` used to annotate `defusedxml` as "used by `modules/qdb.py`",
+a comment dating from 2.5.0 when `qdb` did parse XML. `modules/qdb.py`'s own
+docstring records that it now HTML-scrapes and does no XML parsing at all. The
+annotation has been corrected to name the three modules above.
 :::
 
 ## The lockfile
@@ -160,17 +160,21 @@ the Tests workflow fails at `pip install -r requirements.lock --require-hashes`
 with "all requirements must have their versions pinned". CI has been red on
 `main` since 2026-08-13.
 
-Two distributions are missing, and three separate declarations demand them.
+Two distributions are missing, and six separate declarations demand them.
 Taken from the metadata of the versions this lockfile actually pins:
 
 | Missing | Declared by | Marker |
 |---|---|---|
 | `typing_extensions>=4.4` | `aiohttp 3.14.3` | `python_version < "3.13"` |
 | `typing-extensions>=4.2` | `aiosignal 1.4.0` | `python_version < "3.13"` |
+| `typing-extensions>=4.13.2` | `cryptography 50.0.0` | `python_full_version < "3.11"` |
 | `typing-extensions>=4.1.0` | `multidict 6.7.1` | `python_version < "3.11"` |
+| `typing_extensions>=4.0` | `pyjwt 2.13.0` | `python_version < "3.11"` |
 | `async-timeout<6.0,>=4.0` | `aiohttp 3.14.3` | `python_version < "3.11"` |
 
-`>=4.4` is the binding floor below 3.13. Note that it is version-sensitive:
+`>=4.4` is the binding floor on 3.11 and 3.12; on 3.10 `cryptography` raises it
+to `>=4.13.2`, so a lock resolved on 3.10 will carry the higher pin. Note that
+the aiohttp entry is version-sensitive:
 `aiohttp` gained the direct `typing_extensions` requirement in **3.14.0** and
 had none in 3.13.x, so checking this against an older installed `aiohttp`
 rather than against the locked 3.14.3 gives the wrong answer and makes the

@@ -429,13 +429,13 @@ The procedure itself, step by step with its verification points, is
   restart. When in doubt, restart.
 
 :::{warning}
-**Known defect (privacy template).** The `autoload` list in `config.ini.example`
-enables 67 modules including `seen`, `tell`, `linktitle`, `notes`, `remind`, and
-`steam` - all of which record user-derived data - but does **not** include
-`privacy`. A deployment that uses the shipped template verbatim tracks users
-while shipping no `.forgetme`, `.optout`, `.optin`, or `.privacy` command: the
-right-to-erasure entry point is absent by default. Add `privacy` (and `health`)
-to your `autoload` before going live. Verified; recorded in
+**Check `autoload` on an upgrade.** The list in `config.ini.example` enables
+`seen`, `tell`, `linktitle`, `notes`, `remind`, `steam`, and `location`, all of
+which record user-derived data, and now also lists `privacy` and `health`. It
+did not list `privacy` in earlier releases, and `config.ini` is never
+regenerated on upgrade, so an existing deployment keeps its old line and ships
+no `.forgetme`, `.optout`, `.optin`, or `.privacy` command. Read your live
+`autoload` and append them before going live. Recorded in
 [known-issues.md](known-issues.md).
 :::
 
@@ -445,9 +445,11 @@ to your `autoload` before going live. Verified; recorded in
 :::{warning}
 `requirements.lock` was generated on
 Python 3.14, violating the resolve-on-3.10 contract stated in
-`scripts/regen-lockfile.sh`, and consequently omits marker-gated transitives
-(`typing_extensions>=4.4`, pulled by `aiohttp`). Any `--require-hashes` install
-from the lock on Python 3.10 through 3.12 fails, and the Tests workflow has been
+`scripts/regen-lockfile.sh`, and consequently omits two marker-gated
+transitives: `typing_extensions` (`aiohttp>=4.4` and `aiosignal>=4.2` below
+3.13, `cryptography>=4.13.2` and `multidict>=4.1.0` below 3.11) and
+`async-timeout>=4.0,<6.0` (`aiohttp`, below 3.11 only). Any `--require-hashes`
+install from the lock on Python 3.10 through 3.12 fails, and the Tests workflow has been
 red on `main` since 2026-08-13. Install from `requirements.txt`, or regenerate
 the lock per the script, until this is fixed. Recorded in
 [internals/ci-and-packaging.md](internals/ci-and-packaging.md#findings).

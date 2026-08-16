@@ -160,13 +160,12 @@ comma-separated module list loaded at startup. A module needing an API key can
 hide its own commands from `.help` by overriding `is_configured()`, which seven
 of them do, so an unkeyed autoload list is not a problem.
 
-**Known defect worth fixing before you go live:** the shipped `autoload` lists 67
-modules including `seen`, `tell`, `linktitle`, `notes`, `remind`, and `steam`,
-all of which record user-derived data, but it does not include `privacy`. A
-deployment that copies the template verbatim tracks users while shipping no
-`.forgetme`, `.optout`, `.optin`, or `.privacy` command, so the right-to-erasure
-entry point is absent by default. Append `privacy` (and `health`, which is merely
-inconvenient to omit) to the list.
+**Worth checking before you go live:** the shipped `autoload` includes `seen`,
+`tell`, `linktitle`, `notes`, `remind`, `steam`, and `location`, all of which
+record user-derived data. `privacy` - the module that provides `.forgetme`,
+`.optout`, `.optin`, and `.privacy` - is now listed alongside them, as is
+`health`. If you are carrying a `config.ini` from an earlier release, its
+`autoload` line predates that and will still omit both; append them.
 
 The complete key list, with defaults, types, and which changes need a restart
 rather than a rehash, is [configuration](configuration.md).
@@ -276,7 +275,9 @@ hostmask: a nick change, a quit, a disconnect, or a `.rehash` invalidates it.
 Five failures trigger a 300-second lockout on that nick, and every attempt is
 written to the HMAC-chained audit log.
 
-Then load a module the shipped `autoload` omits. `privacy` is the one you
+Then exercise the loader. `geocode` and `units` are libraries rather than
+modules, so the loadable names outside `autoload` are `privacy` and `health`;
+on a `config.ini` carried over from an earlier release, `privacy` is the one you
 actually want, per the callout in step 6:
 
 ```
@@ -285,7 +286,8 @@ actually want, per the callout in step 6:
 ```
 
 `.load` compiles and executes the file fresh, with no `sys.modules` entry, so a
-subsequent `.reload privacy` picks up edits. `.unload privacy` removes it.
+subsequent `.reload privacy` picks up edits. `.unload privacy` removes it. On a
+current template `privacy` is already loaded, so try `.reload privacy` instead.
 
 One reload behavior to know before you rely on it: `reload_module()` unloads and
 then loads, so a **failed** reload leaves the module unloaded rather than

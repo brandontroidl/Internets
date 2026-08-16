@@ -98,7 +98,7 @@ Contents per datum:
 | State backup | Until next successful write | Overwritten, never deleted |
 | Quarantined state | Unbounded | Manual removal only |
 | Geocode cache | 24 h, 1000 entries | TTL and LRU eviction; lost on restart |
-| URL dedup map | 300 s, 500 entries | `_DEDUP_TTL`; lost on reload |
+| URL dedup map | 300 s per entry | `_DEDUP_TTL`, swept once the map passes 500; lost on reload |
 | Hostmask cache | Session | Dropped on the nick's QUIT, and on restart |
 
 Config keys behind the tunable values:
@@ -228,9 +228,10 @@ Detail:
   `logging.handlers.RotatingFileHandler`, whose documented behaviour is never
   to roll over when `maxBytes` is 0. The log then grows without limit, and
   since nothing purges it, so does the user data in it.
-- **Omitting `privacy` from autoload.** The shipped template does exactly this
-  while autoloading six collecting modules. Item 4,
-  [known-issues](known-issues.md).
+- **Omitting `privacy` from autoload.** The shipped template autoloads seven
+  collecting modules and now lists `privacy` alongside them, but a deployment
+  whose `config.ini` predates that change still runs collection with no
+  erasure command. Item 4, [known-issues](known-issues.md).
 
 ## Logs, backups, and quarantine
 
@@ -241,15 +242,22 @@ erasure request that must cover them is a manual operator procedure.
 
 | Symbol | What it writes |
 | --- | --- |
+| `internets.py - _handle_privmsg()` | every command: name, full argument, nick, hostmask, channel or `(PM)` |
+| `internets.py - _handle_membership()` | `event=account_change nick=<nick> account=<account>` |
 | `modules/location.py - cmd_regloc()` | nick, raw input, resolved place |
-| `modules/linktitle.py` | announced and skipped URLs, plus channel |
+| `modules/linktitle.py` | announced URLs with channel; skipped URLs without |
 | `modules/weather.py` (4 sites) | resolved place, country, lat/lon |
 | `modules/channels.py` | admin nick with requested channel |
 | `modules/privacy.py` | nick and what `.forgetme` deleted |
 
-The weather sites carry no nick, but they are timestamped alongside lines that
-do. The `privacy` site means the erasure request itself is logged where the
-erasure cannot reach.
+The first row is the broadest by volume and the only one that captures message
+bodies: the arguments of `.tell`, `.note`, `.remind`, and `.regloc` are all in
+it, from PMs as well as channels. Its only masking is
+`sender.py - redact_secrets()`, which keys on credential verbs and so does not
+fire on an argument that is itself a secret; `.pwn <password>` writes the
+plaintext password to the log. The weather sites carry no nick, but they are
+timestamped alongside lines that do. The `privacy` site means the erasure
+request itself is logged where the erasure cannot reach.
 
 The file is created with the process umask and has no permission check, unlike
 `config.ini`, which is fail-closed at 0600. Item 15,

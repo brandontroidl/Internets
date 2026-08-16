@@ -79,7 +79,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handlers that had no docstring got one. A regression test reconciles the
   `.help admin` grid against `_CORE` membership so the hand-copied-list drift
   class is closed, not just this instance.
-  The aiohttp 3.14.3 / cryptography 50.0.0 bumps landed in requirements.txt
+
+- The aiohttp 3.14.3 / cryptography 50.0.0 bumps landed in requirements.txt
   only, so `pip install internets-irc[async]` / `[weatherkit]` / `[all]` could
   still resolve versions the project's own security floors reject. The extras
   now match (aiohttp>=3.14.3, cryptography>=50.0.0), and the run_tests.py
@@ -104,6 +105,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   regardless of location, is corrected to "pollen data unavailable for this
   location."
 
+- **The bot now tracks its own nick change when the server uses a bare-nick
+  prefix.** `_RE_NICK` required a `nick!user@host` prefix, but RFC 2812 makes
+  the `user@host` half optional and some servers send a bare `:oldnick NICK
+  :newnick` for a self or services-driven change. That line was dropped, so
+  after a `.raw nick <new>` the bot kept thinking it had its old nick, stopped
+  recognising PMs to the new one, and silently ignored every prefix-less PM
+  command (`.raw ...`) thereafter. It looked like `.raw` had stopped working.
+
 ### Security
 
 - **aiohttp 3.14.1 -> 3.14.3, cryptography 49.0.0 -> 50.0.0.** Clears
@@ -119,18 +128,6 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the server. All six now pass through one shared verb-based redactor
   (`sender.redact_secrets`), replacing the old outbound-only prefix list so the
   two directions cannot drift. Redaction is log-only; the wire is unchanged.
-
-### Fixed
-
-- **The bot now tracks its own nick change when the server uses a bare-nick
-  prefix.** `_RE_NICK` required a `nick!user@host` prefix, but RFC 2812 makes
-  the `user@host` half optional and some servers send a bare `:oldnick NICK
-  :newnick` for a self or services-driven change. That line was dropped, so
-  after a `.raw nick <new>` the bot kept thinking it had its old nick, stopped
-  recognising PMs to the new one, and silently ignored every prefix-less PM
-  command (`.raw ...`) thereafter. It looked like `.raw` had stopped working.
-
-### Security
 
 - **Raised the `weatherkit` / `all` extras to the security floors
   `requirements.txt` already declared.** They pinned `PyJWT>=2.10.1` and
@@ -538,7 +535,7 @@ closed on an unverifiable hostmask binding. See Removed / Security below.
   that wrongly claimed the bot "feeds a honeypot/DNSBL pipeline" was corrected -
   `ipintel.py` only QUERIES reputation.
 
-### Added: STEM, developer, network, and reference command modules
+### Added - STEM, developer, network, and reference command modules
 
 New command modules (each follows the standard BotModule contract; `.help`
 groups them by category and `.modules` lists them). README User Commands is
@@ -668,7 +665,7 @@ regrouped to mirror those `.help` categories.
 - **`secret_store.py`** - `SECRETS_FILE` now points at `config.ini`.
   `set`/`delete` perform **text-based in-place edits** of the
   `[secrets]` section (the old configparser round-trip stripped every
-  comment in the file).  `init` copies `config.ini.example → config.ini`;
+  comment in the file).  `init` copies `config.ini.example -> config.ini`;
   `--force` is now a wholesale overwrite (the old configparser-based
   merge was incompatible with comment preservation).  `migrate` auto-
   chmods `config.ini` to 0o600 before writing, and `_scrub_config_ini`
@@ -688,7 +685,7 @@ regrouped to mirror those `.help` categories.
 ### Removed (BREAKING)
 
 - **OS keyring backend removed.** `secret_store` is now two-tier:
-  `INTERNETS_<NAME>` env var → `config.ini[secrets]` (0600).  The bot
+  `INTERNETS_<NAME>` env var -> `config.ini[secrets]` (0600).  The bot
   targets headless deployments where `keyring` has no usable backend
   ("fail" backend), and the optional desktop-session integration
   dragged in ~10 transitive dependencies (`keyring`, `jeepney`,
@@ -733,7 +730,7 @@ regrouped to mirror those `.help` categories.
   `.notes`, and `.remind` data intact.  A `forget(nick)` hook was added
   to `BotModule` and implemented by all four PII modules; `.forgetme`
   now calls it on every loaded module.
-- **`BotModule.__init_subclass__`** validates the `COMMANDS` → handler
+- **`BotModule.__init_subclass__`** validates the `COMMANDS` -> handler
   contract at class-definition time - a typo'd method name or a
   non-coroutine handler is now a TypeError at load (class-definition) time, not an
   `AttributeError` the first time a user runs the command.
@@ -768,7 +765,7 @@ regrouped to mirror those `.help` categories.
   key or DDG markup drift produced no log line at all.  Both now
   `log.warning` each provider failure; `_image_sync` distinguishes
   "no key configured" from "the keyed call failed".
-- **`modules/units.py`** - km/h→mph used the imprecise divisor `1.609`;
+- **`modules/units.py`** - km/h->mph used the imprecise divisor `1.609`;
   now `1.609344` (exact), matching `km_mi`.
 - **Windows: `UnicodeDecodeError` reading `config.ini`** - pin
   `encoding="utf-8"` on every `configparser.read()` call site
@@ -829,7 +826,7 @@ regrouped to mirror those `.help` categories.
   (`internets.py`, `modules/bofh.py`, `modules/dice.py`, `modules/fml.py`,
   `modules/numberfact.py`, `modules/xkcd.py`).  Clears Bandit B311
   across the codebase without per-line suppressions.
-- **`except Exception: pass` → debug log** in five hot paths
+- **`except Exception: pass` -> debug log** in five hot paths
   (`internets.py` shadow-ban prefix parse and stdin-close on shutdown,
   `admin_cmds.py` `_state_file`, `modules/tell.py` async-save scheduler,
   `modules/seen.py` temp-file cleanup).  Same best-effort semantics,
@@ -837,10 +834,10 @@ regrouped to mirror those `.help` categories.
   `except Exception: pass` sites (best-effort cleanup, fallback paths)
   are annotated with `# nosec B110: best-effort cleanup` instead of
   changed - they're intentional swallows with no observability gain.
-- **`assert` → `raise RuntimeError`** at two invariant checks that
+- **`assert` -> `raise RuntimeError`** at two invariant checks that
   would otherwise be stripped by `python -O` (Bandit B101):
   `process_lock.py:_read_existing` and `weather_providers/_http.py:_get_session`.
-- **`# nosec B105`** on `weather_providers/weatherkit/__init__.py:105`
+- **`# nosec B105`** on `weather_providers/weatherkit/__init__.py`
   (`self._token = ""` is JWT-cache init, not a hardcoded password -
   `_headers()` regenerates the token on first use).
 - **`# nosec B404 / B603 / B606`** on `internets.py`'s Windows
@@ -940,7 +937,7 @@ regrouped to mirror those `.help` categories.
 - Provider chain now sorts by scientific accuracy first, then by live
   health score, then by registration order.
 - Stormglass and WeatherBit providers wired into the dispatcher.
-- Tiered secret store (`secret_store.py`): env → OS keyring → 0600
+- Tiered secret store (`secret_store.py`): env -> OS keyring -> 0600
   `secrets.ini`.  Replaces plaintext keys in `config.ini`.
 - `config.local.ini` overlay for personal non-secret settings.
 - `is_configured()` hook on `BotModule` - `.help` and weather `-l` hide

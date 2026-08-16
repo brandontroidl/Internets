@@ -106,20 +106,21 @@ a synchronous call already running on the loop.
 
 ---
 
-## 4. The shipped autoload template collects data but omits the privacy module
+## 4. Erasure does not reach the bot log, and reports a phantom purge
 
-**Symbol:** `config.ini.example` `[bot] autoload`
+**Symbol:** `config.ini.example` `[bot] autoload`, `modules/privacy.py`
 
-The template autoloads 67 modules, seven of which record user-derived data:
-`seen`, `tell`, `linktitle`, `notes`, `remind`, `steam`, and `location` (which
-stores saved locations through the core store rather than its own file, and
-logs nick-to-location pairs). `privacy` is not among
-them. A deployment that copies the template verbatim therefore tracks users and
-ships no `.forgetme`, `.optout`, `.optin`, or `.privacy` command. The erasure
-mechanism exists and works; it is switched off by default while collection is
-switched on.
+The template autoloads modules that record user-derived data: `seen`, `tell`,
+`linktitle`, `notes`, `remind`, `steam`, and `location` (which stores saved
+locations through the core store rather than its own file, and logs
+nick-to-location pairs). It previously omitted `privacy`, so a deployment that
+copied the template verbatim tracked users and shipped no `.forgetme`,
+`.optout`, `.optin`, or `.privacy` command. `privacy` and `health` are now in
+the template's autoload list, which closes that half. An existing deployment
+carries its own `config.ini` and does not pick the change up - check the
+running autoload line before assuming erasure is available.
 
-Two related gaps make the erasure incomplete even when `privacy` is loaded:
+Two gaps make the erasure incomplete even when `privacy` is loaded:
 
 - `.forgetme` cannot reach the bot log. `modules/linktitle.py` logs announced
   URLs with their channel at INFO, and `modules/location.py - cmd_regloc()` logs
@@ -130,15 +131,15 @@ Two related gaps make the erasure incomplete even when `privacy` is loaded:
   row that the purge then counts. An untracked user is told "tracking in 1
   channel(s) (erased now)".
 
-**Verified:** parsed the template's autoload list and confirmed `privacy` is
-absent. On the count: five modules keep their own store (`seen`, `tell`,
-`notes`, `remind`, `steam`); `location` stores through the core store; and
-`linktitle` persists nothing but writes announced URLs to the log. All seven
-are autoloaded.
+**Verified:** parsed the template's autoload list; `privacy` and `health` are
+present. On the collector count: five modules keep their own store (`seen`,
+`tell`, `notes`, `remind`, `steam`); `location` stores through the core store;
+and `linktitle` persists nothing but writes announced URLs to the log. All
+seven are autoloaded.
 
-**Fix shape:** add `privacy` (and `health`) to the template autoload; decide
-whether the two log sites should log at DEBUG, omit the identifier, or be
-covered by a log-scrubbing pass.
+**Fix shape:** decide whether the two log sites should log at DEBUG, omit the
+identifier, or be covered by a log-scrubbing pass; and clear the opt-out flag
+after `user_purge()` rather than before.
 
 ---
 
@@ -176,8 +177,12 @@ needs an external append-only sink to detect.
 The lockfile header records that it was generated with Python 3.14, but the
 regeneration script's contract is to resolve on 3.10 (the lowest supported
 version) precisely so that marker-gated transitive dependencies are captured.
-Resolving on 3.14 dropped `typing_extensions>=4.4`, which `aiohttp` needs below
-Python 3.13, so every Python <3.13 leg fails `pip install --require-hashes`.
+Resolving on 3.14 dropped two distributions: `typing_extensions`, which
+`aiohttp` and `aiosignal` need below 3.13 and `cryptography`, `multidict` and
+`pyjwt` need below 3.11; and `async-timeout`, which `aiohttp` needs below 3.11.
+Every Python <3.13 leg therefore fails `pip install --require-hashes`, and the
+3.10 leg is missing both. Full marker table in
+[dependencies.md](dependencies.md).
 
 A second defect hides the first on Windows: the workflow's install step runs
 three `pip` commands in one `run:` block, and under `pwsh` there is no fail-fast,
@@ -185,7 +190,9 @@ so the failing install reports success and the job fails later in pytest with a
 confusing `ModuleNotFoundError`.
 
 **Verified:** `gh run list` shows failures on the last three `main` pushes; the
-lockfile header states Python 3.14 and contains no `typing_extensions`.
+lockfile header states Python 3.14, pins 21 distributions, and contains neither
+`typing_extensions` nor `async_timeout`. The markers were read from the PyPI
+metadata of the exact versions the lock pins, not from a local install.
 
 **Fix shape:** regenerate the lock on 3.10 per the script. Separately, split the
 install step or set `$ErrorActionPreference` so Windows fails fast.
@@ -351,10 +358,14 @@ Carried here so they are not lost. Each is confirmed against source.
   count, so `python -m secret_store init` announces roughly 13370 bytes for a
   file that is 14296 bytes on disk (the template contains non-ASCII box-drawing
   characters). Cosmetic.
-- **`config.ini.example`** omits sections the code reads: `[tell] file`,
-  `[notes] file`, `[remind] file`, `[seen]`, `[bot] shadow_bans_file`, and the
-  per-module sections `[imdb] [lastfm] [youtube] [stocks] [twitch] [search]
-  [ipintel] [satpass] [apod]`.
+- **`config.ini.example`** now templates `[tell] file`, `[notes] file`,
+  `[remind] file`, `[seen] file`/`max_age_days`, `[bot] shadow_bans_file` and
+  `[secrets] nasa_api_key`. The per-module credential sections `[imdb]
+  [lastfm] [youtube] [stocks] [twitch] [search] [ipintel] [satpass] [apod]`
+  stay absent on purpose: they are the `cred()` upgrade fallback for 2.4.0
+  and earlier, and they sit outside
+  the 0600 check that guards `[secrets]`. The template header names them and
+  points at `secret_store migrate` instead.
 - **Numerics 403/405/471/474/475/476** drop a channel from `active_channels` and
   rewrite `channels.json` with no log line (473 does log), so channels vanish
   across restarts with only the file as evidence. A corrupt `shadow_bans.json`
@@ -592,6 +603,63 @@ It cannot. Two limits:
 list, and assert on the emitting call sites rather than file text. That is the
 same reverse-direction principle the documentation gates use: derive the
 population, then check each member.
+
+---
+
+## 22. Every command argument is logged, so `.pwn` writes a password to disk
+
+**Severity: ranks with item 1.** Listed here only because the register is
+numbered in discovery order.
+
+**Symbols:** `internets.py - IRCBot._handle_privmsg()`,
+`sender.py - redact_secrets()`, `modules/secinfo.py - SecinfoModule.cmd_pwn()`
+
+Every accepted command emits one INFO line carrying the command name, the
+**entire argument**, the nick, the full hostmask, and the channel or `(PM)`.
+Only `auth` and `deauth` are masked outright; everything else is passed through
+`redact_secrets()`, which matches credential **verbs**
+(`AUTHENTICATE`, `IDENTIFY`, `REGISTER`, `IDENT`, `OPER`, `PASS`, `AUTH`).
+
+A bare password contains no verb, so nothing fires. Verified:
+
+```text
+redact_secrets('hunter2')     -> 'hunter2'
+redact_secrets('Tr0ub4dor&3') -> 'Tr0ub4dor&3'
+```
+
+`.pwn` exists to check a password against Have I Been Pwned, is PM-gated for
+that reason, and refuses in-channel use with "never type a password in a
+channel". The password nevertheless lands verbatim in `internets.log`, which
+takes the process umask, is not covered by `.forgetme`, and survives in rotated
+segments.
+
+The same line captures the bodies of `.tell`, `.note`, `.remind`, and
+`.regloc`, from private messages as well as channels. By volume this log line is
+the largest gap in `.forgetme`'s reach.
+
+**Verified:** read the dispatch log site and ran the redactor against bare
+passwords.
+
+**Fix shape:** mask by command rather than only by verb. Commands whose argument
+is known-sensitive (`pwn` at minimum) should log `[REDACTED]` the way `auth`
+does, and the argument of any command should probably be truncated or omitted
+at INFO. Related: item 15 (the log is unprotected) and item 4 (`.forgetme`
+cannot reach it).
+
+---
+
+## 23. Account-name to nick pairing is logged and undocumented
+
+**Symbol:** `internets.py - IRCBot._handle_membership()`
+
+The bot requests the `account-notify` capability and logs
+`event=account_change nick=<nick> account=<account>`, which durably pairs an IRC
+nick with the services account behind it. This is identity-linking data that no
+document described before this pass, and like every other log record it is
+outside `.forgetme`.
+
+**Verified:** read the handler and confirmed `account-notify` is in
+`config.py` `DESIRED_CAPS`.
 
 ---
 

@@ -1,13 +1,33 @@
 # CODEOWNERS - auto-request review for every PR.
 #
-# GitHub will assign these owners as required reviewers on any PR that
-# touches matching paths.  This file lives at the repo root (GitHub also
-# accepts .github/CODEOWNERS or docs/CODEOWNERS).
+# GitHub assigns these owners as required reviewers on any PR that touches a
+# matching path.  This file lives at the repo root (GitHub also accepts
+# .github/CODEOWNERS or docs/CODEOWNERS).
 #
 # Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
 #
-# NOTE: there is currently only a single human maintainer; add team
-# handles (e.g. @your-org/security) or per-path owners as the project
-# grows.
+# Only the LAST matching pattern applies, so the catch-all comes first and
+# each block below narrows it.  There is one maintainer today, so every block
+# names the same owner.  They are listed separately anyway: the file then
+# records which areas are treated as review-sensitive, and adding a second
+# owner for an area becomes a one-line edit rather than a re-derivation of
+# this list.
 
-*       @brandontroidl
+# Catch-all: the repository root and anything not matched below.
+*                       @brandontroidl
+
+# Subsystems.
+/docs/                  @brandontroidl
+/modules/               @brandontroidl
+/weather_providers/     @brandontroidl
+/tests/                 @brandontroidl
+
+# CI and repository automation.  A change here alters what runs on every PR.
+/.github/               @brandontroidl
+/.github/workflows/     @brandontroidl
+
+# Security-sensitive: credential storage, password hashing, and the
+# tamper-evident audit trail.
+/secret_store.py        @brandontroidl
+/hashpw.py              @brandontroidl
+/audit_log.py           @brandontroidl

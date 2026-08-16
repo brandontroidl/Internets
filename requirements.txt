@@ -9,12 +9,19 @@
 # under [project.optional-dependencies] dev - install with
 # `pip install -e ".[dev]"` when working on the code itself.
 #
-# Version policy:  lower bounds are the most recent stable release at
-# session time (every package known to be CVE-free at this lower
-# bound).  No upper bounds - pip always pulls the newest compatible
-# release.  CI runs on Linux, macOS, and Windows across Python 3.10 →
-# 3.14, so breakage from a future upstream release surfaces in the
-# next push.
+# Version policy:  each lower bound is a security or compatibility FLOOR,
+# not the latest release - requirements.lock routinely pins newer.  A
+# floor moves when an advisory forces it (the ID is in the comment beside
+# it) or when a functional reason does; nothing re-audits a floor once
+# set, so it is a point-in-time judgment.  No upper bounds - pip pulls
+# the newest compatible release, and CI on Linux, macOS, and Windows
+# across Python 3.10 → 3.14 surfaces breakage from a future upstream
+# release on the next push.  Raising a floor: docs/dependencies.md.
+#
+# requirements.lock is the hash-pinned resolution of this file and must
+# be regenerated with scripts/regen-lockfile.sh on Python 3.10, never on
+# a newer interpreter - resolving higher drops the transitives that are
+# marker-gated to older Pythons.  See docs/known-issues.md item 6.
 
 # Core HTTP client.  >=2.32.3 carries the PoolManager / verify fix
 # (CVE-2024-35195) and the proxy credential leak fix (CVE-2023-32681).
@@ -44,6 +51,9 @@ bcrypt>=4.2.0
 PyJWT>=2.13.0
 cryptography>=50.0.0
 
-# Hardened XML parser used by modules/qdb.py.  Blocks billion-laughs
-# DoS in addition to stdlib's XXE protection.
+# Hardened XML parser.  Blocks billion-laughs DoS in addition to stdlib's
+# XXE protection.  Imported at module scope by modules/idlerpg.py,
+# modules/scinews.py, and modules/reflookup.py, so all three fail to load
+# without it.  reflookup parses XML only on the .arxiv path but imports at
+# module scope, so its other seven commands go down with it.
 defusedxml>=0.7.1

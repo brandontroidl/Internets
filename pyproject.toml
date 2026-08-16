@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "internets-irc"
 version = "5.0.0"
-description = "Async modular IRC bot with weather, calculator, dice, translation, and more."
+description = "Async, modular IRC bot and multi-provider weather aggregator."
 readme = "README.md"
 license = {text = "ISC"}
 requires-python = ">=3.10"
@@ -29,13 +29,15 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Communications :: Chat :: Internet Relay Chat",
 ]
-# Version policy: lower bounds are the most recent stable release at
-# session time (every package known to be CVE-free at this lower
-# bound).  No upper bounds - pip always installs the newest compatible
-# release.  CI covers Linux / macOS / Windows across Python 3.10 →
-# 3.14, so any future-breaking upstream release surfaces in the next
-# push.  Each lower bound below is annotated with the CVE / advisory
-# it addresses where applicable.
+# Version policy: each lower bound is a security or compatibility FLOOR,
+# not the latest release - the lockfile routinely pins newer.  A floor is
+# raised when an advisory forces it (annotated with the ID below) or when
+# a functional reason does (bcrypt's Rust wheels, defusedxml's
+# billion-laughs hardening).  Nothing re-audits a floor once set, so it
+# is a point-in-time judgment.  No upper bounds - pip installs the newest
+# compatible release, and CI across Linux / macOS / Windows on Python
+# 3.10 through 3.14 surfaces a breaking upstream release on the next
+# push.  Procedure for raising one: docs/dependencies.md.
 dependencies = [
     "requests>=2.32.3",       # CVE-2024-35195 (PoolManager verify)
 ]
@@ -49,10 +51,11 @@ weatherkit = ["PyJWT>=2.13.0", "cryptography>=50.0.0"]
 # PyJWT >=2.13.0 carries the 2026 PYSEC fixes (subsumes the 2.10.1
 # CVE-2024-53861 JOSE header-confusion floor); cryptography >=50.0.0 carries
 # PYSEC-2026-3552 (subsumes the 48.0.1 GHSA-537c-gmf6-5ccf floor).
-# These previously sat at 2.10.1 / 44.0.0, so `pip install internets-irc[
-# weatherkit]` could resolve a cryptography this project's own requirements
-# file calls unsafe. CI cannot catch that: security.yml audits
-# requirements.lock only, never the extras.
+# These previously sat at 2.10.1 / 44.0.0, so an extras install could resolve
+# a cryptography this project's own requirements file calls unsafe. The DEPS
+# check in tests/run_tests.py now fails on a floor below requirements.txt, but
+# nothing audits what an extras install actually resolves: security.yml runs
+# pip-audit against requirements.lock only.
 xml = ["defusedxml>=0.7.1"]
 all = [
     "aiohttp>=3.14.3",
@@ -87,7 +90,9 @@ internets = "internets:_entry"
 # uninstallable package in v3.0.0 and v4.0.0: internets.py imports process_lock
 # and admin_cmds.py imports audit_log at module scope, so the console script
 # raised ModuleNotFoundError on start.  scripts/verify_install.sh is the gate
-# that must catch this - run it after touching this list.
+# that must catch this - run it after touching this list.  That script carries
+# its own copy of the list (its REQUIRED array); both have to move together or
+# the gate stops covering the module you just added.
 py-modules = [
     "internets", "config", "botlog", "admin_cmds", "console", "sender",
     "store", "protocol", "hashpw", "secret_store",

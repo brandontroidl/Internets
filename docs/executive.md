@@ -147,7 +147,7 @@ lower-severity findings, is in
 | 1 | Finance API keys published to the channel | Credential disclosure to every channel member |
 | 2 | Provider fallback disabled for 11 of 13 result types | Severe-weather alerts silently suppressed |
 | 3 | `.isprime` blocks the event loop | Any user can hang the whole bot |
-| 4 | `privacy` absent from the shipped autoload | Erasure and opt-out unavailable by default |
+| 4 | Erasure cannot reach the bot log, and over-reports | Log retains user data `.forgetme` cannot remove |
 | 5 | Audit chain verifies legacy records unkeyed | Tamper evidence defeatable by a local writer |
 | 6 | Startup advises `chmod 640`, secrets require 0600 | Following the bot's own advice disables all secrets |
 | 7 | `requirements.lock` unusable below Python 3.13 | CI red on `main`; hash-pinned installs fail |
@@ -184,14 +184,17 @@ synchronously on the event loop, unlike `cmd_bignum()` which offloads with
 Pollard rho. A pasted 100-digit semiprime hangs the entire bot: no commands, no
 PING response, eventual disconnect.
 
-**4. The shipped autoload template omits the privacy module.**
-`config.ini.example` autoloads 67 modules including `seen`, `tell`, `linktitle`,
-`notes`, `remind`, and `steam`, all of which record user-derived data, but not
-`privacy`. A deployment that uses the template verbatim tracks users while
-shipping no `.forgetme`, `.optout`, `.optin`, or `.privacy` command, so the
-right-to-erasure entry point is absent by default. This is a compliance exposure,
-not a code bug: the module works, it is simply not enabled. `health` is also
-absent, which is merely inconvenient.
+**4. Erasure does not cover the application log.**
+`config.ini.example` autoloads `seen`, `tell`, `linktitle`, `notes`, `remind`,
+`steam`, and `location`, all of which record user-derived data. It previously
+omitted `privacy`, so a verbatim copy tracked users with no `.forgetme`,
+`.optout`, `.optin`, or `.privacy` command; `privacy` and `health` are now in
+the template, and an existing deployment keeps its own `config.ini` until an
+operator edits that line. What remains is a compliance exposure rather than a
+code bug: `modules/linktitle.py` and `modules/location.py - cmd_regloc()` write
+user-derived data to `internets.log` at INFO, which `.forgetme` cannot reach,
+and `cmd_forgetme()` clears the opt-out flag before purging, so an untracked
+user is told a channel record was erased.
 
 **5. The audit chain can be downgraded.**
 `audit_log.py - AuditLog.verify()` selects the hash scheme from each record's own

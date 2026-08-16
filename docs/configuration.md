@@ -218,8 +218,7 @@ timestamps - the retention control for the bot's most sensitive dataset.
 
 `shadow_bans_file` names the JSON file of silently-dropped nicks. It is a
 security control with no integrity envelope: a corrupt file loads as empty with a
-warning, so an unclean restart silently un-bans everyone. It is **not** defined
-in `config.ini.example`.
+warning, so an unclean restart silently un-bans everyone.
 
 ## `[admin]`
 
@@ -366,16 +365,16 @@ so a stalled scraper blocks it.
 
 Every section below is read by exactly one module at `on_load()` via
 `cfg[section]` guarded by an `in` test, so an absent section falls back to the
-in-code default. **None of these sections exists in `config.ini.example`**, with
-the exception of `[steam]`, `[idlerpg]`, and `[qdb]`.
+in-code default. All of them are now in `config.ini.example`, each carrying the
+same value as the in-code default, so templating them changed no behavior.
 
 | Section | Key | Default | Templated |
 |---|---|---|---|
-| `[tell]` | `file` | `tells.json` | no |
-| `[notes]` | `file` | `notes.json` | no |
-| `[remind]` | `file` | `reminders.json` | no |
-| `[seen]` | `file` | `seen.json` | no |
-| `[seen]` | `max_age_days` | `180` | no |
+| `[tell]` | `file` | `tells.json` | yes |
+| `[notes]` | `file` | `notes.json` | yes |
+| `[remind]` | `file` | `reminders.json` | yes |
+| `[seen]` | `file` | `seen.json` | yes |
+| `[seen]` | `max_age_days` | `180` | yes |
 | `[steam]` | `steamids_file` | `steamids.json` | yes |
 | `[idlerpg]` | `api_url` | `http://idlerpg.rizon.net/xml.php` | yes |
 | `[qdb]` | `api_url` | `https://bash-org-archive.com` | yes |
@@ -457,9 +456,9 @@ responsibility.
 `sasl_password` is the one name in `KNOWN_SECRETS` with no `CONFIG_LOCATIONS`
 entry, so `migrate` never sweeps it. It also has no runtime consumer: the SASL
 PLAIN path calls `sasl_plain_payload(self._nick, NS_PW)`, so SASL always uses
-`nickserv_password`. The template's promise that `sasl_password` falls back to
-`nickserv_password` when empty is inverted in practice - a distinct
-`sasl_password` is silently ignored.
+`nickserv_password` and a distinct `sasl_password` is silently ignored. The
+template used to promise a fallback the other way round; its comment now
+records the key as inert.
 
 ### `nasa_api_key` is unregistered
 
@@ -471,7 +470,9 @@ PLAIN path calls `sasl_plain_payload(self._nick, NS_PW)`, so SASL always uses
 Consequences: `secret_store.get("nasa_api_key")` works, and
 `INTERNETS_NASA_API_KEY` works, but `secret_store list` and `status` never show
 it, and `migrate` will not relocate it out of a plaintext `[apod] api_key`. It is
-invisible to the tooling that exists to inventory secrets.
+invisible to the tooling that exists to inventory secrets. `config.ini.example`
+carries the key in `[secrets]` with that caveat in its comment, which makes it
+discoverable to a reader but not to the tooling.
 
 ### secret_store CLI
 

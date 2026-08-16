@@ -240,13 +240,14 @@ that get confused with each other.
 | Files under `modules/` | `ls modules/*.py` | 75 |
 | Loadable modules | instantiate `BotModule` subclasses | 70 |
 | Modules registering commands | non-empty `COMMANDS` | 69 |
-| Modules in the shipped autoload | `[bot] autoload` in the template | 67 |
+| Modules in the shipped autoload | `[bot] autoload` in the template | 69 |
 
 The gaps between them are all meaningful. `base.py`, `geocode.py`, `units.py`,
 `_netsafe.py`, and `__init__.py` are infrastructure and define no module.
 `linktitle` is loadable but registers nothing, working entirely through the
 `on_raw` fanout. And the autoload list is a deployment choice, not a property of
-the code, which is how `privacy` came to be absent from it.
+the code, which is how `privacy` came to be absent from it for several releases;
+`example` is the one loadable module the template still leaves out.
 
 For a specific module, `docs/internals/modules/<name>.md` is the per-file page.
 Its findings section is where anything questionable was recorded rather than

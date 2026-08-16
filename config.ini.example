@@ -246,8 +246,10 @@ debug_file =
 ; NickServ / SASL identify password (most networks use the same value).
 nickserv_password =
 
-; SASL PLAIN password - set this only if it differs from
-; nickserv_password.  If empty, the bot falls back to nickserv_password.
+; SASL PLAIN password.  Currently INERT: the SASL handler always sends
+; nickserv_password, so a value set here is ignored rather than
+; preferred.  Registered in secret_store only.  Use nickserv_password
+; until that changes.  (docs/configuration.md, "Secret inventory".)
 sasl_password =
 
 ; PASS sent on connect, before NICK/USER.  Required by some bouncers.
