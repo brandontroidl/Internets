@@ -535,6 +535,35 @@ see. Verified against source.
 
 ---
 
+## 20. Twitch replies carry upstream data with no sanitization
+
+**Symbol:** `modules/twitch.py`
+
+The module imports `BotModule`, `fetch_json`, and `help_row` from `.base` and
+nothing else. It has no local sanitizer, so `display_name`, `game_name`, and
+`title` from the Twitch API are interpolated straight into bolded reply lines.
+
+Every other module that echoes upstream text passes it through
+`modules/base.py - strip_ctrl()` or a local equivalent. Control bytes in a
+hostile or compromised upstream response therefore reach IRC intact from this
+module, where the sender strips only CR, LF, and NUL. Colour and formatting
+codes survive, and so does anything that abuses them to forge the shape of a
+line.
+
+**Verified:** read the import line and the three interpolation sites.
+
+**Fix shape:** import `strip_ctrl` and apply it to every upstream-derived field,
+matching the convention the other modules already follow. The broader lesson is
+in `docs/output-conventions.md`: sanitization is opt-in, and nothing in the
+loader or the dispatcher enforces it.
+
+Related smaller output defects found in the same sweep, none of them security
+relevant: `modules/weather.py` uses U+03BC where `modules/physcalc.py` uses
+U+00B5 for the same unit prefix (identical glyph, unequal comparison), and
+`modules/remind.py` emits U+23F0, the only emoji in the bot's output.
+
+---
+
 ## Test gaps worth closing first
 
 Not defects, but the reason several of the above went unnoticed.

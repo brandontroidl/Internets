@@ -481,7 +481,7 @@ locations, channel state, and opt-out flags - restore the state files from the
 copy taken in step 2 rather than letting an older binary rewrite them. A
 rollback within the 4.0.0-to-current range does not change this behaviour. The
 data-side hazards in full are in
-[disaster-recovery.md](disaster-recovery.md#dr-rollback).
+[disaster-recovery.md](disaster-recovery.md#rollback-what-breaks-going-backwards).
 
 The audit log does not roll back. `audit_log.py - AuditLog.record()` appends to
 one chain that `AuditLog.verify()` walks from genesis, with no version-scoped
