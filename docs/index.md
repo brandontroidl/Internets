@@ -49,6 +49,7 @@ getting-started
 modules
 writing-modules
 providers
+writing-providers
 contributing
 ```
 

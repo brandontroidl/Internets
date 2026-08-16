@@ -467,3 +467,23 @@ index -> chain stops, prints "No pollen data" with openmeteo untried).
 REFINEMENT of my earlier UA finding: the two ini sections do diverge, but
 pollen.fetch() fails OPEN with a hardcoded non-identifying UA while
 weather.py fails CLOSED - not "sends an empty UA" as first recorded.
+
+SECURITY DEFECT (VERIFIED by orchestrator): botlog.py:217 logs
+"config.ini is world-readable - consider: chmod 640 config.ini" while
+secret_store.perms_ok() requires mode == 0o600 EXACTLY and fails closed.
+An operator who follows the bot's own printed advice makes [secrets]
+unreadable; the bot then runs keyless with one error line. Self-contradicting
+guidance between two subsystems. Pairs with the already-recorded 0400 finding
+(stricter modes also refused).
+
+Ledger precision fix (agent-verified): the architectural defect block says
+"11 of 13 capabilities". Correct form: CAPABILITY_METHODS has 14 entries and
+base.py has 13 result dataclasses; 11 of 13 result types lack is_empty(),
+covering 11 of 14 capabilities (current/forecast/hourly are covered).
+
+Agent-reported (providers rewrite): DEFAULT_RELIABILITY["air_quality"] ranks
+accuweather at 10 though AccuWeatherProvider defines no get_air_quality (inert,
+same class as the meteomatics/nowcast entry) - found by hasattr sweep over all
+32 provider classes; config.ini.example provider_priority lists 30 of 32 ids
+(pollendotcom and google_pollen absent) under a comment claiming to list all 32.
+Programmatic ground truth: 32 providers, 12 keyless / 20 keyed.

@@ -1,837 +1,601 @@
-# Internets Runtime Architecture
+# System Architecture
 
-Maintainer manual for the bot core: process structure, the `IRCBot` lifecycle, the
-line-parse/dispatch pipeline, the `Sender`, the module loader and its hot-reload
-limits, the `Store`, the process lock, and logging. Every claim here cites the file
-and line it came from. Read the code alongside it.
+How the bot is put together at the system level: what runs where, what crosses
+which boundary, and what is bounded by what. It is written for an engineer who
+has never seen this codebase and needs a correct mental model before touching
+anything.
 
-Files: `internets.py`, `sender.py`, `store.py`, `config.py`, `modules/base.py`,
-`process_lock.py`, `botlog.py`.
+This page stops at the boundary of each subsystem. Line-level behavior, per-symbol
+contracts, failure branches, and known defects per file live in the implementation
+reference under [internals/index](internals/index.md); every section below links
+down to the page that carries the detail rather than restating it.
 
----
-
-## 1. Process structure and the event loop
-
-One process, one asyncio event loop, plus a small number of OS threads.
-
-Entry is `_entry()` (`internets.py:1471`). It runs a drop-root guard (refuses to start
-as euid 0 unless `INTERNETS_ALLOW_ROOT=1`, `internets.py:1493`), acquires a
-`ProcessLock` on `./internets.pid`, and runs `asyncio.run(_main(lock))` inside the
-`with` block (`internets.py:1507-1509`). `LockHeld` aborts with exit 1
-(`internets.py:1515`). `KeyboardInterrupt` exits 130 (`internets.py:1514`).
-
-`_main()` (`internets.py:1355`) builds the `IRCBot`, optionally starts the Prometheus
-exporter when `[metrics] enable = true` (`internets.py:1363`), then creates up to two
-top-level tasks:
-
-- `console` - only when `--no-console` is unset AND stdin is an interactive TTY
-  (`internets.py:1382`; the TTY check is `console.should_skip_console()`). Skipping on a
-  non-TTY refuses admin-equivalent console access to whatever is piped in. That is a
-  security reason and it is the only one - there is no EOF spin loop to prevent, since
-  the dispatch loop returns on the first `EOFError` (`console.py:81-82`).
-- `bot` - `bot.run()` (`internets.py:1387`).
-
-`asyncio.wait(..., FIRST_COMPLETED)` (`internets.py:1389`) blocks until either exits.
-If the console exits first while the bot is still running, `_main` calls
-`bot.request_shutdown("Console exited")` and waits up to 10s for a graceful stop rather
-than cancelling the bot task (which would skip `graceful_shutdown`,
-`internets.py:1393-1402`).
-
-Console teardown gotcha: the console is parked in `input()` on a dedicated
-`threading.Thread(daemon=True)` (`console.py:144`), blocked on a `read(0)` syscall that
-cancelling the asyncio task does not interrupt. It is deliberately NOT an
-`asyncio.to_thread` worker: such a worker is non-daemon and on the default executor, so
-`asyncio.run`'s `shutdown_default_executor()` would wait forever for it. `_main` closes
-`sys.stdin` (`internets.py:1422`) to unblock the read, and the thread being a daemon
-guarantees cleanup completes even if it does not return. Full reasoning in section 10.2.
-
-After all tasks drain, if `bot._restart_flag` is set, `_main` flushes and closes log
-handlers, releases the process lock, and re-execs: `os.execv` on POSIX, a
-`subprocess.Popen` self-relaunch on Windows (`internets.py:1437-1468`). The lock is
-released BEFORE `execv` because `execv` preserves the PID; leaving the lockfile in place
-would make the new image see its own old PID as a live holder and refuse to start
-(`internets.py:1444-1454`).
-
-### Threads
-
-- Event-loop thread: all protocol processing, dispatch, sending, signal callbacks.
-- `store-flush` daemon thread: periodic disk writes (`store.py:141`).
-- to_thread workers: module handlers offload blocking I/O (HTTP via `requests`, disk,
-  password hashing) with `asyncio.to_thread` (`modules/base.py:206`). These run on the
-  default executor, off the loop.
-- `console-input` daemon thread: parked in `input()` (`console.py:144`). Explicitly a
-  raw `threading.Thread(daemon=True)`, **not** an `asyncio.to_thread` worker - see
-  section 10.2 for why that distinction is load-bearing rather than stylistic.
-
-Cross-thread mutation is guarded by explicit locks (`threading.Lock`), not by relying on
-the GIL, so the design holds under free-threaded / GIL-disabled Python. Locks:
-`_mod_lock`, `_auth_lock` (guards `_authed` AND `_nick_hosts`), `_chanops_lock`
-(`internets.py:244-246`); the three `Store` dataset locks; the `RateLimiter` lock; the
-`Sender._seq_lk`.
+Citations are symbol-primary (`file.py - Class.method()`). The source is
+authoritative; if this page and the code disagree, the code wins and the page is
+a defect.
 
 ---
 
-## 2. IRCBot lifecycle
+## 1. Component map
 
-### Construction (`internets.py:232`)
+One process. Thirteen root modules, two packages, no service dependencies beyond
+the IRC server and whatever HTTP endpoints the loaded modules call.
 
-`__init__` wires the `Store` from `[bot]` file paths (`internets.py:238`), the
-`RateLimiter(FLOOD_CD, API_CD)` (`internets.py:244`), loads the shadow-ban set from
-`shadow_bans.json` (`internets.py:257`), and zeroes the metrics dict (reconnects,
-dropped_messages, command_timeouts, oversized_lines, sasl_failures, unexpected_errors -
-`internets.py:277`). `_loop`, `_sender`, `_reader`, `_writer`, `_stop` are created later
-in `run()`.
-
-ISUPPORT-derived state starts from the module-level defaults
-`_DEFAULT_CHANMODE_TYPES` / `_DEFAULT_PREFIX_MODES` (`internets.py:153-157`), copied in
-the constructor (`internets.py:257-258`). They live at module level because `_connect`
-re-seeds them too (`internets.py:754-755`): the tables are per-connection facts, and a
-reconnect can land on a different server. A well-formed `005` replaces them; a malformed
-token does not (section 9.3).
-
-### `run()` (`internets.py:1121`)
-
-1. Captures the running loop and creates `self._stop = asyncio.Event()`
-   (`internets.py:1122-1123`).
-2. POSIX signal handlers (`internets.py:1127-1137`): `SIGTERM`/`SIGINT` ->
-   `_on_signal`; `SIGHUP` -> `_on_sighup`. On Windows the loop signal API is
-   unsupported, so it relies on `KeyboardInterrupt` + the console
-   (`internets.py:1138-1141`).
-3. `autoload_modules()` (`internets.py:1143`) loads each name in `[bot] autoload`.
-4. Initial connect loop with jittered backoff (`internets.py:1147-1163`): retries
-   `_connect()` until success or `_stop`, sleeping on `_stop.wait()` so a shutdown during
-   backoff breaks out immediately.
-5. Registration + read loop (`internets.py:1168-1309`).
-6. `await self.graceful_shutdown()` on exit (`internets.py:1310`).
-
-### `_connect()` (`internets.py:700`)
-
-Reads `[irc] ssl` (default true) and `ssl_verify` (default true). Records
-`self._tls_active` for the credential-send guard (`internets.py:704`; see
-`_tls_or_refuse`, `internets.py:682`). TLS context defaults to TLS 1.3 minimum;
-`INTERNETS_ALLOW_TLS12=1` lowers it to 1.2 with a loud warning
-(`internets.py:717-724`). `ssl_verify=false` disables hostname + cert checks and warns
-on every connect (`internets.py:725-738`).
-
-The socket is `asyncio.open_connection(SERVER, PORT, ssl=ssl_ctx, limit=self._READ_LIMIT)`
-(`internets.py:742`). `_READ_LIMIT = 8192` (`internets.py:175`) is the inbound stream
-buffer cap. A server line longer than this triggers `readline()` to raise (handled as an
-oversized line, see below) - it is the inbound counterpart to the `Sender`'s outbound
-`MAX_QUEUE`, and the two are unrelated bounds.
-
-`_connect` resets per-connection state, sets `_last_pong = time.monotonic()` for the
-keepalive clock (`internets.py:748`), clears `_chanops`, stops any old `Sender`, and
-creates a fresh `Sender(self._loop, on_drop=self._bump_dropped_metric)` then `.start`s it
-on the new writer (`internets.py:756-758`). The `on_drop` callback is what makes the
-shutdown summary's `dropped=` count real rather than always zero
-(`internets.py:293-301`).
-
-### Registration and the read loop (`internets.py:1168`)
-
-On first pass (`registered` false): optionally `PASS` (gated on TLS), then `CAP LS 302`,
-`NICK`, `USER` (`internets.py:1171-1177`). All at priority 0.
-
-The read loop does NOT block naively on `readline()`. It races two tasks with
-`asyncio.wait(FIRST_COMPLETED)` (`internets.py:1184-1192`):
-
-- `read_task` = `asyncio.wait_for(self._reader.readline(), timeout=self._READ_TIMEOUT)`
-  (`_READ_TIMEOUT = 300`, `internets.py:176`).
-- `stop_task` = `self._stop.wait()`.
-
-This makes `.shutdown` / SIGINT react immediately instead of waiting up to ~5 minutes for
-the next server line (`internets.py:1178-1183`). If `_stop` won, the read task is
-cancelled/drained and the loop breaks (`internets.py:1197-1207`).
-
-Read outcomes:
-- Read timeout -> raised as `ConnectionResetError("Read timeout ...")`
-  (`internets.py:1210`), routing into the reconnect handler.
-- Oversized line -> `ValueError`/`LimitOverrunError`: increments `oversized_lines`,
-  drains to the next newline so the truncated tail is not parsed as a spurious line, and
-  `continue`s (`internets.py:1213-1226`).
-- Empty bytes -> `ConnectionResetError("Server closed connection")`
-  (`internets.py:1227`).
-- Otherwise decode (`errors="replace"`), strip CRLF, skip blank, log (AUTH lines
-  redacted, `internets.py:1230-1232`), and call `self._process(line)`.
-
-MOTD gate: on the first `376`/`422` (`_RE_MOTD`, `internets.py:1234`) the bot ends CAP if
-still busy, applies `user_modes`, falls back to NickServ `IDENTIFY` if SASL did not
-already identify (`internets.py:1239-1241`), sends `OPER` if configured, and starts the
-`keepalive` and `rejoin` background tasks (`internets.py:1244-1245`). The `identified`
-flag makes this fire once per connection.
-
-### Reconnect (`internets.py:1247`)
-
-Catches `ConnectionResetError`, `ConnectionAbortedError`, `BrokenPipeError`,
-`ssl.SSLError`, `OSError`. If `_stop` is set, breaks instead of reconnecting
-(`internets.py:1248`). Otherwise: increments `reconnects`, computes whether the failure is
-permanent (SASL hard-failed AND >=3 SASL failures AND no NickServ fallback,
-`internets.py:1260-1262`), cancels and clears all background tasks, stops the sender,
-clears `_authed` and `_nick_hosts` under `_auth_lock` (`internets.py:1267-1272`), and
-resets `identified/registered`. A permanent failure logs CRITICAL and breaks
-(`internets.py:1274-1277`); otherwise an inner loop retries `_connect()` with jittered
-backoff until success or `_stop` (`internets.py:1279-1296`).
-
-Backoff: `_backoff(attempt)` is `min(15 * 2**attempt, 300)` (`internets.py:109-115`);
-`_backoff_jittered` adds +/-25% equal jitter via `random.SystemRandom`
-(`internets.py:124-134`). So 15s, 30s, 60s, 120s, 240s, then capped at 300s, each spread
-by jitter to avoid a thundering herd. `attempt` resets to 0 on every successful connect.
-
-`asyncio.CancelledError` breaks the loop cooperatively (`internets.py:1297`). Any other
-exception increments `unexpected_errors`, logs with traceback, and sleeps
-`_UNEXPECTED_SLEEP_S` (5s) on `_stop.wait()` before retrying (`internets.py:1301-1309`).
-
-### Keepalive (`internets.py:764`)
-
-Every `_PING_INTERVAL` (90s) it checks `time.monotonic() - self._last_pong`. If that
-exceeds `_PONG_TIMEOUT` (240s) the link is presumed half-open: it closes the writer to
-force a reconnect now and returns (the read loop sees the dead transport,
-`internets.py:771-780`). Otherwise it sends `PING :<server>` at priority 0. `_last_pong`
-is refreshed by inbound PONG handling in `_process` (`internets.py:843-846`).
-
-### Graceful shutdown (`internets.py:523`)
-
-Ordered, each step guarded so one failure does not abort the rest:
-
-1. Save channel list to disk first (`internets.py:526`).
-2. Unload all modules so they flush their own state (`internets.py:529-533`).
-3. `self._store.stop()` - stops the flush thread and forces a final write
-   (`internets.py:536`).
-4. Enqueue the QUIT at priority 0 (bypasses the token bucket, `internets.py:542`).
-5. `await asyncio.sleep(_SHUTDOWN_DRAIN_S)` (2.0s) to let the sender drain the QUIT
-   (`internets.py:545`).
-6. Stop the sender (`internets.py:548`).
-7. Close the socket (`internets.py:552-557`).
-8. Cancel remaining background tasks and gather them (`internets.py:559-563`).
-9. Stop the metrics server if running (`internets.py:565-570`).
-10. Log the metrics summary and flush all log handlers (important before `execv`, which
-    skips atexit handlers, `internets.py:571-581`).
-
-### Signals and the use-time prefix read
-
-`request_shutdown` (`internets.py:511`) is idempotent and thread-safe: first reason wins,
-sets `_quit_msg`, and `call_soon_threadsafe(self._stop.set)`. The `_shutdown_initiated`
-guard stops a second SIGINT during a clean shutdown from rewriting the QUIT message.
-
-`_on_signal` (`internets.py:1312`) ignores a repeat signal once shutdown is in flight and
-otherwise calls `request_shutdown`.
-
-`_on_sighup` (`internets.py:1327`) is rehash. It calls `config.reload_config()` (which
-re-reads BOTH `config.ini` and `config.local.ini` in order, `config.py:43-64`) and then
-clears admin sessions defensively. It deliberately does NOT reload the import-time
-credential constants `NS_PW`/`OPER_PW`/`SERVER_PW` - a live credential reload is out of
-scope, and the log says so (`internets.py:1337-1350`).
-
-Because config values that are read at USE time DO pick up a rehash, `_cmd_prefix()`
-(`internets.py:585`) reads `cfg["bot"]["command_prefix"]` live on every dispatch instead
-of using the frozen import-time `CMD_PREFIX`. Without this, a `command_prefix` change via
-rehash would take effect for modules (which read `cfg` live) but leave the core dispatch
-frozen on the old prefix. It falls back to `CMD_PREFIX` only if the key is absent.
-
----
-
-## 3. Line parse and dispatch pipeline
-
-### `_process(line)` (`internets.py:828`)
-
-1. `strip_tags(line)` FIRST (`internets.py:835`) - strips an IRCv3 `@tag` block so the
-   PING/PONG and every later regex still match on a server-time-tagged line. A tagged PING
-   left unanswered would ping-timeout the link.
-2. PING -> reflect `PONG :<payload[:400]>` at priority 0 and return
-   (`internets.py:836-840`).
-3. PONG (command at token 0 or 1) -> `_last_pong = monotonic()` and return
-   (`internets.py:843-846`).
-4. Shadow-ban prefix filter (`internets.py:853-863`): if the source nick is shadow-banned,
-   set `skip_module_fanout` so modules' `on_raw` never sees the line (the banned user is
-   invisible to `.seen`/`.tell`/etc). A malformed prefix falls through (logged at debug) so
-   modules still see the line.
-5. Module `on_raw` fanout over a snapshot of loaded modules, unless skipped; each call is
-   try-wrapped so one module cannot break the pipeline (`internets.py:864-868`).
-6. `_handle_cap` / `_handle_numeric` / `_handle_membership` / `_handle_privmsg`, first
-   match wins (`internets.py:869-872`).
-
-`_handle_cap` (`internets.py:874`) drives CAP LS/ACK/NAK/NEW, SASL PLAIN (`AUTHENTICATE`,
-903 success, 902/904/905 failure), and CAP END fallbacks. SASL uses the runtime `_nick`,
-not the startup constant, so a 433-bumped nick authenticates as its real session identity
-(`internets.py:896-900`). 904/905 set `_sasl_failed_permanently` (`internets.py:916`).
-
-`_handle_numeric` (`internets.py:929`) handles 433 nick-collision (append `_`, then a
-random suffix once the length budget is hit, `internets.py:930-933`), 005 ISUPPORT
-(`CHANMODES`/`PREFIX` reparse), 473 invite-only (ask services for INVITE), join-error
-numerics (discard the channel from the saved set), OPER 381/491, NickServ 900/NOTICE
-identify confirmation, 353 NAMES op-tracking, and channel MODE op changes. Op state lives
-in `_chanops` under `_chanops_lock`.
-
-`_handle_membership` (`internets.py:1002`) maps CHGHOST/ACCOUNT/INVITE/JOIN/PART/KICK/
-QUIT/NICK to store updates and `_chanops`/`_nick_hosts` maintenance. Identity-change
-security: QUIT and NICK both DROP any admin session bound to the old nick rather than
-migrating it, so a nick-takeover cannot inherit an authed session
-(`internets.py:1060-1064`, `internets.py:1074-1080`).
-
-### `_handle_privmsg(line)` (`internets.py:1087`)
-
-Parses `:nick!user@host PRIVMSG target :text`. Updates `_nick_hosts[nick]` under
-`_auth_lock` (`internets.py:1093`) - this is the live hostmask that admin auth is checked
-against. CTCP (`\x01`) is ignored (`internets.py:1095`). `is_pm` is `target == self._nick`;
-`reply_to` is the nick in PM else the channel.
-
-Command extraction (`internets.py:1100-1112`): if the text starts with the live prefix,
-the first token is the command. In PM ONLY, a bare leading token that matches a known
-command also dispatches (so `weather 10001` works in PM without the `.`). The valid-command
-set is `_CORE | _commands` under `_mod_lock`. Auth/deauth args are redacted in the log
-(`internets.py:1114`). Only known commands reach `_dispatch`.
-
-### `_dispatch(...)` (`internets.py:597`)
-
-Gates, in order:
-
-1. Shadow-banned nick -> silent drop. No reply, no rate-limit consumption, no audit entry;
-   the banned user cannot distinguish ignored from offline (`internets.py:603-605`).
-2. `auth`/`deauth` outside PM -> told to use PM, abort (`internets.py:606-607`).
-3. `flood_limited(nick)` -> NOTICE "slow down", abort. Admins bypass this gate (the
-   `is_admin` flag passes through to `RateLimiter.flood_check`, `internets.py:372`).
-4. Channel-flood gate for non-PM: `channel_limited(reply_to)` catches coordinated floods
-   across many distinct nicks that the per-nick limit cannot see. Silent (log only) so the
-   bot does not spam the channel about throttling (`internets.py:613-617`).
-5. Arg length > `_MAX_ARG_LEN` (400) -> NOTICE, abort (`internets.py:618`).
-6. `_active_cmd_tasks >= _MAX_TASKS` (50) -> NOTICE "bot is busy", abort. This is an O(1)
-   counter check, not an O(n) scan of `_tasks` (`internets.py:623-627`).
-7. Resolve handler: `_CORE` (built-in admin/meta commands) first, else `_commands` under
-   `_mod_lock` (`internets.py:629-636`).
-8. If resolved: increment `_active_cmd_tasks` and stats, bump the Prometheus
-   `commands_total`, create an `asyncio.Task` running `_run_cmd`, append to `_tasks`, and
-   register a done-callback that decrements the counter and removes the task
-   (`internets.py:637-657`).
-
-Every command runs as its own task; the bot does not await handlers inline.
-
-### `_run_cmd(...)` (`internets.py:659`)
-
-Wraps the handler in `asyncio.wait_for(..., timeout=self._CMD_TIMEOUT)` (60s) so a wedged
-handler cannot permanently hold one of the 50 task slots and eventually starve every
-command including admin ones (`internets.py:663-666`). `TimeoutError` -> increment
-`command_timeouts`, NOTICE the user (`internets.py:667-671`). `CancelledError` is
-re-raised (it is shutdown, not a timeout, `internets.py:672`). Any other exception ->
-increment `unexpected_errors`, log with traceback, send a GENERIC error notice (no stack
-trace or internal state to IRC, `internets.py:675-678`).
-
----
-
-## 4. Sender (`sender.py`)
-
-An async drain loop over an `asyncio.PriorityQueue` with token-bucket rate limiting.
-
-### Queue and priorities
-
-`PriorityQueue(maxsize=MAX_QUEUE)` with `MAX_QUEUE = 200` (`sender.py:44`,`49`). Items are
-`(priority, seq, msg)` (`sender.py:140`). `priority` 0 is protocol traffic (PONG, CAP,
-NICK, QUIT) and bypasses the token bucket; priority 1 is normal output (PRIVMSG, NOTICE,
-JOIN) and is rate-limited. `seq` is a monotonic counter guarded by `_seq_lk`
-(`sender.py:137-139`) that makes the heap a stable FIFO within a priority and keeps the
-non-comparable `msg` string out of the heap comparison.
-
-`enqueue()` is thread-safe (`sender.py:135`): modules call it from to_thread workers, so
-it never touches the queue directly - it `call_soon_threadsafe(self._safe_put, item)` to
-hop onto the loop thread (`sender.py:141`).
-
-### `_safe_put` and overflow (`sender.py:91`)
-
-On the loop thread, tries `put_nowait`. On `QueueFull`:
-
-- Priority 0 MUST NOT be dropped (losing a PONG causes a ping-timeout disconnect and a
-  reconnect storm worse than the overflow). It reaches into the heap (`_q._queue`), finds
-  the worst (highest priority/seq) entry, evicts it, re-heapifies, counts the eviction as a
-  drop, and inserts the priority-0 item (`sender.py:105-126`). If eviction somehow fails it
-  logs loudly and never silently drops the priority-0 message (`sender.py:127-130`).
-- Priority >0 is dropped with a warning and counted (`sender.py:131-133`).
-
-### Drop accounting (`sender.py:77`)
-
-`_drop()` bumps the Prometheus `dropped_messages_total` AND, if the bot wired one, calls
-the `on_drop` callback. The bot passes `_bump_dropped_metric` (`internets.py:757`) so its
-in-process `dropped_messages` counter - the honest source for the shutdown summary - is
-real. The callback runs on the loop thread inside `_drop` and is exception-guarded so a
-counter bump can never break sending (`sender.py:85-89`).
-
-### Drain loop and token bucket (`sender.py:206`)
-
-`CAPACITY = 5` burst, `REFILL = 1.5s` per token (~40 msg/min sustained, `sender.py:42-43`).
-The loop `await`s `self._q.get()` with a 0.25s timeout; on timeout it replenishes tokens
-even while idle and loops (`sender.py:212-219`). For each dequeued item it replenishes,
-then for priority >0 it spins (`asyncio.sleep(0.05)`) until a token is available and
-consumes one; priority 0 skips the wait entirely (`sender.py:225-232`). Then `_write_line`
-+ `await writer.drain()` (`sender.py:234-241`).
-
-### `_write_line` (`sender.py:181`)
-
-Transport hardening on every outgoing line: strips embedded CR/LF/NUL (protocol-injection
-defense, `sender.py:184`), enforces the 512-byte RFC 2812 line limit reserving 2 for CRLF
-and trimming on a UTF-8 boundary (`sender.py:186-192`), and redacts credentials from the
-log by matching `_REDACT_OUT` prefixes (`PASS`, `OPER`, the NickServ/ChanServ IDENTIFY and
-REGISTER spellings, `NS IDENTIFY`, `AUTHENTICATE`, ...) case-insensitively
-(`sender.py:148-176`,`193-198`). The wire still carries the real value; only the log line
-is redacted. `_write_line` only buffers; the `drain()` in the loop flushes to the OS.
-
-`start()` replaces the queue and resets `_seq` (`sender.py:59-65`); `stop()` cancels the
-drain task and awaits it (`sender.py:67`).
-
----
-
-## 5. Module loader and hot-reload
-
-### Load / unload / reload
-
-`load_module(name)` (`internets.py:448`), all under `_mod_lock`:
-
-1. Validate the name against `^[a-z][a-z0-9_]*$` (`internets.py:450`).
-2. Reject if already loaded (`internets.py:452`).
-3. Require `modules/<name>.py` to exist (`internets.py:455`).
-4. Symlink/escape guard: `path.resolve().relative_to(MODULES_DIR.resolve())` - blocks a
-   module path that escapes the modules directory (`internets.py:458-460`).
-5. `spec_from_file_location("modules.<name>", path)` + `module_from_spec` +
-   `spec.loader.exec_module(mod)` (`internets.py:462-464`). Require `setup`, call
-   `mod.setup(self)` to build the `BotModule` instance.
-6. Command-conflict check: reject if any command in `inst.COMMANDS` is already owned by a
-   different module (`internets.py:468-470`).
-7. `on_load()`, register the instance and its commands into `_modules`/`_commands`
-   (`internets.py:471-474`).
-
-`unload_module` (`internets.py:483`) calls `on_unload()`, removes the module's commands and
-the instance. `reload_module` (`internets.py:500`) is unload-then-load. `cmd_reloadall`
-(`admin_cmds.py:504`) snapshots the loaded names and reloads each.
-
-The `BotModule.COMMANDS` contract is validated at class-definition time
-(`__init_subclass__`, `modules/base.py:220`): each mapped method must exist and be an
-`async def`, turning a typo or a sync handler into a startup `TypeError` instead of a
-runtime failure when a user first runs the command.
-
-### The hot-reload gotcha (read before editing helpers)
-
-`exec_module` is used deliberately INSTEAD of `importlib.reload`, and the new module object
-is never inserted into `sys.modules`. So each load/reload re-executes the command file
-fresh from disk - edits to `modules/weather.py` ARE picked up by `.reload weather`.
-
-The asymmetry: command modules import shared helpers with normal relative imports, e.g.
-`from .geocode import geocode` in `modules/weather.py:21` and `modules/location.py:5`. That
-import goes through the standard import machinery, which DOES cache `modules.geocode` in
-`sys.modules`. Re-executing `weather.py` re-runs its `from .geocode import geocode`, but
-the machinery finds the already-cached `modules.geocode` and rebinds to it without
-re-reading `geocode.py` from disk.
-
-Consequence: `.reload weather` and `.reloadall` refresh the COMMAND modules but NOT helper
-modules like `geocode` or `units`. An edit to `modules/geocode.py` is invisible until a
-full process restart. Use `.restart` (`admin_cmds.py:520`), which sets `_restart_flag` and
-requests shutdown; `_main` then `execv`s a brand-new interpreter (`internets.py:1437-1468`)
-with an empty `sys.modules`, so every file is re-read.
-
----
-
-## 6. Store (`store.py`)
-
-In-memory state with a periodic background flush. Three independent datasets - locations,
-channels, users - each with its own lock so a weather location read never blocks behind a
-user-tracking write (`store.py:127-129`).
-
-### Construction and load
-
-`__init__` (`store.py:118`) floors `user_max_age` at 1 day (a 0/negative value would make
-the prune cutoff `== now` and wipe every tracked user plus their opt-out flags on the first
-flush, `store.py:124-125`), `_read`s each file once, and starts the `store-flush` daemon
-thread (`store.py:141-143`).
-
-### Schema, checksum, quarantine
-
-Two on-disk shapes (`store.py:42-52`):
-- v1 (legacy): the bare payload.
-- v2 (current): `{"schema": 2, "checksum": "<sha256>", "data": <payload>}`.
-
-`_read` (`store.py:149`): rejects files over `_MAX_FILE_SIZE` (10 MB, `store.py:147`), JSON-
-loads, then `_unwrap` (`store.py:83`). `_unwrap` validates a v2 envelope's SHA-256 over the
-canonical JSON of `data` and raises `_StoreRejected` on a wrong schema, missing checksum, or
-mismatch; a v1 bare payload is returned unchanged and re-wrapped on the next flush. `_read`
-also rejects a payload whose type differs from the expected default (a list where a dict was
-expected, or vice versa - `store.py:164-166`).
-
-On ANY load failure (`OSError`, JSON error, `_StoreRejected`) the file is NOT silently reset
-to empty. `_quarantine` (`store.py:176`) renames it to `<name>.corrupt.<unixts>` and the
-dataset starts from the default. This is the key durability invariant: a corrupt or
-truncated file is preserved for manual recovery instead of being overwritten by the next
-flush, which would otherwise lose saved locations, channel-rejoin state, and privacy opt-out
-flags.
-
-### Atomic write with .bak (`store.py:191`)
-
-`_write`: write a v2 envelope to a temp file in the same directory, `chmod 0600` BEFORE the
-rename (so the final file - which holds user ZIPs and nick/hostmask/timestamp PII - is never
-even momentarily world-readable, POSIX only, `store.py:204-213`), copy the current good file
-to `<path>.bak` as a one-deep backup, then `os.replace(tmp, path)` (atomic on POSIX). The
-temp file is cleaned up on any failure path (`store.py:226-231`).
-
-### Flush loop and pruning
-
-`_flush_loop` (`store.py:238`) is `self._stop.wait(timeout=_FLUSH_INTERVAL)` (30s) then
-`flush()`. A flush exception is logged and swallowed so the persistence thread never dies and
-silently stops all future saves (`store.py:242-247`). `flush()` (`store.py:249`) writes only
-dirty datasets, each under its own lock; the users write runs `_prune_users` first
-(`store.py:259-263`). `stop()` (`store.py:265`) sets the event and does one final flush.
-
-`_prune_users` (`store.py:272`) removes user entries whose `last_seen` is older than
-`user_max_age`, EXCEPT records with `opted_out` true - an opt-out is a privacy preference that
-must outlive the inactivity window, or the bot would silently resume tracking a user who asked
-it not to (`store.py:283-288`). Empty channel dicts are removed.
-
-### User tracking and opt-out
-
-`user_join` records nick/hostmask/first_seen/last_seen and seeds `opted_out=False`
-(`store.py:345`). `user_part`/`user_quit`/`user_rename` stamp `last_seen` and re-key on a nick
-change (`store.py:363-414`). `user_purge` (`store.py:381`) hard-deletes every record of a nick
-across all channels for the `.forgetme` privacy command. `set_opt_out` (`store.py:427`) flips
-the flag on every tracked record and, if the nick is untracked, creates a sentinel entry in a
-synthetic `"*"` channel so the preference survives a restart before the user next speaks.
-
-### RateLimiter (`store.py:464`)
-
-Lives in `store.py` and backs the dispatch gates. Three windows, all under one lock: per-nick
-`flood_check` (default 3s, admins bypass), per-nick `api_check` (default 10s, throttles the
-geocode/weather API paths), and per-channel `channel_check` (sliding window, default 20
-commands per 10s) that catches coordinated multi-nick floods. Cooldowns are floored at 1s so a
-0/negative config value cannot silently disable the limiter (`store.py:489-490`). When a
-channel is over budget it refuses WITHOUT recording the new attempt, so an attacker cannot keep
-the window pinned full by spamming after the limit hits (`store.py:554-559`).
-
----
-
-## 7. Process lock (`process_lock.py`)
-
-Single-instance guard so two bots never race on the JSON state files and corrupt them. The
-lockfile stores `pid|start_time|hostname` (`process_lock.py:209`).
-
-`acquire()` (`process_lock.py:142`) resolves the path against the CURRENT cwd (resolution is
-deferred from `__init__` to `acquire`, `process_lock.py:131-138`), then if a lockfile exists
-decides staleness:
-
-- Same host: `_pid_is_alive` via `os.kill(pid, 0)` - alive raises nothing, dead raises
-  `ProcessLookupError`/ESRCH; `PermissionError` is treated as live (conservative,
-  `process_lock.py:61-81`).
-- Different host: cannot probe it, so refuse conservatively (`process_lock.py:161-165`). The
-  operator deletes the file by hand if sure.
-- Live -> raise `LockHeld`. Dead -> remove and continue. Unknown (Windows without `psutil`) ->
-  fail open with a warning. Corrupt/unreadable -> remove and continue
-  (`process_lock.py:166-193`).
-
-Creation is atomic via `os.open(..., O_CREAT | O_EXCL | O_WRONLY)`; losing the race raises
-`LockHeld` (`process_lock.py:195-206`). `release()` (`process_lock.py:220`) re-reads the file
-and only unlinks if the recorded PID is still ours, so it never deletes another instance's lock.
-
-Restart interaction (see Section 1): `execv` preserves the PID, so `_main` releases the lock
-before re-exec; otherwise the new image would see its own preserved PID as a live holder and
-`LockHeld`.
-
----
-
-## 8. Logging (`botlog.py`)
-
-The `internets` root logger is configured at import time (`botlog.py:112`), set to DEBUG with
-all handlers cleared and rebuilt. Per-subsystem child loggers (`internets.conn`,
-`internets.dispatch`, `internets.modules`, `internets.signal`, `internets.shutdown`,
-`internets.sasl`, etc., `internets.py:71-76`) inherit from it and give operators per-subsystem
-debug control.
-
-Handlers (`botlog.py:121-140`): a `RotatingFileHandler` on `LOG_FILE` (max_bytes default 5 MB,
-backup_count default 3), a `StreamHandler` to stdout, and - only if `[logging] debug_file` or
-`--debug-file` is set - a second rotating handler capturing everything at DEBUG regardless of
-the base level.
-
-`_SafeFormatter` (`botlog.py:28`) strips C0 controls (except TAB), DEL, and C1 controls from
-`record.msg` and `record.args` on a COPY of the record, defending against log injection via
-user-controlled `%s` interpolation. Tracebacks survive because they render into `exc_text`
-later, not into `msg`/`args`.
-
-`DebugFilter` (`botlog.py:64`) is attached to the file and console handlers and passes a record
-if its level >= `base_level`, OR `global_debug` is on, OR its logger name matches an enabled
-subsystem. `.loglevel`/`.debug` (and the console equivalents) drive it through `apply_loglevel`
-/`apply_debug` (`botlog.py:237-303`).
-
-Startup validation at import (`botlog.py:180-229`):
-- `_validate_hash`: an empty `password_hash` is NOT fatal (auth is disabled with a warning,
-  intentional for first run); a non-empty hash with an unrecognized algorithm prefix is
-  fail-closed via `sys.exit(1)`, because an unknown prefix would make `verify_password` raise on
-  every auth attempt and silently disable admin commands.
-- A world-readable `config.ini` triggers a chmod warning (POSIX, `botlog.py:213-219`).
-- `user_modes`/`oper_modes`/`oper_snomask` are validated against `^[a-zA-Z+\- ]*$`; an invalid
-  value is fail-closed via `sys.exit(1)` (`botlog.py:221-227`).
-
-Log-flush discipline: handlers are flushed in `graceful_shutdown` (`internets.py:579-581`) and
-again before `execv` in `_main` (`internets.py:1433-1436`,`1416-1418`), because `execv` replaces
-the process image without running atexit handlers - unflushed log records would be lost across a
-restart.
-
-## 9. Protocol helpers (`protocol.py`)
-
-Pure functions over strings. No bot state, no I/O, no logging, no imports beyond
-`base64` and `re`. Extracted from `internets.py` so the bot class holds
-orchestration and state while parsing stays independently testable
-(`tests/test_protocol.py`, plus the protocol block in `tests/run_tests.py`).
-
-The read loop decodes with `errors="replace"` (`internets.py:1228`), so every
-string reaching these functions is already valid UTF-8 with U+FFFD substituted
-for undecodable bytes. That is what lets the wire-facing parsers be written
-without defensive decoding.
-
-### 9.1 The five wire-facing parsers are total
-
-`strip_tags`, `parse_isupport_chanmodes`, `parse_isupport_prefix`,
-`parse_mode_changes` and `parse_names_entry` return a value for any `str`. They
-do not raise, do not log, and have no error branch to test. A hostile or
-truncated line from the server degrades to an empty or partial result rather
-than an exception, so a malformed line cannot take the read loop down.
-
-`sasl_plain_payload` (`protocol.py:122-125`) is the exception and is not
-wire-facing: it encodes with `.encode("utf-8")` (`protocol.py:124`), which
-raises `UnicodeEncodeError` on any surrogate codepoint. Its inputs are
-`self._nick` and the configured NickServ password (`internets.py:900`), not
-server output, and the `errors="replace"` decode above means a surrogate cannot
-arrive from the wire in the first place.
-
-### 9.2 Where the parsers sit in the pipeline
-
-`_process` (`internets.py:834`) calls `strip_tags` first (`internets.py:835`),
-then dispatches in a fixed order:
-
-| step | line | effect |
+| Source | Owns | Detail |
 |---|---|---|
-| `strip_tags` | 834 | IRCv3 tag prefix removed |
-| PING | 835-839 | replies PONG, **returns** |
-| PONG | 843-845 | marks link live, **returns** |
-| module `on_raw` fan-out | 866 | every loaded module sees the line |
-| `_handle_cap` / `_handle_numeric` / `_handle_membership` | 868-870 | first match **returns** |
-| `_handle_privmsg` | 871 | fallthrough |
+| `internets.py` | event loop, connection, dispatch, module loader, entry point | [internets](internals/internets.md) |
+| `admin_cmds.py` | the `_CORE` table and every `cmd_*` handler | [admin_cmds](internals/admin_cmds.md) |
+| `sender.py` | priority queue, token bucket, line serialization | [sender](internals/sender.md) |
+| `protocol.py` | pure IRC parsers, no state, no I/O | [protocol](internals/protocol.md) |
+| `console.py` | operator stdin REPL on a daemon thread | [console](internals/console.md) |
+| `config.py` | layered ini read, CLI args, frozen constants | [config](internals/config.md) |
+| `secret_store.py` | two-tier credential resolution, 0600 gate | [secret_store](internals/secret_store.md) |
+| `hashpw.py` | admin password hash and verify | [hashpw](internals/hashpw.md) |
+| `botlog.py` | handlers, per-subsystem debug, startup validation | [botlog](internals/botlog.md) |
+| `store.py` | three JSON datasets, flush thread, `RateLimiter` | [store](internals/store.md) |
+| `audit_log.py` | hash-chained privileged-action log | [audit_log](internals/audit_log.md) |
+| `process_lock.py` | PID lockfile with stale detection | [process_lock](internals/process_lock.md) |
+| `metrics.py` | metric registry and optional HTTP exporter | [metrics](internals/metrics.md) |
+| `modules/` | 70 command modules plus shared helpers | [modules](internals/modules/index.md) |
+| `weather_providers/` | 32 providers behind one dispatcher | [providers](internals/weather-providers/index.md) |
 
-Two consequences a module author needs:
+Guides that sit beside this one: [irc-protocol](irc-protocol.md) for the wire
+protocol, [state-and-persistence](state-and-persistence.md) for the on-disk
+formats, [security-model](security-model.md) for the threat model,
+[providers](providers.md) for the weather layer, [modules](modules.md) and
+[writing-modules](writing-modules.md) for the extension surface.
 
-- **Modules never receive PING or PONG lines.** Both branches return before the
-  fan-out at 866. Do not write an `on_raw` that expects to see keepalive
-  traffic.
-- A line consisting only of tags becomes `""` after `strip_tags`. It survives
-  the PING/PONG checks and still reaches every module's `on_raw`, so `on_raw`
-  implementations must tolerate an empty string.
+---
 
-### 9.3 ISUPPORT parsing and the caller's storage decision
+## 2. Process and execution model
 
-Both ISUPPORT parsers return `None` for a malformed token rather than a
-degraded result, so the caller can tell "this token is junk, keep what I have"
-apart from "this server genuinely advertises nothing".
+### 2.1 One loop, four kinds of thread
 
-`parse_isupport_chanmodes` splits `CHANMODES=A,B,C,D` into `{mode: type}`, and
-rejects any token with fewer than four comma-separated groups. Individual empty
-groups stay legal (`,k,,imnpst`); a fifth or later group is ignored.
+All protocol processing, dispatch, and sending happen on a single asyncio event
+loop. Threads exist only where a blocking call would otherwise stall it.
 
-The structural check matters more than an emptiness check would. A truncated
-`CHANMODES=beI` parses to a perfectly **non-empty** `{b:A, e:A, I:A}`, so an
-"is it empty?" guard would accept it and silently drop `k -> B` and `l -> C`.
-With `k` untyped, `parse_mode_changes` consumes no parameter for it, and
-`MODE #c +ko sekrit nick` shifts every following parameter - the channel key is
-recorded as the operator nick.
+| Thread | Created by | Daemon | Present when |
+|---|---|---|---|
+| event loop (main) | `internets.py - _entry()` via `asyncio.run` | n/a | always |
+| `store-flush` | `store.py - Store.__init__()` | yes | always |
+| `console-input` | `console.py - run_console()` | yes | stdin is a TTY and `--no-console` unset |
+| metrics exporter | `metrics.py - MetricRegistry.expose()` | yes | `[metrics] enable = true` |
+| `to_thread` workers | `asyncio.to_thread` in handlers | no | on demand, default executor |
 
-`parse_isupport_prefix` parses `PREFIX=(modes)symbols` with an anchored
-`re.match`, so any leading junk before `(` yields `None`. The symbol map is
-zipped to `min(len(modes), len(symbols))`, so a mismatched token truncates
-rather than raising. A well-formed `PREFIX=()` returns `(set(), {})` - a real
-"no membership prefixes" advertisement, which is exactly why the failure signal
-had to be `None` and not an empty result.
+The `to_thread` workers are the reason the shared state in section 6 is guarded by
+`threading.Lock` rather than `asyncio.Lock`: a synchronous worker cannot acquire an
+`asyncio.Lock`, and the design is intended to hold under free-threaded builds where
+the GIL cannot be relied on as an implicit lock.
 
-The caller replaces a table only on a well-formed token, and logs
-`event=isupport_malformed` otherwise:
+The `console-input` thread being a raw `threading.Thread(daemon=True)` rather than
+an `asyncio.to_thread` worker is load-bearing, not stylistic. A `to_thread` worker
+is non-daemon and lives on the default executor, so `asyncio.run`'s
+`loop.shutdown_default_executor()` waits forever for a worker parked in `input()`
+and the process hangs on its last log line. The rationale is recorded at the call
+site in `internets.py - _main()` and in `console.py`; see
+[ADR-008](design-decisions.md#adr-008-daemon-thread-for-the-interactive-console-not-asynciotothread).
 
-```python
-cm = self._RE_CHANMODES.search(line)
-if cm:
-    types = parse_isupport_chanmodes(cm.group(1))
-    if types is None:
-        log.warning("event=isupport_malformed token=CHANMODES ...")
-    else:
-        self._chanmode_types = types
+### 2.2 Offloading is a convention, not an enforcement
+
+Command handlers are coroutines. Anything blocking inside one - HTTP through
+`requests`, disk, password hashing - must be wrapped in `asyncio.to_thread`. One
+hundred call sites do this (95 in `modules/`, 5 in `admin_cmds.py`). Nothing in
+the loader or the dispatcher checks it.
+
+:::{warning}
+**Known defect: .isprime blocks the event loop.**
+
+`modules/mathx.py - MathxModule.cmd_isprime()` runs its primality test
+synchronously on the loop thread (the sibling `cmd_bignum` uses `to_thread`
+correctly). A composite that survives trial division falls into an unbounded
+Pollard rho, so a pasted 100-digit semiprime stalls the entire bot for every user.
+Verified; recorded in `RECONSTRUCTION-LEDGER.md`. The 60 s command timeout does
+not help: `asyncio.wait_for` cannot interrupt a synchronous call.
+:::
+
+### 2.3 Bounds
+
+Every resource an inbound line can consume is capped. These are class attributes on
+`internets.py - IRCBot` unless noted, so tests can assert them without an instance.
+
+| Bound | Value | Symbol | Guards against |
+|---|---|---|---|
+| concurrent command tasks | 50 | `IRCBot._MAX_TASKS` | task-slot exhaustion |
+| per-command wall time | 60 s | `IRCBot._CMD_TIMEOUT` | a wedged handler holding a slot |
+| command argument length | 400 | `IRCBot._MAX_ARG_LEN` | oversized handler input |
+| outbound body chunk | 400 bytes | `IRCBot._MAX_BODY` | line-limit overflow |
+| inbound stream buffer | 8192 bytes | `IRCBot._READ_LIMIT` | unbounded line buffering |
+| read inactivity | 300 s | `IRCBot._READ_TIMEOUT` | a silently dead link |
+| outbound queue depth | 200 | `sender.py - Sender.MAX_QUEUE` | OOM while disconnected |
+| outbound line | 512 bytes | `sender.py - Sender._MAX_IRC_LINE` | RFC 2812 violation |
+| state file read | 10 MB | `store.py - Store._MAX_FILE_SIZE` | startup memory exhaustion |
+| audit log size | 5 MiB | `audit_log.py - _MAX_BYTES` | unbounded growth (rotates) |
+| weather chain / call | 45 s / 30 s | `weather_providers/_dispatch.py` | chain outliving the 60 s timeout |
+
+Rate limiting is a separate layer, described in sections 4 and 5.
+
+---
+
+## 3. Startup
+
+`_entry()` is the `pyproject.toml` console-script entry point and the `__main__`
+guard. Importing `internets.py` transitively imports `config.py`, which reads
+`config.ini`, parses `sys.argv`, and can terminate the process before any of the
+below runs; see [config](internals/config.md) for that import-time contract.
+
+```{graphviz}
+digraph startup {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
+
+  imp   [label="import config / botlog\nini read, argv parse,\nfail-closed validation", shape=ellipse];
+  root  [label="_entry(): drop-root guard\neuid 0 refused unless\nINTERNETS_ALLOW_ROOT=1"];
+  lock  [label="ProcessLock('./internets.pid')\nacquire"];
+  run   [label="asyncio.run(_main(lock))"];
+  ctor  [label="IRCBot()\nStore + flush thread,\nRateLimiter, shadow-bans"];
+  met   [label="metrics registry\nexpose(host, port)", style=dashed];
+  con   [label="console task\n(TTY only)", style=dashed];
+  bot   [label="bot.run()"];
+  sig   [label="signal handlers\nSIGTERM/SIGINT/SIGHUP"];
+  load  [label="autoload_modules()"];
+  conn  [label="_connect()\nTLS ctx, open_connection,\nper-connection reset, new Sender"];
+  reg   [label="registration burst (priority 0)\nPASS? CAP LS 302 / NICK / USER"];
+  loop  [label="read loop\nreadline raced against _stop", shape=box, style=bold];
+  motd  [label="376/422 once:\nCAP END, user modes,\nNickServ, OPER,\nkeepalive + rejoin tasks"];
+
+  imp -> root -> lock -> run -> ctor;
+  ctor -> met [style=dashed];
+  ctor -> con [style=dashed];
+  ctor -> bot;
+  bot -> sig -> load -> conn -> reg -> loop -> motd;
+  conn -> conn [label="fail: jittered backoff\n15s..300s, +/-25%"];
+}
 ```
 
-This closes a defect where a present-but-malformed `PREFIX` stored an empty
-`_prefix_modes`, making `op_modes = {"o","a","q"} & self._prefix_modes` empty
-and silently ending all MODE-driven chanop tracking.
+Points that matter beyond the picture:
 
-The tables are **per-connection state**. `_connect` re-seeds both from
-`_DEFAULT_CHANMODE_TYPES` / `_DEFAULT_PREFIX_MODES` alongside its `_chanops`
-reset, because a reconnect can land on a different server (DNS round-robin,
-failover, an ircd upgrade) and the previous server's tables would otherwise
-govern parameter alignment until a new 005 arrived. Those defaults are defined
-once at module level precisely because they are needed in two places.
+- **Root refusal** is in `_entry()` before anything else, overridable only by
+  `INTERNETS_ALLOW_ROOT=1`, which logs a warning.
+- **The lock is acquired around the whole loop** and the instance is passed into
+  `_main()` so the restart path can release it early. See section 9.
+- **The console is gated twice**: `--no-console` and `console.py -
+  should_skip_console()` (stdin must be an interactive TTY). The console is an
+  unauthenticated admin surface, so a non-TTY stdin must never reach it.
+- **The initial connect loop is interruptible**: it sleeps on `self._stop.wait()`,
+  not `asyncio.sleep`, so shutdown during backoff breaks out at once.
+- **The MOTD gate fires once per connection**, keyed on the `identified` flag in
+  `IRCBot.run()`. Credential sends inside it are each gated by
+  `IRCBot._tls_or_refuse()`.
 
-The symbol map from `parse_isupport_prefix` is still discarded at the call site
-(bound to `_`). Only the mode set is kept, and it is used on the MODE path. The
-NAMES path does not consult it - see 9.5.
+:::{warning}
+**Known defect: multiline CAP LS 302.**
 
-### 9.4 `parse_mode_changes`: parameter alignment
+`IRCBot.run()` sends `CAP LS 302`, which invites the server to split its
+capability list across several lines, but `IRCBot._handle_cap()` and `_RE_CAP`
+treat the `*` continuation marker as a capability token, leave a leading colon on
+the first real capability, and answer each line independently. A server whose
+list does not fit one line can therefore get a premature `CAP REQ` or `CAP END`.
+Verified by regex probe; see the findings in
+[internals/internets](internals/internets.md#findings).
+:::
 
-`parse_mode_changes` (`protocol.py:71-106`) turns a MODE string into
-`[(adding, mode_char, param)]`. Getting this wrong desynchronises every
-following parameter, which is why the ISUPPORT types are parsed at all.
+---
 
-Three behaviours worth knowing:
+## 4. Inbound path
 
-- **`adding` defaults to `True`** (`protocol.py:83`), so a mode string with no
-  leading sign is treated as additive. The caller's regex requires a leading
-  `+`/`-`, so this is unreachable from the wire but matters if you call the
-  function directly.
-- **`prefix_modes` is consulted before `chanmode_types`** (`protocol.py:97` vs
-  `:83`). A mode char in both tables is unconditionally treated as
-  parameter-taking, whatever its declared ISUPPORT type.
-- **Argument exhaustion is sticky.** `take_param` increments `arg_idx` even when
-  `args` is already exhausted (`protocol.py:88-89`), so once the parameters run
-  out every subsequent parameter-taking mode also gets `None`. The index is
-  never rewound.
+One synchronous pass per server line, then a task per recognized command. Because
+`IRCBot._process()` is synchronous, all protocol state updates (nick tracking,
+session revocation, chanop changes) complete before the next line is read. Command
+handlers give no ordering guarantee among themselves, by design: they may block on
+network I/O for up to 60 s.
 
-At the call site the result is filtered hard: only `{"o","a","q"}` intersected
-with the advertised prefix modes (`internets.py:989`), and only changes carrying
-a truthy parameter (`internets.py:997`), drive `_chanops`. Halfop and voice are
-parsed and then discarded.
+```{graphviz}
+digraph inbound {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
 
-### 9.5 `parse_names_entry` and its hardcoded prefix set
+  rd   [label="readline (limit 8192, timeout 300s)\nraced against _stop.wait()", shape=ellipse];
+  ovs  [label="oversized:\ncount, drain to \\n, skip", shape=note, style=dashed];
+  dec  [label="decode utf-8 errors=replace\nstrip CRLF, log << (redacted)"];
+  tags [label="strip_tags()\nIRCv3 @tags removed FIRST"];
+  ping [label="PING -> PONG :payload[:400]\npriority 0, return", shape=note];
+  pong [label="PONG -> _last_pong = monotonic\nreturn", shape=note];
+  sb   [label="prefix nick shadow-banned?\nskip module fan-out"];
+  fan  [label="module on_raw fan-out\n(snapshot under _mod_lock,\nper-module try/except)"];
+  hnd  [label="_handle_cap / _handle_numeric /\n_handle_membership\nfirst match returns"];
+  pm   [label="_handle_privmsg\nrecord hostmask, CTCP drop,\nextract command word"];
+  disp [label="_dispatch: gate chain", shape=box, style=bold];
+  task [label="_run_cmd task\nwait_for(handler, 60s)"];
+  mod  [label="module handler\n-> bot.reply/privmsg"];
 
-`parse_names_entry` (`protocol.py:109-119`) strips the literal set `~&@%+`
-(`protocol.py:114`) and reports op status for `~`, `&`, `@` only
-(`protocol.py:118`) - halfop and voice are not chanops. An entry that is
-entirely prefix characters returns `(entry, False)` rather than an empty nick
-(`protocol.py:115-116`).
-
-That set is a literal, not the PREFIX symbol map the bot already parsed and
-threw away. On a network advertising a prefix symbol outside `~&@%+`, `lstrip`
-leaves the symbol attached and the returned "nick" carries it into `_chanops`
-(`internets.py:984-985`). This is the one place the discarded symbol map would
-have earned its keep.
-
-### 9.6 Gotchas
-
-- **A malformed ISUPPORT token no longer wipes a mode table** (fixed; see 9.3).
-  It is now refused and logged as `event=isupport_malformed`. If chanop state
-  looks wrong on one network, grep the log for that event first.
-- **NAMES only ever adds ops.** `internets.py:982` uses
-  `setdefault(chan, set())` and never clears the channel's set first, so a NAMES
-  refresh on an already-joined channel cannot remove someone deopped in the
-  interim. Removal happens through MODE (`internets.py:997`), PART/KICK
-  bookkeeping, or `_on_part` dropping the channel entirely.
-- **The MODE branch is channel-only.** `internets.py:988` requires the target to
-  start with `#`, `&`, `+` or `!`, so a user-MODE line is not parsed here.
-- Adding a parser here means adding it to `tests/test_protocol.py`. These
-  functions are pure, so they are the cheapest thing in the repo to test
-  exhaustively, and the read loop's resilience depends on them staying total.
-
-## 10. Interactive console (`console.py`)
-
-An optional stdin REPL for the operator at the terminal running the bot. Enabled
-by default when stdin is a TTY, suppressed by `--no-console` or automatically
-when stdin is not interactive (`internets.py:1382-1387`).
-
-### 10.1 The console is an unauthenticated admin surface
-
-`run_console` logs a deliberate warning on entry (`console.py:121-126`): the
-console grants admin-equivalent capability - `debug`, `loglevel`, `status`,
-`shutdown` - with **no authentication at all**. There is no password prompt and
-no `is_admin` check anywhere in this module, because the trust boundary is
-physical access to the process's stdin, not an IRC identity.
-
-That is why `should_skip_console` (`console.py:42-58`) exists and why it fails
-safe: it returns `True` when `sys.stdin.isatty()` is false (`console.py:56`), and
-also on `AttributeError`/`ValueError` - no stdin at all, or already closed
-(`console.py:57-58`). Under systemd, in a container without `-it`, or with stdin
-redirected from a file, whatever bytes arrive on stdin would otherwise be
-executed with that capability.
-
-`_print_status` also discloses live auth state: it prints the currently
-authenticated admin nicks to stdout (`console.py:162-164`).
-
-### 10.2 Why a daemon thread and not `asyncio.to_thread`
-
-This is the load-bearing design decision in the module, documented at
-`console.py:109-117`. It is restated here because the obvious "cleanup" reverts
-it and reintroduces a hang that is tedious to diagnose.
-
-`input()` parks its thread on a blocking read that nothing short of process death
-interrupts. An `asyncio.to_thread` worker runs on the default executor and is
-**not** a daemon, so `asyncio.run()`'s cleanup calls
-`loop.shutdown_default_executor()` and waits forever for that input-blocked
-worker to return. The observed symptom of the older design was the whole process
-hanging on the last shutdown log line until the operator hit Ctrl-C.
-
-So the thread is created explicitly:
-
-```python
-t = threading.Thread(target=_wrap, daemon=True, name="console-input")  # console.py:144
+  rd -> ovs [style=dashed, label="ValueError"];
+  rd -> dec -> tags;
+  tags -> ping; tags -> pong;
+  tags -> sb -> fan -> hnd -> pm -> disp -> task -> mod;
+}
 ```
 
-A daemon thread cannot hold up interpreter shutdown, so cleanup completes even if
-it never returns. Do not convert this to `asyncio.to_thread`.
+### 4.1 The dispatch gate chain
 
-### 10.3 Crossing back into the event loop
+`IRCBot._dispatch()` applies gates in a fixed order. The order is the policy.
 
-`run_console` creates an `asyncio.Event` and awaits it (`console.py:129`,
-`:147`); the worker sets it through `loop.call_soon_threadsafe(done.set)` inside
-a `finally` (`console.py:136-142`). That call is wrapped in
-`try/except RuntimeError` because the loop may already be closed during a
-shutdown race.
+| # | Gate | On refusal |
+|---|---|---|
+| 1 | shadow-banned nick | silent drop, no rate-limit spend, no audit |
+| 2 | `auth`/`deauth` outside PM | told to use PM |
+| 3 | per-nick flood (`RateLimiter.flood_check`, admins bypass) | NOTICE "slow down" |
+| 4 | per-channel burst (`RateLimiter.channel_check`) | silent, log only |
+| 5 | argument longer than `_MAX_ARG_LEN` | NOTICE "input too long" |
+| 6 | `_active_cmd_tasks >= _MAX_TASKS` | NOTICE "bot is busy" |
+| 7 | handler resolution: `_CORE` first, then `_commands` | nothing runs |
 
-`_wrap` also catches every exception out of the dispatch loop and logs it
-(`console.py:134-135`). A crash therefore does not propagate: `done` is still set
-by the `finally`, the console silently disappears, and `_main` treats the
-completed task as "console exited" (`internets.py:1393-1402`).
+Gate 1 is silent so a shadow-banned user cannot distinguish being ignored from the
+bot being offline. Gate 4 is silent because a throttle notice would itself add to
+the flood. Gate 6 is an O(1) counter check, not a scan of the task list.
 
-The three dispatched actions are safe to call from off-loop, each for its own
-reason (`console.py:66-73`): `apply_debug`/`apply_loglevel` mutate logger state,
-`_print_status` reads bot fields through their lock-guarded accessors
-(`console.py:159`, `:162`), and `bot.request_shutdown` uses
-`loop.call_soon_threadsafe` internally.
+Only after gate 7 does the bot increment the counter, bump the Prometheus
+`commands_total`, and create the `cmd-<name>` task. A done-callback decrements the
+counter and removes the task from `_tasks`.
 
-### 10.4 Command surface and parsing
+`IRCBot._run_cmd()` is the only place a handler exception can surface. It maps
+`TimeoutError` to a per-command notice, re-raises `CancelledError` (shutdown must
+propagate), and turns anything else into a counted, logged traceback plus a generic
+notice. No exception text and no internal state reach IRC.
 
-| command | effect |
-|---|---|
-| `help` | prints `_CONSOLE_HELP` (`console.py:87-88`) |
-| `debug [subsystem ...]` | `apply_debug` (`console.py:89-90`) |
-| `loglevel ...` | `apply_loglevel`, prints the returned error if any (`console.py:91-93`) |
-| `status` | `_print_status` (`console.py:94-95`) |
-| `shutdown` / `quit` | requests shutdown and returns (`console.py:96-100`) |
-| anything else | `Unknown command: ... - type 'help' for commands.` (`console.py:101-102`) |
+### 4.2 Command recognition
 
-Blank lines are skipped (`console.py:83-84`). The loop exits on `EOFError`
-(Ctrl-D), `KeyboardInterrupt` (Ctrl-C) or `ValueError` (stdin closed mid-read)
-(`console.py:81-82`), and on `shutdown`/`quit`. A bare `shutdown` with no
-argument uses the reason `"Console shutdown"` (`console.py:97`).
+`IRCBot._handle_privmsg()` builds the valid-command set as `_CORE | _commands`
+under `_mod_lock`. In a channel the text must start with the live prefix from
+`IRCBot._cmd_prefix()`; in PM a bare first token that matches a known command also
+dispatches, so `weather 10001` works without the prefix. `_cmd_prefix()` reads
+`cfg["bot"]["command_prefix"]` at use time rather than the frozen import-time
+constant, so a rehash changes the prefix for the core and for modules together.
 
-**Only the command word is lowercased** (`console.py:86`); arguments keep their
-case. `cmd_debug` on the IRC side lowercases the entire argument string
-(`admin_cmds.py:988`), so `debug WEATHER` at the console and `.debug WEATHER`
-over IRC do not register the same subsystem. The console form preserves
-`WEATHER`, which matches no real logger name, so it prints a confirmation and
-changes nothing. Use lowercase subsystem names at the console.
+Deeper detail: [internals/internets](internals/internets.md) for the handlers,
+[internals/protocol](internals/protocol.md) for the parsers and why every
+wire-facing one is total, [irc-protocol](irc-protocol.md) for the wire view.
 
-`help` is dispatched (`console.py:87`) but is not listed in `_CONSOLE_HELP`'s own
-output.
+---
 
-### 10.5 Shutdown interaction
+## 5. Outbound pipeline
 
-`_main` closes stdin and then cancels pending tasks (`internets.py:1422`,
-`:1402-1403`). Nothing is awaited between those two statements, so the event loop
-cannot deliver `done.set()` before the cancellation is applied. `run_console` -
-parked at `await done.wait()` (`console.py:147`) - therefore normally receives
-`CancelledError` and re-raises it (`console.py:148-151`). That is the expected
-path, not an error path, and there is nothing to clean up precisely because the
-dispatch thread is `daemon=True`.
+Nothing except `sender.py - Sender` touches the `StreamWriter`. Flood control
+therefore exists in exactly one place.
 
-A console `shutdown` command takes the other route: `request_shutdown` sets the
-stop event on the loop, `_main` proceeds with graceful shutdown, and the console
-task is cancelled as part of it.
+```{graphviz}
+digraph outbound {
+  rankdir=LR;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [fontname="Helvetica", fontsize=9];
 
-### 10.6 Testing status
+  src  [label="IRCBot.send()\nprivmsg / notice / reply\n(any thread)", shape=ellipse];
+  spl  [label="_split_msg()\n400-byte UTF-8-safe chunks"];
+  enq  [label="Sender.enqueue()\nseq under _seq_lk,\ncall_soon_threadsafe"];
+  put  [label="_safe_put()\n(loop thread only)"];
+  q    [label="PriorityQueue\n(priority, seq, msg)\nmaxsize 200", shape=cylinder];
+  drop [label="overflow:\npri>0 dropped;\npri 0 evicts worst entry", shape=note, style=dashed];
+  drn  [label="_drain()\ntoken bucket:\n5 burst, 1 per 1.5s\npri 0 bypasses"];
+  wl   [label="_write_line()\nstrip CR/LF/NUL,\ncap 510 bytes + CRLF,\nredact log only"];
+  w    [label="writer.write + drain", shape=ellipse];
 
-There is no `tests/test_console.py`, and `console.py` is listed in the coverage
-`omit` set on the grounds that it needs a live loop and a TTY to exercise
-(`pyproject.toml`). It is integration-tested by running the bot, not unit-tested.
-Treat changes here as unguarded by the suite: the failure mode this module exists
-to avoid - a hung shutdown - is exactly the kind that a green test run will not
-catch.
+  src -> spl -> enq -> put -> q -> drn -> wl -> w;
+  put -> drop [style=dashed];
+}
+```
+
+- **Priority 0** is protocol traffic (PONG, CAP, NICK, PASS, AUTHENTICATE, QUIT,
+  keepalive PING). It bypasses the token bucket and, on a full queue, evicts the
+  worst-ranked existing entry rather than being dropped. Losing a PONG causes a
+  ping timeout and a reconnect storm, which is strictly worse than losing a chat
+  line.
+- **Priority 1** is everything user-visible and is rate-limited to a 5-line burst
+  then roughly one line per 1.5 s.
+- **`seq`** is a monotonic counter under `Sender._seq_lk`. It makes the heap a
+  stable FIFO within a priority and keeps the non-comparable message string out of
+  the tuple comparison.
+- **Redaction is log-only.** `sender.py - redact_secrets()` masks the argument
+  after a credential verb in the `>>` debug line; the wire carries the real value.
+  The same function is reused inbound by `internets.py - _redact_inbound()`, scoped
+  to the PRIVMSG/NOTICE trailing text so an `ident@host` prefix cannot false-match.
+
+Drop accounting is double-entry: `Sender._drop()` bumps the Prometheus counter and
+calls the bot's `on_drop` callback, which is what makes the shutdown summary's
+`dropped=` figure real rather than always zero.
+
+Detail, including the eviction algorithm and the known overstatement in its
+docstring: [internals/sender](internals/sender.md).
+
+---
+
+## 6. Concurrency model
+
+### 6.1 Every lock in the process
+
+| Lock | Guards | Owner | Taken from |
+|---|---|---|---|
+| `ChannelSet._lock` | joined-channel set | `internets.py` | loop and workers |
+| `IRCBot._mod_lock` | `_modules`, `_commands` | `internets.py` | loop and workers |
+| `IRCBot._auth_lock` | `_authed`, `_auth_fails`, `_nick_hosts` | `internets.py` | loop and workers |
+| `IRCBot._chanops_lock` | `_chanops` | `internets.py` | loop and workers |
+| `Sender._seq_lk` | outbound sequence counter | `sender.py` | any producer thread |
+| `Store._loc_lock` | saved locations dataset | `store.py` | loop, workers, flush thread |
+| `Store._chan_lock` | channel-rejoin dataset | `store.py` | loop, workers, flush thread |
+| `Store._user_lock` | user-tracking dataset | `store.py` | loop, workers, flush thread |
+| `RateLimiter._lock` | flood, API, channel windows | `store.py` | loop and workers |
+| `AuditLog._lock` | chain tip, key, append, verify | `audit_log.py` | loop and `to_thread` |
+| `audit_log._default_lock` | singleton construction | `audit_log.py` | first caller |
+| `_Metric._lock` | one metric's samples | `metrics.py` | any |
+| `MetricRegistry._lock` | registry contents | `metrics.py` | any |
+| `_quota_lock` | per-provider daily counters | `weather_providers/__init__.py` | loop and workers |
+| `ProviderHealth._lock` | EMA scores, breaker state | `weather_providers/_health.py` | loop |
+| `_session_lock` (asyncio) | cached aiohttp session | `weather_providers/_http.py` | loop only |
+
+Module-local locks exist as well and guard only that module's own state:
+`modules/channels.py`, `modules/seen.py`, `modules/remind.py`, `modules/tell.py`,
+`modules/notes.py`, `modules/steam.py`, `modules/twitch.py`, `modules/ipintel.py`,
+and `modules/geocode.py`.
+
+Two properties hold across the set. No method takes two dataset locks, so the three
+`Store` locks cannot deadlock against each other. Every lock is a `threading.Lock`
+except the aiohttp session lock, which is loop-only by construction.
+
+### 6.2 Cross-thread signalling
+
+There are exactly two paths from a foreign thread into the loop, both explicit:
+`IRCBot.request_shutdown()` and `Sender.enqueue()` each use
+`loop.call_soon_threadsafe`. `request_shutdown()` is idempotent, first reason wins,
+so a second SIGINT during a clean shutdown cannot rewrite the QUIT message.
+
+Known-benign looseness: `IRCBot.send()` increments a statistics counter on whatever
+thread called it. A lost increment skews a display counter and nothing else.
+
+---
+
+## 7. Extension boundaries
+
+### 7.1 Module system
+
+A module is a file in `modules/` exposing `setup(bot) -> BotModule`. The loader,
+`internets.py - IRCBot.load_module()`, runs entirely under `_mod_lock` and applies
+five gates before anything executes: name must match `^[a-z][a-z0-9_]*$`, the
+module must not already be loaded, the file must exist, its resolved path must stay
+inside `MODULES_DIR` (which also defeats a symlink out of the tree), and the
+instance's `COMMANDS` must not collide with a command owned by another module.
+
+The load itself is `spec_from_file_location` plus `module_from_spec` plus
+`exec_module`. **No `sys.modules` entry is created for the loaded module.** That is
+the whole reload story:
+
+- `.reload weather` re-executes `modules/weather.py` fresh from disk, so source
+  edits take effect without `importlib.reload` and without stale bytecode.
+- Nothing module-internal survives: globals, caches, and class objects are all new.
+  Cancelling background tasks in `on_unload()` is the module author's job.
+- Imports made *by* the module (`from modules.base import ...`, third-party
+  libraries, sibling helpers like `modules/geocode.py`) go through the normal
+  import machinery and *are* cached in `sys.modules`. Editing a helper needs
+  `.restart`, not `.reload`.
+
+The developer-facing contract - handler signature, `COMMANDS` validation at
+class-definition time, the `on_load` / `on_unload` / `on_raw` / `forget` hooks, and
+the bot accessors modules may use - is in
+[internals/modules/base](internals/modules/base.md) and
+[writing-modules](writing-modules.md).
+
+Loading a module is arbitrary code execution by design. Only admins can invoke
+`.load`, and the autoload list comes from the operator's config file.
+
+:::{danger}
+**Known defect: API keys published to the channel.**
+
+`modules/stocks.py - _try_providers()` builds its "all providers failed" reply by
+joining `f"{name}: {e}"` for every provider and returns it to the user. urllib3
+transport errors embed the full request URL including `token=` and `apikey=`
+query parameters, so a network outage while keys are configured publishes every
+finance API key to the channel.
+`sender.py - redact_secrets()` is log-only and does not scrub PRIVMSG bodies.
+Verified empirically and reproduced; see `RECONSTRUCTION-LEDGER.md`.
+:::
+
+### 7.2 Weather provider layer
+
+`weather_providers/` is the one subsystem with its own internal architecture. Its
+boundary to the rest of the bot is narrow: `modules/weather.py` calls
+`weather_providers.configure(cfg)` on load and then one `get_*` coroutine per
+command. Everything else is internal.
+
+| Layer | File | Responsibility |
+|---|---|---|
+| facade | `__init__.py` | 32 factories, `configure()`, `get_*` wrappers, quota counters |
+| routing | `_dispatch.py` | capability discovery, ordering, fallback chain, gap-fill |
+| health | `_health.py` | EMA scoring and the per-provider circuit breaker |
+| transport | `_http.py` | size-capped async JSON fetch, `HTTPError` contract |
+| shapes | `base.py` | frozen result dataclasses and the provider protocol |
+
+Four properties define the boundary:
+
+- **Capabilities are discovered, not declared.** A provider opts into a capability
+  by defining the method named in `_dispatch.py - CAPABILITY_METHODS`.
+- **Ordering is accuracy-dominant.** `Dispatcher.sort_chain()` keys on
+  `(static reliability rank, -health score, registration order)`. Live health
+  breaks ties among equally-ranked providers; it never promotes a less accurate
+  provider over a more accurate healthy one.
+- **The chain is serial, not a fan-out.** One upstream request per attempt keeps
+  quota use and rate-limit exposure minimal, under a 45 s chain budget and a 30 s
+  per-call cap that fit inside the 60 s command timeout.
+- **No data is not failure.** A provider that does not cover a point returns
+  `None`, which falls through with no health record at all. Only exceptions reach
+  `record_failure()`. Without this, non-US queries would trip the NWS breaker and
+  degrade US alerts.
+
+Cross-provider merging is deliberately narrow, and only for current conditions:
+missing secondary fields are filled from later providers, temperature never is, and
+derived fields are recomputed from the primary observation. See
+[ADR-010](design-decisions.md#adr-010-single-source-weather-rule) and
+[providers](providers.md).
+
+---
+
+## 8. Persistence boundary
+
+Nothing in this system uses a database. State is a small set of files in the
+process working directory, each owned by exactly one component.
+
+| Artifact | Owner | Shape | Written |
+|---|---|---|---|
+| `locations.json` | `store.py - Store` | v2 envelope, nick to location | dirty flush, 30 s |
+| `channels.json` | `store.py - Store` | v2 envelope, sorted channel list | dirty flush, 30 s |
+| `users.json` | `store.py - Store` | v2 envelope, per-channel tracking (PII) | dirty flush, 30 s |
+| `shadow_bans.json` | `internets.py - IRCBot` | bans plus reasons, 0600 | on mutation |
+| `audit.log` + `.key` | `audit_log.py - AuditLog` | JSON lines, hash-chained, 0600 | per privileged action |
+| `internets.pid` | `process_lock.py` | `pid\|start_time\|hostname` | acquire and release |
+| `config.ini` | operator, `secret_store.py` | ini, must be exactly 0600 | operator or CLI only |
+| `internets.log` | `botlog.py` | rotating text | continuously |
+| module state | individual modules | per-module JSON | per module |
+
+Three invariants hold across the `Store` datasets:
+
+1. **Integrity is checked, not assumed.** Each file is a v2 envelope
+   (`{"schema": 2, "checksum": ..., "data": ...}`) whose SHA-256 is taken over
+   canonical JSON, so key ordering cannot change it.
+2. **A bad file is quarantined, never overwritten.** Any read failure renames the
+   file to `<name>.corrupt.<unix-ts>` and starts from the default, so the next
+   flush cannot destroy the only copy of saved locations, rejoin state, and privacy
+   opt-out flags.
+3. **Writes are atomic.** Write to a temp file in the same directory, `chmod 0600`
+   before the rename so the final file is never momentarily world-readable, copy
+   the current good file to `<path>.bak`, then `os.replace`.
+
+Crash exposure is up to 30 s of unflushed mutation. There is no `fsync` before the
+rename, so a power loss can still lose the newest version; the envelope plus
+quarantine plus `.bak` turn that into a detected, recoverable event rather than
+silent corruption.
+
+:::{warning}
+**Known defects in the persistence path.**
+
+- `store.py - Store._write()` creates `<path>.bak` with `Path.write_bytes` and
+  never chmods it, so on first creation it takes umask-default permissions
+  (commonly 0644). The PII in `users.json` that the 0600-before-replace sequence
+  protects is world-readable in `users.json.bak`.
+- `modules/health.py` reads `_dirty_locations` / `_dirty_channels`, but the fields
+  are `_dirty_locs` / `_dirty_chans`, so `.health` permanently reports `?` for two
+  datasets while looking wired.
+- `audit_log.py - AuditLog.verify()` dispatches the hash scheme on each record's
+  own `v` field, so records rewritten without `v` verify under unkeyed SHA-256 at
+  any chain position. A writer to `audit.log` can rewrite the chain from any point
+  and `verify()` still reports it intact, reducing tamper evidence to the
+  pre-3.0.0 scheme. All three are recorded in `RECONSTRUCTION-LEDGER.md`.
+:::
+
+Full formats, retention rules, and recovery procedures:
+[state-and-persistence](state-and-persistence.md),
+[internals/store](internals/store.md), [internals/audit_log](internals/audit_log.md).
+
+---
+
+## 9. Shutdown and restart
+
+`IRCBot.graceful_shutdown()` runs eight ordered steps, each in its own try/except
+so one failure cannot abort the rest. The ordering is load-bearing: channels are
+persisted before anything else can fail, and the QUIT is enqueued before the sender
+stops.
+
+1. Save the channel list.
+2. Unload every module, giving each its chance to flush.
+3. `Store.stop()`: stop the flush thread, force a final write.
+4. Enqueue QUIT at priority 0, then sleep `_SHUTDOWN_DRAIN_S` (2 s) so the sender
+   drains it. This is a fixed window, not a drain-to-empty.
+5. Stop the sender.
+6. Close the socket.
+7. Cancel and gather remaining tasks; stop the metrics server.
+8. Log the metrics summary and flush every log handler.
+
+Step 8 is explicit because `os.execv` replaces the process image without running
+atexit handlers, so unflushed records would be lost across a restart.
+
+`.restart` sets `_restart_flag` and requests shutdown. Back in `_main()`, after the
+task drain, the flag triggers: close log handlers, **release the process lock**,
+then `os.execv` on POSIX or a `subprocess.Popen` self-relaunch plus `sys.exit(0)`
+on Windows. The lock release is not optional. `execv` preserves the PID, so a
+lockfile left on disk would make the new image probe its own live PID and refuse
+to start.
+
+Restart is also the only way to pick up an edit to a helper module, `modules/base.py`,
+or any third-party library, for the `sys.modules` reason in section 7.1.
+
+`SIGHUP` is rehash, not restart. `IRCBot._on_sighup()` calls
+`config.reload_config()`, which re-reads `config.ini` and `config.local.ini`
+together (re-reading only the template would clobber overlay values), then clears
+admin sessions defensively. It deliberately does not refresh the import-time
+credential constants `NS_PW` / `OPER_PW` / `SERVER_PW`.
+
+---
+
+## 10. Trust boundaries
+
+Six boundaries, in the order an attacker meets them.
+
+**Network to process.** Every byte from the IRC server is untrusted. It is bounded
+by `_READ_LIMIT`, decoded with `errors="replace"` so no parser needs defensive
+decoding, and handed to parsers in `protocol.py` that are total: they return a
+value for any string and never raise, so a hostile or truncated line degrades to a
+partial result instead of killing the read loop. Malformed ISUPPORT tokens return
+`None` so the caller keeps its existing table rather than adopting a degraded one.
+
+**Unauthenticated user to command.** Gates 1 to 6 of the dispatch chain in section
+4.1 run before any handler, so flood control, argument bounds, and the task cap
+apply to unauthenticated traffic. Failed-auth auditing is offloaded to a thread
+precisely because that path is reachable by unauthenticated users under flood.
+
+**User to admin.** `IRCBot.is_admin()` is fail-closed: it grants only when the
+nick's current hostmask is known, is not the `"unknown"` sentinel, and equals the
+hostmask bound at authentication time. A changed binding actively revokes. Sessions
+are also revoked on QUIT, on NICK change (never migrated, so a nick takeover cannot
+inherit a session), on disconnect, and on SIGHUP. Brute force is bounded by the
+lockout in `admin_cmds.py - AdminCommandsMixin.cmd_auth()`.
+
+**Process to network (credentials).** Every credential send is gated by
+`IRCBot._tls_or_refuse()`, which logs CRITICAL and suppresses the send on a
+plaintext link. TLS 1.3 is the floor unless `INTERNETS_ALLOW_TLS12=1`. Credential
+values are redacted from logs in both directions but are never altered on the wire.
+
+**Process to third-party HTTP.** Two enforcement points for one policy: no outbound
+fetch may buffer an unbounded body. `modules/base.py - fetch_json()` caps module
+fetches at 256 KiB by default; `weather_providers/_http.py - get_json()` caps
+weather fetches at 1 MiB. Neither validates its destination, which is safe only
+because those hosts are developer-chosen. A user-influenceable URL must go through
+`modules/_netsafe.py - safe_open()`, which pins DNS per-thread so urllib3 cannot
+re-resolve to an internal address between validation and connect, and re-validates
+every redirect hop. See
+[ADR-003](design-decisions.md#adr-003-thread-local-dns-pinning-for-ssrf-not-an-ip-literal-adapter).
+
+**Operator to process.** The console is admin-equivalent with no authentication at
+all: the trust boundary is physical access to the process's stdin, which is why it
+is refused on a non-TTY. Config and secrets are operator-trusted input; the only
+mechanical check is the permission gate on `config.ini`.
+
+:::{warning}
+**Known inconsistency: two different permission targets for config.ini.**
+
+`botlog.py` warns on a world-readable `config.ini` and advises
+`chmod 640 config.ini`, while `secret_store.py - perms_ok()` requires the mode to
+be **exactly** 0600 and fails closed otherwise. An operator following the log's own
+advice makes the `[secrets]` section unreadable, and the bot then runs keyless with
+only an error line to say so. Verified against both sources.
+:::
+
+The full threat model, including what is explicitly out of scope, is in
+[security-model](security-model.md).
+
+---
+
+## 11. Where to go next
+
+- Wire protocol, CAP/SASL negotiation, numerics: [irc-protocol](irc-protocol.md)
+- On-disk formats and recovery: [state-and-persistence](state-and-persistence.md)
+- Threat model and controls: [security-model](security-model.md)
+- Why the design is this shape: [design-decisions](design-decisions.md)
+- Per-file implementation detail and per-file findings:
+  [internals/index](internals/index.md)
