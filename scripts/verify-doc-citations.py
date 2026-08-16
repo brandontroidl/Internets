@@ -43,7 +43,8 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
 def doc_files() -> list[pathlib.Path]:
-    out = [REPO / n for n in ("README.md", "CONTRIBUTING.md", "SECURITY.md")]
+    out = [REPO / n for n in ("README.md", "CONTRIBUTING.md", "SECURITY.md",
+                              "PRIVACY.md")]
     out += sorted(p for p in (REPO / "docs").rglob("*.md")
                   if "_build" not in p.parts and "autoapi" not in p.parts)
     return [p for p in out if p.exists()]

@@ -35,8 +35,10 @@ class PrivacyModule(BotModule):
       do not.  Any legacy flag stored under the old ``__optout__:`` key
       scheme is migrated forward on first access.
 
-    All commands are PM-only - leaking another user's saved location or
-    hostmask into a public channel would itself be a privacy regression.
+    ``.forgetme`` and ``.privacy`` are PM-only via ``_require_pm``: leaking a
+    saved location or hostmask into a public channel would itself be a privacy
+    regression.  ``.optout`` and ``.optin`` are usable in channel because they
+    disclose nothing about the user; both answer by NOTICE to the invoker.
     """
 
     COMMANDS: dict[str, str] = {

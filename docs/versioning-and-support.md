@@ -66,7 +66,7 @@ rather than derived from one source:
 | `pyproject.toml` | `version = "5.0.0"` |
 | `config.py - __version__` | the runtime value, re-exported by `internets.py`, `botlog.py`, `admin_cmds.py`, `console.py` |
 | `docs/conf.py` | `release`, the truncated `version` (MAJOR.MINOR), and `html_title` |
-| Prose, guarded | `README.md` and five `docs/*.md` pages (below) |
+| Prose, guarded | `README.md` and four `docs/*.md` pages: `deployment`, `configuration`, `providers`, `security-model` |
 | Prose, unguarded | `config.ini.example`, `PRIVACY.md`, `docs/internals/config.md` |
 
 Three gates in `tests/run_tests.py` hold these together: `VERSION: __version__
