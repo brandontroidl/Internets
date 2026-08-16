@@ -347,6 +347,10 @@ Carried here so they are not lost. Each is confirmed against source.
   its environment override, but it is invisible to `secret_store list` and
   `migrate` will not relocate it. Its module docstring also still claims
   "encryption-at-rest"; storage is plaintext under 0600.
+- **`secret_store.py - _cmd_init()`** reports `len(text)` from a `str` as a byte
+  count, so `python -m secret_store init` announces roughly 13370 bytes for a
+  file that is 14296 bytes on disk (the template contains non-ASCII box-drawing
+  characters). Cosmetic.
 - **`config.ini.example`** omits sections the code reads: `[tell] file`,
   `[notes] file`, `[remind] file`, `[seen]`, `[bot] shadow_bans_file`, and the
   per-module sections `[imdb] [lastfm] [youtube] [stocks] [twitch] [search]
