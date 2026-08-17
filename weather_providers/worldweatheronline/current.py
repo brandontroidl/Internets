@@ -5,7 +5,7 @@ from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult
 # fix: _float was duplicated in every endpoint file - moved to _codes.
-from ._codes import deg_to_card, _float
+from ._codes import _float
 
 _B = "https://api.worldweatheronline.com/premium/v1"
 

@@ -18,7 +18,7 @@ MarineResult                  - wave height, swell, water temperature
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from math import asin, cos, exp, log, radians, sin, sqrt
+from math import asin, cos, log, radians, sin, sqrt
 from typing import Protocol, runtime_checkable
 
 

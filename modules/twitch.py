@@ -83,15 +83,6 @@ class _TwitchAPI:
         d = self.get("streams", {"first": str(limit)})
         return d.get("data", [])
 
-    def search_streams(self, game_name: str, limit: int = 5) -> list[dict]:
-        # Search categories first to get game_id
-        cats = self.get("search/categories", {"query": game_name, "first": "1"})
-        if not cats.get("data"):
-            return []
-        gid = cats["data"][0]["id"]
-        d = self.get("streams", {"game_id": gid, "first": str(limit)})
-        return d.get("data", [])
-
     def get_channel_info(self, broadcaster: str) -> dict | None:
         # Resolve login to user ID
         users = self.get("users", {"login": broadcaster})

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .._http import get_json
 from ..base import WeatherResult
-from ..base import deg_to_card, ms_to_kph
+from ..base import ms_to_kph
 
 _B = "https://api.weatherbit.io/v2.0"
 

@@ -4,8 +4,7 @@ import asyncio
 import html
 import logging
 import re
-from typing import Any
-from urllib.parse import quote_plus, unquote
+from urllib.parse import unquote
 
 import requests
 from .base import BotModule, fetch_json, help_row, strip_ctrl

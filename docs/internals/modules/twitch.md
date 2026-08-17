@@ -46,7 +46,8 @@ are split on `\n` and sent as separate `privmsg` calls.
 `search_channels()`, `get_streams()`, `get_channel_info()` (resolves login ->
 user id via `/users`, then `/channels`, and grafts the user object in as
 `ch["_user"]`), `search_games()` - all thin wrappers returning `data` lists.
-`search_streams()` (category -> game_id -> live streams) is defined but no
+game, which no command path ever reached. `.tw -g` is complete without it, using
+`_TwitchAPI.search_games()` to return category links.
 caller exists (see Findings).
 
 ## Configuration
@@ -81,7 +82,6 @@ check before the thread spawn.
   exposing the secret to intermediary/edge request-URL logging; Twitch's
   documented flow posts them in the body [unverified - current Twitch docs
   not re-checked from this session].
-- defect | twitch.py - `_TwitchAPI.search_streams()` | dead code - no caller
   anywhere in the module or repo (`_dispatch_sync` routes `-g` to
   `search_games`, not to game streams), so the category-to-live-streams
   feature it implements is unreachable.

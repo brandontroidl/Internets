@@ -6,7 +6,7 @@ Free, no API key.  US locations only.  Requires User-Agent header.
 from __future__ import annotations
 from ._scope import OutOfCoverage, nws_json as get_json
 from ..base import WeatherResult
-from ._codes import deg_to_card, ms_to_kph
+from ._codes import deg_to_card
 
 _HEADERS = {"User-Agent": "(Internets IRC Bot, github.com/brandontroidl/Internets)", "Accept": "application/geo+json"}
 

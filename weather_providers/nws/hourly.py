@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from ._scope import OutOfCoverage, nws_json as get_json
 from ..base import HourlyResult, HourlyEntry
-from ._codes import deg_to_card
 
 _HEADERS = {"User-Agent": "(Internets IRC Bot)", "Accept": "application/geo+json"}
 
