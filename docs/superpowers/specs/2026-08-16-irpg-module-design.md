@@ -53,7 +53,7 @@ Each phase lands independently, with tests, and leaves the bot working.
 
 | Phase | Delivers | Why this seam |
 | --- | --- | --- |
-| 1 | Async lifecycle: a cancellable module-owned task helper, and a disconnect and reconnect notification a module can observe | Every later phase depends on it; nothing game-specific, testable alone |
+| 1 | **Done.** Cancellable module-owned task registry, per-module command-task draining, and connect/disconnect notifications | Every later phase depends on it; nothing game-specific, testable alone |
 | 2 | Persistence: the normative player format, serialized versioned writes, quarantine, load-paused-on-corrupt | Expensive to change once real databases exist; no game logic needed to test it |
 | 3 | Narrow playable path: explicit login, single-channel presence, levelling, speech and membership penalties | First point anyone can play; proves phases 1 and 2 under real use before more is built on them |
 | 4 | Equipment and single-player events | Additive on a proven core |
@@ -340,12 +340,15 @@ Revision 1 said there were none. There are, and each blocks the phase named.
 
 Blocking, in phase order:
 
-1. **The disconnect and reconnect notification contract.** Blocks phase 1. A
-   module cannot currently observe that the bot lost its connection, and
-   presence is meaningless without it. Decide whether this is a new lifecycle
-   hook or something a module infers from `on_raw`.
-2. **Module-owned command task draining on unload.** Blocks phase 1. Drain, or
-   accept the guard fallback and specify it.
+1. ~~The disconnect and reconnect notification contract.~~ **RESOLVED,
+   phase 1 shipped.** `BotModule.on_connect()` and `on_disconnect()` are fanned
+   out by `IRCBot._notify_modules()` from the connect-ok path and the
+   connection-error branch. One module raising does not stop the others.
+2. ~~Module-owned command task draining on unload.~~ **RESOLVED, phase 1
+   shipped.** `IRCBot.create_module_task()` and `drain_module_tasks()` own
+   background tasks per module; `_dispatch()` registers a module's command
+   tasks the same way; `.unload`, `.reload` and `.reloadall` await the drain
+   before unloading. The guard fallback was not needed.
 3. **The persistence format.** Blocks phase 2. Needs a normative appendix and at
    least one real database file as a fixture. Without a real file,
    "interoperable" is an assertion, not a property.

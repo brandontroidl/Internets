@@ -288,6 +288,12 @@ class IRCBot(AdminCommandsMixin):
         self._quit_msg = "QUIT :Shutting down"
         self._restart_flag = False
         self._tasks: list[asyncio.Task] = []
+        # Background tasks owned by a loaded module, keyed by module name, so
+        # unloading can cancel and AWAIT them.  on_unload() is synchronous and
+        # cannot await, which is why the bot holds this rather than the module:
+        # a reload that starts a new clock before the old one has finished
+        # winding down leaves two running.
+        self._module_tasks: dict[str, set[asyncio.Task]] = {}
         self._last_invite_time: float = 0.0
         self._nick_hosts: dict[str, str] = {}
         # Counter of in-flight command tasks - O(1) check vs. scanning _tasks.
@@ -490,6 +496,10 @@ class IRCBot(AdminCommandsMixin):
                 if not hasattr(mod, "setup"):
                     return False, f"'{name}' has no setup()."
                 inst = mod.setup(self)
+                # Stamp the registry key so the module can own tasks and
+                # receive lifecycle hooks without knowing how it was loaded.
+                try: inst._module_name = name
+                except Exception: pass  # nosec B110: a module may use __slots__
                 dupes = [c for c in inst.COMMANDS if c in self._commands and self._commands[c][0] != name]
                 if dupes:
                     return False, f"'{name}' conflicts on: {', '.join(dupes)}"
@@ -505,12 +515,82 @@ class IRCBot(AdminCommandsMixin):
                 _LOG_MODULES.error("event=module_load_failed name=%s err=%s", name, e)
                 return False, f"Error loading '{name}' - see log for details."
 
+    def create_module_task(self, module: str, coro: Any,
+                           *, name: str | None = None) -> asyncio.Task:
+        """Run *coro* as a task owned by *module*, drainable on unload.
+
+        The task removes itself from the registry when it finishes, so a
+        short-lived task does not accumulate.
+        """
+        task = asyncio.ensure_future(coro)
+        if name:
+            try: task.set_name(name)
+            except AttributeError: pass  # pragma: no cover - very old asyncio
+        owned = self._module_tasks.setdefault(module, set())
+        owned.add(task)
+        task.add_done_callback(lambda t, m=module: self._forget_module_task(m, t))
+        return task
+
+    def _forget_module_task(self, module: str, task: asyncio.Task) -> None:
+        owned = self._module_tasks.get(module)
+        if not owned:
+            return
+        owned.discard(task)
+        if not owned:
+            self._module_tasks.pop(module, None)
+
+    async def drain_module_tasks(self, module: str, timeout: float = 5.0) -> int:
+        """Cancel every task owned by *module* and wait for them to finish.
+
+        Returns the number of tasks that were still running and were cancelled.
+        Awaiting is the whole point: returning before cancellation completes is
+        what allows a reload to leave two clocks running.
+        """
+        owned = list(self._module_tasks.get(module, ()))
+        pending = [t for t in owned if not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True), timeout)
+            except asyncio.TimeoutError:
+                _LOG_MODULES.warning(
+                    "event=module_task_drain_timeout module=%s pending=%d",
+                    module, len(pending))
+        self._module_tasks.pop(module, None)
+        return len(pending)
+
+    def _notify_modules(self, hook: str, *args: Any) -> None:
+        """Best-effort fanout of a lifecycle hook to every loaded module.
+
+        One module raising must not stop the others, matching how on_raw is
+        already fanned out.
+        """
+        with self._mod_lock:
+            snapshot = list(self._modules.items())
+        for mod_name, inst in snapshot:
+            fn = getattr(inst, hook, None)
+            if fn is None:
+                continue
+            try:
+                fn(*args)
+            except Exception as e:  # noqa: BLE001 - one bad module must not stop the rest
+                _LOG_MODULES.debug("event=module_hook_error hook=%s module=%s err=%s",
+                                   hook, mod_name, type(e).__name__)
+
     def unload_module(self, name: str) -> tuple[bool, str]:
         with self._mod_lock:
             if name not in self._modules:
                 return False, f"'{name}' not loaded."
             try:
                 self._modules[name].on_unload()
+                # Cannot await here: this method is synchronous.  Cancel so the
+                # tasks stop at their next await point; async callers should
+                # call drain_module_tasks() first to await them properly.
+                for _t in list(self._module_tasks.get(name, ())):
+                    _t.cancel()
+                self._module_tasks.pop(name, None)
                 removed = [c for c, v in self._commands.items() if v[0] == name]
                 for cmd in removed:
                     del self._commands[cmd]
@@ -675,6 +755,16 @@ class IRCBot(AdminCommandsMixin):
             task = self._loop.create_task(
                 self._run_cmd(handler, nick, reply_to, arg, cmd), name=f"cmd-{cmd}")
             self._tasks.append(task)
+            # Register a module's command task against that module so unloading
+            # can drain it.  Without this the handler is a scheduled task
+            # holding a bound method: it runs on after unload_module() has
+            # dropped the registry entries, and can mutate state after the
+            # module's final flush.  Core commands are not registered - they
+            # belong to the bot and outlive any module.
+            if module_label != "core":
+                self._module_tasks.setdefault(module_label, set()).add(task)
+                task.add_done_callback(
+                    lambda t, m=module_label: self._forget_module_task(m, t))
             def _on_done(t: asyncio.Task, _self=self) -> None:
                 _self._active_cmd_tasks = max(0, _self._active_cmd_tasks - 1)
                 if t in _self._tasks:
@@ -783,6 +873,9 @@ class IRCBot(AdminCommandsMixin):
         self._sender.start(self._writer)
         self._stats_connect_ts = time.time()
         _LOG_CONN.info("event=connect_ok host=%s port=%d", SERVER, PORT)
+        # Per-connection module state (presence, membership) is stale after a
+        # reconnect; tell modules to rebuild rather than trust what they held.
+        self._notify_modules("on_connect")
 
     # ── Background tasks / channel state ─────────────────────────────
 
@@ -1301,6 +1394,8 @@ class IRCBot(AdminCommandsMixin):
                     identified = True
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, ssl.SSLError, OSError) as e:
                 if self._stop.is_set(): break
+                # Anything a module believes about who is present is now false.
+                self._notify_modules("on_disconnect")
                 self._metrics["reconnects"] += 1
                 try:
                     from metrics import registry as _mreg  # noqa: PLC0415

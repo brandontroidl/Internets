@@ -114,6 +114,7 @@ class AdminCommandsMixin:
     def is_admin(self, nick: str) -> bool: ...
     def load_module(self, name: str) -> tuple[bool, str]: ...
     def unload_module(self, name: str) -> tuple[bool, str]: ...
+    async def drain_module_tasks(self, module: str, timeout: float = 5.0) -> int: ...
     def reload_module(self, name: str) -> tuple[bool, str]: ...
     def request_shutdown(self, reason: str = "Shutting down") -> None: ...
 
@@ -491,6 +492,10 @@ class AdminCommandsMixin:
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}unload <module>"); return
         mod = arg.strip().lower()
+        # Await the module's background tasks before unloading. unload_module
+        # is synchronous and can only cancel; without this a game clock can
+        # still be mid-tick when its module is gone.
+        await self.drain_module_tasks(mod)
         _, msg = self.unload_module(mod)
         self.preply(nick, reply_to, msg)
         self._audit(nick, "unload", mod)
@@ -501,6 +506,7 @@ class AdminCommandsMixin:
         if not arg:
             self.preply(nick, reply_to, f"usage: {CMD_PREFIX}reload <module>"); return
         mod = arg.strip().lower()
+        await self.drain_module_tasks(mod)
         _, msg = self.reload_module(mod)
         self.preply(nick, reply_to, msg)
         self._audit(nick, "reload", mod)
@@ -515,6 +521,7 @@ class AdminCommandsMixin:
         self.preply(nick, reply_to, f"Reloading: {', '.join(names)}")
         ok, fail = [], []
         for n in names:
+            await self.drain_module_tasks(n)
             (ok if self.reload_module(n)[0] else fail).append(n)
         parts = ([f"OK: {', '.join(ok)}"] if ok else []) + \
                 ([f"FAILED: {', '.join(fail)}"] if fail else [])

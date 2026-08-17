@@ -247,6 +247,36 @@ class BotModule:
     # docstring; the dispatcher reads this off the owning module.
     SECRET_ARGS: frozenset[str] = frozenset()
 
+    # Set by the loader so a module can own background tasks and lifecycle
+    # hooks without knowing its own registry key.
+    _module_name: str = ""
+
+    def on_connect(self) -> None:
+        """Called after the bot completes an IRC connection.
+
+        A module holding per-connection state (presence, membership, anything
+        derived from who is currently visible) must rebuild it here rather than
+        trusting what it held before. Default is a no-op.
+        """
+
+    def on_disconnect(self) -> None:
+        """Called when the bot loses its IRC connection.
+
+        Anything the module believes about who is present is now false. A game
+        that accrues progress for connected players must stop accruing here;
+        otherwise it rewards players who are not there. Default is a no-op.
+        """
+
+    def spawn(self, coro: object, *, name: str | None = None) -> object:
+        """Run *coro* as a background task owned by this module.
+
+        The bot cancels and awaits these on unload, which a module cannot do
+        for itself because ``on_unload`` is synchronous. Use this rather than
+        ``asyncio.create_task`` for anything that outlives a command handler.
+        """
+        return self.bot.create_module_task(
+            self._module_name or type(self).__name__.lower(), coro, name=name)
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Validate the COMMANDS → handler contract at class-definition time.
 
