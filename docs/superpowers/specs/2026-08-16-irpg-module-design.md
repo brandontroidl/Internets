@@ -5,12 +5,11 @@ quiet, and gain levels for idle time. Activity costs progress. The module owns
 the whole game and depends on no other module, so a deployment can unload
 everything else and be a dedicated game bot.
 
-Revision 2. Revision 1 claimed to have no open questions; an adversarial review
-found that its lifecycle, identity, presence, and persistence-format decisions
-were unresolved prerequisites rather than implementation details, and that two
-of its claims about this codebase were simply wrong. Both errors are corrected
-below and the work is now phased so the foundation is proven before game logic
-couples to it.
+Revision 3. Revision 1 claimed no open questions and was wrong. Revision 2
+phased the work but front-loaded a core change nothing early needs, and
+specified a claim mechanism with a security hole in it. Revision 3 reorders the
+phases around a narrow playable path, closes that hole, and fixes a persistence
+race. Each correction below was verified against source before being applied.
 
 ## Provenance and licensing
 
@@ -54,12 +53,17 @@ Each phase lands independently, with tests, and leaves the bot working.
 
 | Phase | Delivers | Why this seam |
 | --- | --- | --- |
-| 1 | Core prerequisites: module command claims, module-declared secret arguments already present, and a cancellable module-owned task helper | Nothing game-specific; usable by any module and testable alone |
-| 2 | Foundation: player record, persistence format and atomic writes, session and identity model, presence reconciliation, monotonic clock, tick supervision, status | The parts that are expensive to change once real databases exist |
-| 3 | Minimal playable game: register, login, logout, levelling, speech and membership penalties | First point a player can use it; proves the foundation under real play |
+| 1 | Async lifecycle: a cancellable module-owned task helper, and a disconnect and reconnect notification a module can observe | Every later phase depends on it; nothing game-specific, testable alone |
+| 2 | Persistence: the normative player format, serialized versioned writes, quarantine, load-paused-on-corrupt | Expensive to change once real databases exist; no game logic needed to test it |
+| 3 | Narrow playable path: explicit login, single-channel presence, levelling, speech and membership penalties | First point anyone can play; proves phases 1 and 2 under real use before more is built on them |
 | 4 | Equipment and single-player events | Additive on a proven core |
 | 5 | Challenges, team battles, alignment | Depends on equipment totals |
-| 6 | Quests, then operator commands | Quests depend on presence being reliable; operator commands need the audit behaviour from phase 2 |
+| 6 | Quests, then operator commands and the command-claim mechanism | Claims exist for `help`, `die`, `restart` and `rehash`, which are all operator surface; nothing before this needs them |
+
+Revision 2 put command claims in phase 1. That was wrong: the four claimed names
+are operator commands, and the narrow playable path in phase 3 needs none of
+them. Front-loading a change to core command resolution bought nothing and
+risked every module.
 
 Only phase 1 and phase 2 are specified to implementation depth here. Later
 phases are scoped, not detailed, and get their own specs. That is deliberate:
@@ -91,8 +95,30 @@ CLAIMS: frozenset[str] = frozenset({"help", "die", "restart", "rehash"})
 
 `_handle_privmsg()` consults claims before `_CORE`. Requirements:
 
+- **`auth` and `deauth` are permanently unclaimable**, refused at load. The
+  PM-only guard for those two is keyed on the command word before resolution
+  (`internets.py - IRCBot._handle_privmsg()`), so a module claiming `auth` would
+  receive the real bot-admin password in its handler and make core
+  authentication unreachable. A reserved set is a security boundary; logging a
+  claim is not. Any future core command handling a credential joins that set.
+- **Claims are the shared source of truth, not a dispatch-only override.**
+  `admin_cmds.py - AdminCommandsMixin.cmd_help()` builds its listings from
+  `_CORE` independently of dispatch, so a claim that only changed dispatch would
+  leave core help describing a command the module now answers. Help, dispatch,
+  log ownership, and the command metric all read the same registry.
+- **A claim denies access to the core handler**, which is a privilege in itself
+  even though it cannot invoke that handler. Revision 2's "claiming does not
+  confer privilege" understated it. Interception is the risk; the reserved set
+  is the mitigation.
 - A claim is honoured only while the declaring module is loaded; unloading
   returns the name to core with no further action.
+- **Unload does not currently drain running command tasks.**
+  `IRCBot.unload_module()` removes the registry entries but a dispatched handler
+  is already a scheduled task holding a bound method, so it can run on and mutate
+  state after the module's final flush. Phase 1 either drains module-owned
+  command tasks on unload or the module guards every mutation against a
+  post-unload flag. Draining is preferred; the guard is the fallback if draining
+  proves invasive.
 - Two modules claiming one name is a load error, refused the same way a
   duplicate command registration is refused today.
 - A claimed name is logged at load, because silently taking `die` from core is
@@ -190,8 +216,12 @@ against a real file; until then the spec says "intended to interoperate", not
 
 Writes are atomic: temporary file in the same directory, 0600 before content,
 `os.replace`, one-deep backup retained. A read that fails validation is
-quarantined under a timestamped name and the game refuses to start on that
-dataset rather than overwriting it. Note that no writer in this repository calls
+quarantined under a timestamped name and the module **loads paused and degraded
+rather than refusing to load**. Revision 2 said "refuses to start", which
+contradicted its own promise that status would explain a degraded game: if
+`on_load()` raises, the module and its status command are never registered and
+the operator is left reading logs. Loading paused keeps the diagnosis reachable
+from IRC, and no dataset is ever overwritten. Note that no writer in this repository calls
 `fsync`, recorded as known issue 12; this module states its durability limit
 rather than implying more.
 
@@ -199,8 +229,18 @@ Passwords are hashed and salted using the project's existing helper. Records
 imported with a legacy hash are verified against that scheme and upgraded on the
 next successful login.
 
-State is flushed on a timer and on unload, not per command. The status command
-reports last successful flush and whether state is dirty.
+State is flushed on a timer and on unload, not per command, and the flush is
+**versioned and serialized**. A naive snapshot-and-write loses data: flush A
+snapshots version 1 and releases the lock, a command commits version 2, flush A
+finishes and clears the dirty flag, and version 2 never reaches disk. So each
+snapshot carries the mutation generation it was taken at; the dirty flag clears
+only if the generation that reached disk is still current; and exactly one
+writer runs at a time so an older snapshot cannot land after a newer one. Unload
+stops new mutations, drains the writer, and verifies the final generation
+persisted.
+
+The status command reports last successful flush, the persisted generation, and
+whether state is dirty.
 
 ### Tick supervision
 
@@ -297,18 +337,26 @@ else and it is a game bot" testable rather than aspirational.
 
 Revision 1 said there were none. There are, and each blocks the phase named.
 
-1. **The persistence format.** Blocks phase 2. Needs a normative appendix and at
-   least one real database file as a fixture. Without a real file, "interoperable"
-   is an assertion.
-2. **Which network account source to trust.** Blocks phase 2 sessions. The bot
-   requests `account-notify`; whether the target network supplies it decides
-   whether auto-login can be offered at all.
-3. **Whether the claim mechanism should be general or specific.** Blocks phase 1.
-   General claims fix known issue 9 for every module; a narrower mechanism is
-   less code and less risk. Recommendation: general, because the narrow version
-   leaves `health.py` still broken.
-4. **Single channel or several.** Assumed single throughout. A multi-channel game
-   changes presence, penalties, and the data model, and should be decided before
-   phase 2 rather than retrofitted.
-5. **Elapsed-time clamp value.** A default is needed for the resume-from-suspend
-   case; it is a judgement call about how much progress a delayed tick may grant.
+Blocking, in phase order:
+
+1. **The disconnect and reconnect notification contract.** Blocks phase 1. A
+   module cannot currently observe that the bot lost its connection, and
+   presence is meaningless without it. Decide whether this is a new lifecycle
+   hook or something a module infers from `on_raw`.
+2. **Module-owned command task draining on unload.** Blocks phase 1. Drain, or
+   accept the guard fallback and specify it.
+3. **The persistence format.** Blocks phase 2. Needs a normative appendix and at
+   least one real database file as a fixture. Without a real file,
+   "interoperable" is an assertion, not a property.
+4. **Reserved command set.** Blocks phase 6. `auth` and `deauth` are decided;
+   whether anything else joins them needs a pass over `_CORE` when claims are
+   built.
+
+Deliberately not blocking, recorded so they are not mistaken for gaps:
+
+- **Network account source.** Only matters if auto-login is offered, and it is
+  off by default. Decide when someone wants it.
+- **Single channel.** The design is single-channel by choice. Multi-channel is a
+  later feature, not a prerequisite.
+- **Elapsed-time clamp value.** Tuning. Pick a conservative default, make it
+  bounded configuration, adjust from observation.
