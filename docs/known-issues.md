@@ -16,13 +16,24 @@ Severity is judged on user impact, not on how hard the fix is.
 
 ## 1. Provider failures published API keys to the channel
 
-**FIXED 2026-08-16.** `modules/stocks.py - _try_providers()` now reports the
-provider name and the exception class only, never `str(e)`, and its debug line
-is scrubbed through the new `modules/base.py - scrub_secrets()`. The same
-helper is applied at the five sibling log sites in `imdb`, `lastfm`, `youtube`,
-and `steam` (two there). Pinned by `tests/test_stocks.py`, including a control
-that the reply still names what failed. The description below is the record of
-what was wrong.
+**FIXED 2026-08-16, refixed 2026-08-17.** `modules/stocks.py - _try_providers()`
+reports the provider name and the exception class only, never `str(e)`.
+
+The first fix also routed the five sibling `log.warning` sites in `imdb`,
+`lastfm`, `youtube` and `steam` through a scrubbing helper. CodeQL then opened
+five new `py/clear-text-logging-sensitive-data` alerts against exactly those
+lines, and it was right to: passing the credential into the logging expression
+so the helper can strip it puts the raw secret at the log call site, where one
+bug in the helper or one refactor dropping an argument leaks it. Before that
+change the key was not syntactically present there at all, so the fix made the
+static-analysis picture worse while making the runtime picture better.
+
+Those five sites now log the exception class and nothing else. The upstream
+message text for these providers is mostly the request URL, which is the
+leaking part; the class is the diagnostic part. The scrubbing helper had no
+remaining callers and was removed. Pinned by `tests/test_stocks.py`, including a
+control that the reply still names what failed. The description below is the
+record of what was wrong.
 
 **Symbol:** `modules/stocks.py - _try_providers()`
 

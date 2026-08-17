@@ -400,7 +400,7 @@ the other.
 
 ## Lifecycle and safety surface added 2026-08-16/17
 
-Five additions to the module contract. All are optional: a module that ignores
+Four additions to the module contract. All are optional: a module that ignores
 them behaves exactly as before.
 
 ### `SECRET_ARGS: frozenset[str]`
@@ -428,9 +428,3 @@ and awaits these on unload, which a module cannot do for itself because
 `on_unload()` is synchronous. Without it, `.reload` can start a replacement task
 while the old one is still winding down.
 
-### `scrub_secrets(text, *secrets)`
-
-Remove credentials from text bound for a log or a reply. `requests` renders the
-full prepared URL in its exception text, and several upstreams carry their
-credential in the query string, so logging a bare `str(exception)` writes the key
-to disk. Pass the credentials that were in scope for the call. See known issue 1.

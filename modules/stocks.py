@@ -193,19 +193,6 @@ _CRYPTO_PROVIDERS: list[tuple[str, str, Any]] = [
 ]
 
 
-def _scrub(text: str, secrets: object) -> str:
-    """Remove any configured credential from ``text``.
-
-    Belt and braces for the debug log: the reply path deliberately carries only
-    the exception class, but a diagnostic line is worth keeping readable, and
-    it must not become the leak the reply no longer is.
-    """
-    for s in secrets:
-        if s:
-            text = text.replace(s, "[REDACTED]")
-    return text
-
-
 def _try_providers(
     providers: list[tuple[str, str, Any]],
     symbol: str,
@@ -227,8 +214,7 @@ def _try_providers(
             # from an expired key would otherwise publish that key to the
             # channel - and the moment every provider fails at once is a key
             # rotation, so it would publish the replacement too.
-            log.debug("%s failed for %s: %s", name, symbol,
-                      _scrub(str(e), keys.values()))
+            log.debug("%s failed for %s: %s", name, symbol, type(e).__name__)
             errors.append(f"{name}: {type(e).__name__}")
     if not any(keys.get(kf) for _, kf, _ in providers):
         return "no finance API keys configured - see [stocks] in config.ini"

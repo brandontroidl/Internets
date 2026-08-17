@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from .base import BotModule, fetch_json, help_row, scrub_secrets, strip_ctrl
+from .base import BotModule, fetch_json, help_row, strip_ctrl
 
 log = logging.getLogger("internets.youtube")
 
@@ -69,7 +69,7 @@ def _search_sync(query: str, key: str, ua: str) -> str:
             f"\x0303\x02[+]\x02\x03 {likes} likes"
         )
     except Exception as e:
-        log.warning("YouTube search: %s", scrub_secrets(str(e), key))
+        log.warning("YouTube search failed: %s", type(e).__name__)
         return "search failed"
 
 
