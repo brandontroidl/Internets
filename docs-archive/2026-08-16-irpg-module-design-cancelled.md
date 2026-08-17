@@ -1,3 +1,15 @@
+> **Cancelled 2026-08-17, not built.** The upstream game is distributed as a
+> complete bot and works; reimplementing its systems from scratch was the only
+> licensable path, and it would have produced different message text and
+> different flavor - precisely the thing the requirement said players must not
+> notice. Anyone wanting that game is better served by the original.
+>
+> Kept as a record of the licensing analysis and of why phase 1 was built.
+> Phase 1 shipped and stays: the module task registry, per-module command-task
+> draining, and the connect/disconnect hooks are general module infrastructure
+> that fixed real defects, and they are documented in
+> `docs/internals/internets.md` and `docs/internals/modules/base.md`.
+
 # IRPG module design
 
 An idle-RPG game module for Internets: players register, stay connected and

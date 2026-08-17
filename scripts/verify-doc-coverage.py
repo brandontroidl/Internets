@@ -158,36 +158,62 @@ def check_counts(man: dict, failures: list[str]) -> tuple[int, int]:
     return checked, wrong
 
 
+def reachable_docs() -> set[str]:
+    """Documents reachable from the Sphinx root, following nested toctrees.
+
+    Reading only the root index is not enough: an index one level down carries
+    its own toctree, and its entries are relative to ITS directory. An earlier
+    version of this check read the root only and reported five reachable pages
+    as orphans, which is the instrument being wrong rather than the corpus.
+    """
+    import fnmatch
+
+    docs = REPO / "docs"
+    seen: set[str] = set()
+    stack = ["index"]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        page = docs / f"{cur}.md"
+        if not page.exists():
+            continue
+        text = page.read_text(encoding="utf-8")
+        parent = pathlib.PurePosixPath(cur).parent
+        for block in re.findall(r"```\{toctree\}(.*?)```", text, re.S):
+            is_glob = ":glob:" in block
+            for ln in block.splitlines():
+                ln = ln.strip()
+                if not ln or ln.startswith(":"):
+                    continue
+                entry = ln if str(parent) == "." else f"{parent}/{ln}"
+                if is_glob or "*" in entry:
+                    for q in docs.rglob("*.md"):
+                        rel = str(q.relative_to(docs)).removesuffix(".md")
+                        if fnmatch.fnmatch(rel, entry):
+                            stack.append(rel)
+                else:
+                    stack.append(entry)
+    return seen
+
+
 def check_toctree(man: dict, failures: list[str]) -> tuple[int, int]:
-    idx = (REPO / "docs" / "index.md").read_text(encoding="utf-8")
-    named: set[str] = set()
-    for block in re.findall(r"```\{toctree\}(.*?)```", idx, re.S):
-        for ln in block.splitlines():
-            ln = ln.strip()
-            if ln and not ln.startswith(":"):
-                named.add(ln)
-    globbed = any(":glob:" in b for b in re.findall(r"```\{toctree\}(.*?)```", idx, re.S))
+    named = reachable_docs()
     skip_dirs = tuple(man.get("unrendered_ok", []))
     checked = orphan = 0
     for p in sorted((REPO / "docs").rglob("*.md")):
         rel = p.relative_to(REPO)
         if any(str(rel).startswith(s) for s in skip_dirs):
             continue
-        if p.name == "index.md":
-            continue
         stem = str(p.relative_to(REPO / "docs")).removesuffix(".md")
+        if stem == "index":
+            continue
         checked += 1
-        # A page is reachable if named directly, named by its own index, or
-        # picked up by a glob toctree in its directory.
-        if stem in named or f"{p.parent.relative_to(REPO / 'docs')}/index" in named:
-            continue
-        sibling_index = p.parent / "index.md"
-        if sibling_index.exists() and ":glob:" in sibling_index.read_text(encoding="utf-8"):
-            continue
-        if globbed and stem.split("/")[0] in {n.split("/")[0] for n in named}:
-            continue
-        orphan += 1
-        failures.append(f"ORPHAN        {rel} is in no toctree; it reaches neither HTML nor PDF")
+        if stem not in named:
+            orphan += 1
+            failures.append(
+                f"ORPHAN        {rel} is in no toctree; it reaches neither HTML nor PDF")
     return checked, orphan
 
 
