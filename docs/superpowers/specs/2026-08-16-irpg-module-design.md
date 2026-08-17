@@ -27,7 +27,7 @@ The one compatibility point is the on-disk player format, so an operator can
 move an existing game across. Interoperating with a data format is functional.
 That format is not yet specified; see phase 2 and the open questions.
 
-## Corrections to revision 1
+## Corrections carried forward
 
 Two claims about this codebase were wrong and are recorded so they are not
 reintroduced:
@@ -123,9 +123,10 @@ CLAIMS: frozenset[str] = frozenset({"help", "die", "restart", "rehash"})
   duplicate command registration is refused today.
 - A claimed name is logged at load, because silently taking `die` from core is
   exactly the kind of thing an operator must be able to see.
-- Claiming does not confer privilege. A claimed `restart` reaching the module
-  runs the module's handler with the module's own authorization, and cannot
-  restart the bot.
+- A claimed handler runs with the module's own authorization and cannot invoke
+  the core handler. A claimed `restart` restarts nothing; it reaches the game's
+  own restart. This bounds the privilege a claim grants but does not eliminate
+  it, per the interception point above.
 
 ### Module-owned background tasks
 
