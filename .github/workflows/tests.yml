@@ -150,6 +150,13 @@ jobs:
       - name: Docs - command reference matches registered commands
         run: python scripts/gen-command-reference.py --check docs/command-reference.md
 
+      # The other direction. The citation checker resolves what the docs claim
+      # and catches STALE references; it cannot see a symbol that was never
+      # cited. Five additions to the module authoring contract shipped
+      # undocumented with every gate green, which is what this closes.
+      - name: Docs - no undocumented public surface, orphans, or stale counts
+        run: python scripts/verify-doc-coverage.py
+
   package:
     runs-on: ubuntu-latest
     name: Packaging (wheel install gate)

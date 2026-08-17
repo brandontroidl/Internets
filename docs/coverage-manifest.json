@@ -1,0 +1,79 @@
+{
+  "_purpose": "Drives scripts/verify-doc-coverage.py, the source-to-docs half of the documentation gates. verify-doc-citations.py runs docs-to-source and finds STALE references; this finds MISSING ones. A validity gate cannot see the entry that was never made, so both directions are needed.",
+
+  "surfaces": [
+    {
+      "source": "modules/base.py",
+      "docs": ["docs/internals/modules/base.md", "docs/writing-modules.md"],
+      "why": "The module authoring contract. Five additions to it shipped undocumented on 2026-08-16/17 while every gate stayed green; this surface exists so that cannot recur.",
+      "ignore": ["BotModule", "help_row"]
+    },
+    {
+      "source": "internets.py",
+      "docs": ["docs/internals/internets.md", "docs/architecture.md"],
+      "why": "The bot surface modules call, plus lifecycle. The task registry and hook fanout shipped undocumented.",
+      "ignore": ["IRCBot", "main"]
+    },
+    {
+      "source": "sender.py",
+      "docs": ["docs/internals/sender.md"],
+      "why": "Outbound pipeline; redact_secrets is security-relevant and its scope is easy to misstate.",
+      "ignore": ["Sender"]
+    },
+    {
+      "source": "secret_store.py",
+      "docs": ["docs/internals/secret_store.md", "docs/configuration.md"],
+      "why": "Credential resolution. A new secret tier or accessor must not appear silently.",
+      "ignore": []
+    },
+    {
+      "source": "store.py",
+      "docs": ["docs/internals/store.md", "docs/state-and-persistence.md"],
+      "why": "Persistence and rate limiting; both are cited across the operational docs.",
+      "ignore": ["Store", "RateLimiter"]
+    },
+    {
+      "source": "audit_log.py",
+      "docs": ["docs/internals/audit_log.md", "docs/logging-and-auditing.md"],
+      "why": "Tamper-evidence surface; its guarantees are stated in several documents.",
+      "ignore": ["AuditLog"]
+    },
+    {
+      "source": "hashpw.py",
+      "docs": ["docs/internals/hashpw.md", "docs/security-model.md"],
+      "why": "Password hashing. A new algorithm must reach the security model.",
+      "ignore": []
+    }
+  ],
+
+  "trees": [
+    {
+      "dir": "modules",
+      "docs_dir": "docs/internals/modules",
+      "skip": ["__init__"],
+      "why": "Every command module needs a page; a new module must not land undocumented."
+    },
+    {
+      "dir": "weather_providers",
+      "docs_dir": "docs/internals/weather-providers/providers",
+      "packages_only": true,
+      "skip": [],
+      "why": "Every provider sub-package needs a page."
+    }
+  ],
+
+  "counts": [
+    {
+      "what": "test files",
+      "glob": "tests/test_*.py",
+      "docs": ["docs/internals/tests.md"],
+      "pattern": "the pytest suite\\. (\\d+) files",
+      "why": "Hard-coded in prose and went stale at 40 against 43. Either generated or checked; never hand-maintained."
+    }
+  ],
+
+  "unrendered_ok": [
+    "docs/_build",
+    "docs/autoapi"
+  ]
+}

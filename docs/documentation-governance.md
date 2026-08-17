@@ -571,3 +571,44 @@ list above.
 - [known-issues](known-issues.md) - the defect register itself.
 - [output-conventions](output-conventions.md) - the sibling rules for what the
   bot emits.
+
+## Coverage: the other direction
+
+The verification regime described above ran in one direction only, and that gap
+shipped a regression the same week it was written.
+
+`verify-doc-citations.py` resolves every claim the corpus makes back to a real
+symbol. It finds STALE references. It structurally cannot find a MISSING one,
+because a citation that was never written has nothing to resolve. So
+`modules/base.py` gained five additions to the module authoring contract -
+`SECRET_ARGS`, `on_connect`, `on_disconnect`, `spawn`, `scrub_secrets` - and the
+page that *is* that contract documented none of them while every gate stayed
+green.
+
+`scripts/verify-doc-coverage.py` runs source to docs and closes it. Four checks,
+driven by `docs/coverage-manifest.json`:
+
+| Check | Catches |
+| --- | --- |
+| symbols | A public name on a tracked surface that no mapped document mentions |
+| trees | A module or provider that shipped with no page |
+| counts | A hard-coded population figure in prose that no longer matches reality |
+| toctree | A document reachable from no toctree, so it reaches neither build |
+
+Together the two scripts give omission detection in one direction and
+stale-reference detection in the other. Both run in the `lint` job.
+
+**Adding a tracked surface.** Edit the manifest, giving the source, the
+documents expected to explain it, and a `why` recording what went wrong to earn
+the entry. Keep `ignore` small: it is the escape hatch that turns a gate back
+into decoration.
+
+**The gate was mutation-tested, not merely observed green.** Each of the four
+real regressions was reintroduced one at a time and confirmed to fail the gate,
+then reverted. A check that has only ever reported success is unproven; this
+one has been watched failing for the exact reasons it exists.
+
+**What it deliberately does not do.** It checks that a public name is mentioned,
+not that the prose about it is correct. Mention is mechanical; accuracy is not.
+The value is that an addition can no longer pass silently - a human still has to
+write something true about it.
