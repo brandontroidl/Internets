@@ -397,3 +397,40 @@ the other.
   (gzip) body through the cap, so the decompressed-bytes-counted property rests on
   urllib3 2.x semantics rather than a pinned test (`test_fetch_json.py` fakes
   `r.raw`).
+
+## Lifecycle and safety surface added 2026-08-16/17
+
+Five additions to the module contract. All are optional: a module that ignores
+them behaves exactly as before.
+
+### `SECRET_ARGS: frozenset[str]`
+
+Command names whose ARGUMENT is itself a secret. The dispatcher masks the
+argument in its log line for these. `redact_secrets()` only masks a credential
+following a credential verb, so a command whose whole argument is the secret has
+nothing to key on - which is how `.pwn` wrote passwords to disk (known issue 22).
+Declared by the module that owns the command, so a new one cannot be forgotten
+in a core list.
+
+### `on_connect()` and `on_disconnect()`
+
+Called when the bot completes or loses an IRC connection, fanned out by
+`internets.py - IRCBot._notify_modules()`. A module holding per-connection state
+- presence, membership, anything derived from who is currently visible - must
+rebuild it in `on_connect()` and stop trusting it in `on_disconnect()`. Both
+default to no-ops. One module raising does not stop the others.
+
+### `spawn(coro, *, name=None)`
+
+Run a coroutine as a background task owned by this module. Use this rather than
+`asyncio.create_task` for anything outliving a command handler: the bot cancels
+and awaits these on unload, which a module cannot do for itself because
+`on_unload()` is synchronous. Without it, `.reload` can start a replacement task
+while the old one is still winding down.
+
+### `scrub_secrets(text, *secrets)`
+
+Remove credentials from text bound for a log or a reply. `requests` renders the
+full prepared URL in its exception text, and several upstreams carry their
+credential in the query string, so logging a bare `str(exception)` writes the key
+to disk. Pass the credentials that were in scope for the call. See known issue 1.

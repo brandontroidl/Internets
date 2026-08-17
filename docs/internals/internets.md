@@ -655,3 +655,32 @@ run() read loop
   `weather_providers/_dispatch.py` (the weather-provider fallback dispatcher), not
   the bot's command dispatch. The name collision invites exactly the wrong
   assumption about where dispatch coverage lives (this assignment's brief made it).
+
+## Module task registry and lifecycle fanout, added 2026-08-17
+
+`on_unload()` is synchronous, so a module can cancel a background task but never
+await the cancellation. The bot therefore owns the tasks:
+
+| Symbol | Role |
+| --- | --- |
+| `IRCBot.create_module_task()` | Run a coroutine as a task owned by a named module; it deregisters itself when done |
+| `IRCBot.drain_module_tasks()` | Cancel every task owned by a module and AWAIT them, with a timeout |
+| `IRCBot._forget_module_task()` | Registry cleanup callback |
+| `IRCBot._notify_modules()` | Best-effort fanout of a lifecycle hook to every loaded module |
+
+`_dispatch()` registers a module's command tasks in the same registry, because a
+dispatched handler is a scheduled task holding a bound method and would
+otherwise keep running after `unload_module()` dropped the registry entries -
+free to mutate state after the module's final flush. Core command tasks are not
+registered; they belong to the bot.
+
+`cmd_unload`, `cmd_reload`, and `cmd_reloadall` await `drain_module_tasks()`
+before unloading. `unload_module()` itself is synchronous and can only cancel,
+so it is the fallback for non-async callers such as autoload and shutdown.
+
+The drain has a timeout. A task that ignores cancellation past it logs
+`event=module_task_drain_timeout` and the unload proceeds, because blocking
+`.unload` forever on a wedged module is the worse failure.
+
+`on_connect` is fanned out after `event=connect_ok`; `on_disconnect` from the
+connection-error branch before the reconnect backoff.

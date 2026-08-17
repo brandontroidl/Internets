@@ -8,7 +8,7 @@ audit-log key handling, config floors), formatting contracts for IRC output, and
 regression tests written against specific observed incidents (each usually
 carries the incident in its docstring). Two harnesses coexist deliberately:
 
-- `tests/test_*.py` - the pytest suite. 40 files, discovered by
+- `tests/test_*.py` - the pytest suite. 43 files, discovered by
   `pyproject.toml [tool.pytest.ini_options] testpaths = ["tests"]`.
 - `tests/run_tests.py` - a standalone, zero-dependency runner
   (`python tests/run_tests.py`). It needs nothing but the standard library

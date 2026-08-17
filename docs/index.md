@@ -89,6 +89,14 @@ design-decisions
 ```
 
 ```{toctree}
+:maxdepth: 1
+:caption: VI-b. Specifications
+:glob:
+
+superpowers/specs/*
+```
+
+```{toctree}
 :maxdepth: 2
 :caption: VII. Handoff
 
