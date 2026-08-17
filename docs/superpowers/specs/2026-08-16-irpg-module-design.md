@@ -1,314 +1,314 @@
 # IRPG module design
 
-An idle-RPG game module for Internets: players register, remain idle in the
-channel, and gain levels for time spent connected and quiet. Activity costs
-progress. The module owns the whole game and depends on no other module, so a
-deployment can unload everything else and be a dedicated game bot.
+An idle-RPG game module for Internets: players register, stay connected and
+quiet, and gain levels for idle time. Activity costs progress. The module owns
+the whole game and depends on no other module, so a deployment can unload
+everything else and be a dedicated game bot.
+
+Revision 2. Revision 1 claimed to have no open questions; an adversarial review
+found that its lifecycle, identity, presence, and persistence-format decisions
+were unresolved prerequisites rather than implementation details, and that two
+of its claims about this codebase were simply wrong. Both errors are corrected
+below and the work is now phased so the foundation is proven before game logic
+couples to it.
 
 ## Provenance and licensing
 
 This is an original implementation of the game's **systems**, not a port of any
-existing bot's code. Game rules, formulas, timings, and probabilities are
-functional design and are implemented from the design described here. Everything
-the bot says is written for this project. No source file from another
-implementation is translated, restructured, or paraphrased into this module.
+existing bot. Rules, formulas, timings, and probabilities are functional design.
+Everything the bot says is written for this project. No source file from another
+implementation is translated, restructured, or paraphrased.
 
-The one deliberate compatibility point is the on-disk player format, which is
-read and written in the widely used flat-file shape so an operator can move an
-existing game across. Interoperating with a data format is a functional
-requirement, not an appropriation of expression.
+Contributor rule: work from this document. If you are reading another bot's
+source while implementing, stop. A contribution reproducing another project's
+code or message text cannot be accepted, because Internets ships under ISC and
+this module must be distributable under it.
 
-Consequence for contributors: if you are looking at another bot's source while
-working on this module, stop. Work from this document. A contribution that
-reproduces another project's code or its message text cannot be accepted,
-because Internets ships under ISC and the module has to be distributable under
-that licence.
+The one compatibility point is the on-disk player format, so an operator can
+move an existing game across. Interoperating with a data format is functional.
+That format is not yet specified; see phase 2 and the open questions.
 
-## Scope
+## Corrections to revision 1
 
-In scope for the first release:
+Two claims about this codebase were wrong and are recorded so they are not
+reintroduced:
 
-- Registration, login, logout, password change, class change.
-- Idle levelling on a time-to-level curve.
-- Ten equipment slots, item discovery, item levels.
-- Player versus player challenges and their outcomes.
-- Team battles.
-- Random world events: fortune, misfortune, and rare high-value finds.
-- Alignment (good, evil, neutral) and its effect on outcomes.
-- Quests, with both the timed and the map-movement forms.
-- Penalties for channel activity: speaking, nick change, part, quit, kick, and
-  voluntary logout.
-- Administrative commands for the game operator.
-- Periodic state flush, backup, and an on-request status line.
+- **There is no "standard module gate before commands that write state."**
+  `internets.py - IRCBot._handle_privmsg()` applies `flood_limited()` to every
+  accepted command before dispatch. `IRCBot.rate_limited()` is a separate API
+  cooldown a module calls explicitly. Game-specific limits on registration and
+  login must therefore be built, not assumed.
+- **`store.py` exposes no reusable durable-write path.**
+  `Store._write()` is private, static, and writes a JSON envelope for Store's
+  own datasets. This module needs its own atomic-write implementation for a
+  flat text format, built to the same standard rather than inheriting it.
 
-Out of scope for the first release, recorded so the boundary is deliberate:
-a web front end, cross-network play, and any HTTP surface. The module makes no
-outbound network requests at all.
+## Phasing
+
+Revision 1 treated this as one unit. It is not: it combines a core dispatch
+change, an account system, a legacy data format, presence tracking, a scheduler,
+a persistence engine, and roughly six game subsystems. Foundation errors would
+be found only after game logic depended on them.
+
+Each phase lands independently, with tests, and leaves the bot working.
+
+| Phase | Delivers | Why this seam |
+| --- | --- | --- |
+| 1 | Core prerequisites: module command claims, module-declared secret arguments already present, and a cancellable module-owned task helper | Nothing game-specific; usable by any module and testable alone |
+| 2 | Foundation: player record, persistence format and atomic writes, session and identity model, presence reconciliation, monotonic clock, tick supervision, status | The parts that are expensive to change once real databases exist |
+| 3 | Minimal playable game: register, login, logout, levelling, speech and membership penalties | First point a player can use it; proves the foundation under real play |
+| 4 | Equipment and single-player events | Additive on a proven core |
+| 5 | Challenges, team battles, alignment | Depends on equipment totals |
+| 6 | Quests, then operator commands | Quests depend on presence being reliable; operator commands need the audit behaviour from phase 2 |
+
+Only phase 1 and phase 2 are specified to implementation depth here. Later
+phases are scoped, not detailed, and get their own specs. That is deliberate:
+writing decision-free detail for phase 5 before phase 2 exists would be
+inventing constraints for a foundation that has not been built.
 
 ## Placement and naming
 
-`modules/irpg.py`, registering as module name `irpg`.
+`modules/irpg.py`, module name `irpg`. `modules/idlerpg.py` stays; it is a
+client that reads a remote game's published XML. This is the server. They share
+no command names.
 
-`modules/idlerpg.py` already exists and stays. It is a **client** that reads a
-remote game's published XML and reports a player's standing. This module is a
-**server**: it runs the game. The two do not overlap in command names and can be
-loaded together, though an operator running their own game will usually want
-only this one.
+## Phase 1: core prerequisites
 
-## Command surface
+### Command claims
 
-The game's commands are private-message only, addressed to the bot as bare
-words. Internets already makes the command prefix optional in a private message,
-so `register alice hunter2 Warrior` sent to the bot dispatches without a prefix,
-which is the interaction players expect. In a channel the prefix is required,
-and the module answers a channel invocation by directing the player to a private
-message rather than replying in public.
+The game's commands are private-message bare words, which Internets already
+supports because the prefix is optional in a private message. Four canonical
+names collide with core: `help`, `die`, `restart`, `rehash`.
+`IRCBot._handle_privmsg()` resolves `_CORE` before the module registry, so a
+module registering them is silently shadowed. This is known issue 9, where
+`modules/health.py` registers `uptime` and its handler has never run.
 
-Player commands: `register`, `login`, `logout`, `newpass`, `align`, `whoami`,
-`status`, `info`, `quest`, `removeme`.
-
-Operator commands, all gated on game-admin status held in the player record:
-`chpass`, `chuser`, `chclass`, `del`, `delold`, `mkadmin`, `deladmin`, `push`,
-`jump`, `hog`, `pause`, `silent`, `backup`, `reloaddb`, `clearq`, `restart`,
-`die`, `rehash`, `help`, `peval`.
-
-`peval` evaluates an expression in the bot's own process. It is the single most
-dangerous command in the module and is restricted to the configured owner, off
-by default, and refused entirely unless explicitly enabled in configuration. It
-is documented in the security section below rather than treated as an ordinary
-admin command.
-
-### Four names collide with Internets core
-
-`help`, `die`, `restart`, and `rehash` are core commands. `IRCBot._handle_privmsg`
-resolves `_CORE` before the module registry, so a module registering those names
-is silently shadowed. This is the same defect already recorded as known issue 9,
-where `modules/health.py` registers `uptime` and its handler has never run.
-
-The module declares the names it owns:
+A module declares the names it owns:
 
 ```python
 CLAIMS: frozenset[str] = frozenset({"help", "die", "restart", "rehash"})
 ```
 
-and `_handle_privmsg` consults claims before `_CORE`. Unloading the module
-returns the names to core with no further action. This is the only change
-outside `modules/`; the design rationale, the alternatives, and the test
-requirements for it are in the implementation plan.
+`_handle_privmsg()` consults claims before `_CORE`. Requirements:
 
-## Game systems
+- A claim is honoured only while the declaring module is loaded; unloading
+  returns the name to core with no further action.
+- Two modules claiming one name is a load error, refused the same way a
+  duplicate command registration is refused today.
+- A claimed name is logged at load, because silently taking `die` from core is
+  exactly the kind of thing an operator must be able to see.
+- Claiming does not confer privilege. A claimed `restart` reaching the module
+  runs the module's handler with the module's own authorization, and cannot
+  restart the bot.
 
-### Levelling
+### Module-owned background tasks
 
-A player who is logged in and idle accrues time toward the next level. Time to
-next level grows geometrically: each level requires a fixed multiple of the
-previous level's requirement, on a base interval, so early levels arrive in
-minutes and later levels take days. The curve is a configuration value with the
-traditional default, so an operator moving a game across keeps their pacing.
+Phase 2 needs a periodic task, and getting cancellation wrong leaves two clocks
+after a reload. Rather than each module reimplementing it, `modules/base.py`
+gains a helper that owns the task lifecycle: start on load, cancel and await on
+unload, restart-on-crash with backoff, and a health record the module can
+report. Tested against reload, unload during a tick, and a task that raises
+every time.
 
-Only idle time counts. Any of the penalised actions below both costs time and
-resets nothing else; the player simply moves further from the next level.
+### Secret arguments
 
-### Penalties
+Already present. `BotModule.SECRET_ARGS` masks a command's argument in the
+dispatch log. This module declares `register`, `login`, `newpass`, and `chpass`.
+No phase-1 work beyond using it.
 
-Each penalised action adds time to the player's remaining time-to-level, scaled
-by the player's current level so that a high-level player pays proportionally.
-The penalty types are speaking in the channel, changing nick, parting, quitting,
-being kicked, logging out voluntarily, and failing a quest. Each type has its own
-multiplier in configuration, and an optional ceiling caps any single penalty.
+## Phase 2: foundation
 
-Penalties are recorded per type on the player record so `whoami` can show where a
-player's time went.
+### Time
 
-### Equipment
+All progression uses a monotonic clock. Wall-clock timestamps are stored only
+for display and audit. Reasons: sleep and resume, NTP corrections, and event
+loop stalls otherwise grant or destroy progress.
 
-Ten slots: ring, amulet, charm, weapon, helm, tunic, gloves, shield, leggings,
-and boots. Each holds an item with an integer level; the sum across slots is the
-player's item total, which decides battles.
+The tick advances the game by *measured elapsed monotonic time*, not by
+assuming the nominal interval passed. A tick delayed by ten seconds advances the
+game by ten seconds. Elapsed time beyond a configurable ceiling is clamped and
+the clamp is logged, so a laptop resuming from suspend does not hand every
+online player an hour of progress.
 
-While idle, a player periodically finds an item. The found item's level is drawn
-against the player's own level, and it is equipped only if it beats what occupies
-that slot. Rare finds above the normal ceiling exist and are announced.
+Event probability is a hazard process over elapsed time and online population,
+`p = 1 - exp(-rate * elapsed * online)`, which is well defined for any elapsed
+value and cannot exceed 1. Revision 1's "proportional to online, inversely
+proportional to interval" was undefined for a long tick.
 
-### Battles
+The clock and the random source are injected, so tests are deterministic and a
+tick can be driven directly.
 
-A challenge compares the challenger's effective total against an opponent's,
-each modified by alignment, with a random component. The winner gains time toward
-their next level; the loser is unaffected beyond the outcome message. A losing
-challenger may suffer an additional setback on a rare secondary roll.
+### Presence
 
-Team battles select two groups from the online players and resolve the same
-comparison between group totals.
+Online status is derived from observed IRC state, never trusted from the
+database. On load every player is offline until seen.
 
-### Alignment
-
-A player is good, evil, or neutral, chosen with `align` and changeable at a cost.
-Good and evil confer opposing modifiers in battle, and each has an associated
-periodic world event that benefits its own alignment at the expense of the other.
-
-### World events
-
-While at least one player is online, the module rolls periodically for each
-event type. The probability of each is proportional to the number of online
-players and inversely proportional to the tick interval, so a busy channel sees
-events at the same real-world rate regardless of how often the clock runs. Event
-types are: a large fortune, a large misfortune, a rare high-level find, a team
-battle, and the two alignment events.
-
-### Quests
-
-Two quest forms. A timed quest sends a party of players away for a duration; on
-completion every member gains time toward their next level. A map quest gives
-each member a pair of coordinates to reach on a toroidal grid; members move each
-tick and the quest completes when all have arrived.
-
-A quest fails if any member is penalised while it is running. On failure the
-whole party is set back and the quest ends.
-
-Quest state is exported to a file each tick when configured, so an external
-display can read it. The file is written through the same durable-write path as
-the player database.
-
-## Runtime integration
-
-### The clock
-
-`on_load()` starts one `asyncio.Task` running the game tick. The tick interval is
-configurable with the traditional default. Every tick: advance idle time, roll
-events, advance quests, and periodically flush state.
-
-`on_unload()` cancels the task and awaits its cancellation before returning, so
-`.reload irpg` cannot leave two clocks running. The task body catches and logs
-its own exceptions so a single bad tick does not kill the game loop.
-
-### Blocking work
-
-The player database, the backup, and the quest file are written with
-`asyncio.to_thread`. Nothing in the tick path performs blocking I/O on the event
-loop.
-
-### Module state and reload
-
-Internets builds a fresh module object on every load, so nothing in memory
-survives a reload. `on_load()` reads the database from disk and `on_unload()`
-flushes it, which makes reload a durable round trip and gives the operator a
-clean way to apply a code change to a running game.
-
-Game state lives on the module instance rather than in module-level globals, so a
-reload cannot leave a stale reference alive in a closure or a pending task.
-
-### IRC events the game needs
-
-Registered through `on_raw()`, which Internets calls for every inbound line
-before command dispatch:
-
-| Event | Effect |
+| Signal | Effect |
 | --- | --- |
-| JOIN | Mark present; auto-login if configured and the host matches |
-| PART, QUIT, KICK | Penalise, mark absent |
-| NICK | Penalise, follow the rename |
-| Channel PRIVMSG | Penalise by message length |
-| NOTICE to the channel | Penalise by message length |
+| Bot's own JOIN to the game channel | Game resumes; request NAMES |
+| NAMES reply (`353`, possibly several, ended by `366`) | Rebuild the present set |
+| Player JOIN | Mark present; log in only if a session applies |
+| Player PART, QUIT, KICK | Mark absent, end session, penalise |
+| Player NICK | Follow the rename, penalise |
+| Bot's own PART or KICK from the game channel | Pause the game, all players absent |
+| Connection lost | Pause the game, all players absent, freeze accrual |
 
-Netsplit detection is a configuration option: when enabled, a quit whose message
-looks like a split is not penalised until a grace period passes without the
-player returning.
+Accrual happens only while the game is running and the player is present. The
+status command reports why the game is paused when it is.
 
-## Configuration
+The game channel is a single RFC-casefolded name. Commands from any other
+channel are answered with a redirect to a private message and change no state.
 
-`[irpg]` in `config.ini`, read at `on_load()` so `.reload irpg` picks up changes.
+### Identity and sessions
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `enable` | bool | `false` | Master switch; the module loads inert when false |
-| `channel` | str | none | Channel the game runs in; required when enabled |
-| `db_file` | path | `irpg_players.db` | Player database |
-| `quest_file` | path | unset | Quest export; disabled when unset |
-| `tick_seconds` | int | `3` | Game clock interval |
-| `base_ttl` | int | `600` | Seconds to level 1 |
-| `ttl_factor` | float | `1.16` | Geometric growth per level |
-| `pen_*` | int | per type | Penalty multipliers |
-| `pen_cap` | int | unset | Ceiling on a single penalty |
-| `map_size` | int pair | `500x500` | Map quest grid |
-| `owner` | str | unset | Account permitted to use `peval` |
-| `allow_peval` | bool | `false` | Must be true for `peval` to run at all |
-| `auto_login` | bool | `false` | Log a player in on join from a known host |
-| `voice_on_login` | bool | `false` | Grant voice to a logged-in player |
-| `detect_splits` | bool | `true` | Suppress quit penalties during a netsplit |
+A hostmask is weak identity, and destructive operator commands depend on it, so
+the session model is explicit rather than implied:
 
-The module is inert until `enable` is true and `channel` is set, so loading it on
-a bot that is not running a game does nothing.
+- A session is created by an explicit successful `login` and bound to the
+  account, the current nick, and the observed hostmask.
+- A session ends on QUIT, PART, KICK, nick change to a nick with no session,
+  loss of the bot's connection, module unload, or an idle expiry.
+- Where the network provides an authenticated account (IRCv3 `account-notify`,
+  which this bot already requests), that account is preferred over the hostmask.
+- Auto-login is off by default. When enabled it requires a network-authenticated
+  account, never a bare hostmask, because cloaks, gateways, and recycled DHCP
+  addresses make hostmask identity unsafe.
+- Game-admin status lives in the player record and confers nothing outside the
+  game. A game admin is not a bot admin.
+- Every operator command that deletes or grants writes an entry to the game's
+  own audit trail with the acting account, the target, and the time.
 
-## Persistence
+### Persistence
 
-One flat file of player records, one field per column, matching the traditional
-layout so an existing game's file can be used unchanged. Fields: account, hashed
-password, admin flag, class, level, remaining time to level, alignment, host
-mask, online flag, idle time, the map coordinates, the ten item levels, the
-per-type penalty totals, and the creation and last-login timestamps.
+One flat text file of player records. **The format is normative and must be
+written out in full before implementation**, including column order, delimiter
+and escaping, encoding, integer bounds, duplicate-account policy, malformed-line
+policy, and the treatment of unknown trailing fields. Compatibility with an
+existing game is claimed only when fixture-based import and export tests pass
+against a real file; until then the spec says "intended to interoperate", not
+"compatible".
 
-Passwords are stored hashed and salted. New records use the project's existing
-hashing helper; records carrying the legacy hash from an imported file are
-verified against that scheme and transparently upgraded on the player's next
-successful login.
+Writes are atomic: temporary file in the same directory, 0600 before content,
+`os.replace`, one-deep backup retained. A read that fails validation is
+quarantined under a timestamped name and the game refuses to start on that
+dataset rather than overwriting it. Note that no writer in this repository calls
+`fsync`, recorded as known issue 12; this module states its durability limit
+rather than implying more.
 
-Writes go through a temporary file and an atomic replace, with the previous
-version retained, matching how `store.py` protects its datasets. A corrupt or
-truncated read is quarantined rather than overwritten, so a bad file never
-destroys the only copy.
+Passwords are hashed and salted using the project's existing helper. Records
+imported with a legacy hash are verified against that scheme and upgraded on the
+next successful login.
+
+State is flushed on a timer and on unload, not per command. The status command
+reports last successful flush and whether state is dirty.
+
+### Tick supervision
+
+A tick computes its transition and commits only after validation, so a malformed
+record cannot leave the game half-advanced. A record that fails validation is
+isolated and reported, not retried forever. The task carries a done callback
+recording clock health: last successful tick, consecutive failures, and whether
+the game is degraded. Status surfaces all of it, because a game that has
+silently stopped ticking while claiming to run is the worst failure mode here.
+
+### Concurrency
+
+Command handlers and the tick both mutate player state. All mutation goes
+through a single lock held for the duration of a state transition, and the flush
+takes a snapshot under that lock before writing outside it. This is the defect
+class already recorded three times in this repository: `notes.py`, `steam.py`,
+and `internets.py - _save_shadow_bans()` all serialize a structure in a worker
+thread while the loop mutates it.
+
+## Phases 3 to 6: game systems, scoped
+
+Detail comes with each phase's own spec. Scope:
+
+- **Levelling.** Time to next level grows geometrically on a configurable base
+  and factor. Only idle presence accrues.
+- **Penalties.** Speech, nick change, part, quit, kick, voluntary logout, and
+  quest failure each add time scaled by level, with an optional per-event
+  ceiling, recorded per type for display.
+- **Equipment.** Ten slots, each an integer level; the sum decides battles. Idle
+  players find items; a find replaces a slot only if it beats what is there.
+- **Battles.** Compare effective totals with alignment modifiers and a random
+  component. Winner gains time.
+- **Alignment.** Good, evil, neutral, changeable at a cost, with opposing battle
+  modifiers and an associated periodic event each.
+- **Quests.** A timed form and a map-movement form on a toroidal grid. A penalty
+  against any member fails the quest and sets the party back. Quest state
+  optionally exported for an external display.
+- **Operator commands.** Account and record management, game control, and
+  backup. All audited.
 
 ## Security
 
-The module accepts untrusted input from any user in the channel and stores
-credentials, so it carries a real security surface.
+The module stores credentials and accepts untrusted input from any channel user.
 
-- **Passwords never reach a log.** `register`, `login`, `newpass`, and `chpass`
-  all take a password as an argument. The module declares
-  `SECRET_ARGS = frozenset({"register", "login", "newpass", "chpass"})`, which
-  the dispatcher already honours, so the argument is masked in the command log.
-  This mechanism exists because `.pwn` wrote passwords to disk; see known issue
-  22.
-- **All output is sanitised.** Player-chosen names, classes, and item names are
-  attacker-controlled and are passed through `strip_ctrl` before reaching IRC, so
-  a crafted name cannot inject formatting or forge the shape of a line.
-- **`peval` is off unless explicitly enabled** and restricted to the configured
-  owner. It executes arbitrary code in the bot's process, which means full
-  compromise of every credential the bot holds. The default is off, the
-  configuration key is named so it cannot be enabled by accident, and enabling it
-  is logged at startup.
-- **Admin status is stored in the player record**, not derived from Internets'
-  admin session. A game admin is not a bot admin and cannot reach any core
-  command.
-- **Rate limiting** uses the standard module gate before any command that writes
-  state, so registration and login cannot be used to flood the disk.
+- **Passwords never reach a log**, via `SECRET_ARGS` on the four commands that
+  take one. This mechanism exists because `.pwn` wrote passwords to disk, known
+  issue 22.
+- **All output is sanitised** through `strip_ctrl`. Player names, classes, and
+  item names are attacker-controlled and must not be able to inject formatting
+  or forge a line's shape.
+- **Authentication limits are purpose-built.** The core flood gate gives generic
+  spam protection only; registration, login, and password change get their own
+  limits keyed by account and identity, because the core gate is per-nick and a
+  nick is free to change.
+- **`peval` is removed.** Revision 1 included an owner-only, disabled-by-default
+  command evaluating arbitrary expressions in the bot's process. It is gone,
+  along with its `owner` and `allow_peval` configuration. Reachable code
+  execution in a process holding IRC credentials, roughly forty API keys, the
+  audit HMAC key, and every player's password hash is not justifiable for
+  operator convenience in a module that ships publicly, and an operator with
+  shell access already has `.reload` and a Python prompt. This is the single
+  largest deliberate divergence from the traditional game.
 
 ## Testing
 
-The module is testable without a network, because nothing in it makes outbound
-requests.
+Nothing here makes an outbound request, so the module is fully testable offline
+with an injected clock, random source, and outbound sink.
 
-- Levelling: a player at a known level and time advances to exactly the expected
-  level after a known number of ticks.
-- Penalties: each type applies its multiplier, scales with level, and respects the
-  ceiling.
-- Battles: with the random component pinned, a stronger player wins; alignment
-  modifiers move the outcome in the documented direction.
-- Items: a found item replaces a weaker item in its slot and never a stronger one.
-- Quests: both forms complete; a penalty during a quest fails it and sets the
-  party back.
-- Persistence: a written database reads back identically; a truncated file is
-  quarantined rather than overwritten; a legacy password hash verifies and
-  upgrades.
-- Reload: loading, unloading, and reloading leaves exactly one clock task, and
-  state survives the round trip.
-- Self-sufficiency: with `irpg` as the only loaded module, registration, login,
-  levelling, and a battle all work. This is what makes the "unload everything
-  else and it is a game bot" claim testable rather than aspirational.
-- Claims: the four claimed names reach the module while it is loaded and return
-  to core when it is unloaded.
+Phase 1: claims reach the module while loaded and return to core on unload; two
+claimants is a load error; a claimed name confers no privilege. Task helper:
+exactly one task after reload, cancellation awaited on unload, restart with
+backoff on a task that raises.
 
-## Open questions for the implementer
+Phase 2: presence rebuilt from a multi-line NAMES reply; accrual frozen while
+disconnected and not resumed from stale flags; bot kicked from the channel
+pauses the game; session ends on each documented signal; auto-login refuses a
+bare hostmask; monotonic progression correct across a simulated clock jump and a
+long delayed tick; elapsed clamp applied and logged; flush snapshot taken under
+the lock; a failed write leaves state dirty; a truncated database is quarantined
+and refuses to start; a legacy hash verifies and upgrades; concurrent command
+and tick mutation is serialized; tick failure isolates the bad record and marks
+the game degraded.
 
-None. Every behavioural choice above is resolved. Where a value is
-configuration, its default is given; where a mechanism is shared with the rest
-of the bot, the existing helper is named.
+Phases 3 to 6: per-phase, including commands invoked in a channel, password
+commands redacted in the log, ordering of speech penalty against command
+execution, quest members disconnecting or being deleted mid-quest, and output
+volume when one event generates many messages.
+
+Throughout: **self-sufficiency** - with `irpg` the only loaded module,
+registration, login, and levelling work. That is what makes "unload everything
+else and it is a game bot" testable rather than aspirational.
+
+## Open questions
+
+Revision 1 said there were none. There are, and each blocks the phase named.
+
+1. **The persistence format.** Blocks phase 2. Needs a normative appendix and at
+   least one real database file as a fixture. Without a real file, "interoperable"
+   is an assertion.
+2. **Which network account source to trust.** Blocks phase 2 sessions. The bot
+   requests `account-notify`; whether the target network supplies it decides
+   whether auto-login can be offered at all.
+3. **Whether the claim mechanism should be general or specific.** Blocks phase 1.
+   General claims fix known issue 9 for every module; a narrower mechanism is
+   less code and less risk. Recommendation: general, because the narrow version
+   leaves `health.py` still broken.
+4. **Single channel or several.** Assumed single throughout. A multi-channel game
+   changes presence, penalties, and the data model, and should be decided before
+   phase 2 rather than retrofitted.
+5. **Elapsed-time clamp value.** A default is needed for the resume-from-suspend
+   case; it is a judgement call about how much progress a delayed tick may grant.
