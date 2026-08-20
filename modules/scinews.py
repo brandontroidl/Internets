@@ -214,6 +214,7 @@ _FEEDS: dict[str, tuple[str, set[str]]] = {
     "Schneier":        ("https://www.schneier.com/feed/atom/",                 {"security"}),
     "Reg Security":    ("https://www.theregister.com/security/headlines.atom", {"security", "tech"}),
     "SANS ISC":        ("https://isc.sans.edu/rssfeed.xml",                    {"security"}),
+    "VT Blog":         ("https://blog.virustotal.com/feeds/posts/default?alt=rss", {"security"}),
     "CISA":            ("https://www.cisa.gov/cybersecurity-advisories/all.xml", {"security"}),
     "Exploit-DB":      ("https://www.exploit-db.com/rss.xml",                  {"security"}),
     "Project Zero":    ("https://googleprojectzero.blogspot.com/feeds/posts/summary?max-results=25", {"security"}),
