@@ -388,7 +388,7 @@ Read credentials once, in `on_load()`, not per command.
 **Do not invent a per-module User-Agent section.** Network modules share one
 outbound contact identifier, read as
 `cred(cfg, "weather_user_agent", "weather", "user_agent", ...)`, which 49 of
-the 75 files under `modules/` do. The name is historical drift, not a weather
+the 78 files under `modules/` do. The name is historical drift, not a weather
 scope.
 
 ### `is_configured()` hides, it never disables
@@ -406,8 +406,8 @@ async def cmd_mymod(self, nick, reply_to, arg):
         return
 ```
 
-`imdb`, `lastfm`, `satpass`, `steam`, `stocks`, `twitch`, and `youtube` are the
-seven modules that override `is_configured()`; each also carries its own
+`claude`, `imdb`, `lastfm`, `satpass`, `steam`, `stocks`, `twitch`, and
+`youtube` are the eight modules that override `is_configured()`; each also carries its own
 in-handler check. `search.py` is the counterexample to avoid: `.si` needs
 `brave_key` but the module never overrides `is_configured()`, so the command
 stays advertised on a keyless install and fails at invocation.
@@ -778,7 +778,7 @@ Conventions the suite enforces or expects:
   invariant unguarded.
 
 ```console
-$ pytest tests/                   # main suite, 40 files
+$ pytest tests/                   # main suite, 45 files
 $ python tests/run_tests.py       # standalone regression suite
 $ pytest tests/test_mymod.py -v
 ```

@@ -41,7 +41,7 @@ Two narrower options exist. `pip install -e ".[dev]"` adds the test and lint
 tooling (pytest, coverage, bandit, pip-audit, build) on top of an editable
 install. The `[project.optional-dependencies]` table in `pyproject.toml` also
 declares per-feature extras (`async`, `bcrypt`, `argon2`, `weatherkit`, `xml`,
-`all`) if you want a minimal footprint.
+`claude`, `all`) if you want a minimal footprint.
 
 **Worked when:** `python -c "import requests, aiohttp"` is silent.
 

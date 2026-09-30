@@ -32,7 +32,7 @@ gets missed - **only two of them apply to every reply.**
 The last two are the ones to be careful with. `_MAX_ARG_LEN` bounds what a user
 may send *in*; it constrains reply length only indirectly, by limiting one
 possible source of it. And `strip_ctrl()` is a function a module chooses to
-call, not a filter the send path applies: 66 of the 75 files in `modules/`
+call, not a filter the send path applies: 67 of the 78 files in `modules/`
 reference it, and the rest emit whatever they assembled.
 
 Most of the nine are harmless - `units.py` emits nothing, `dice.py` and

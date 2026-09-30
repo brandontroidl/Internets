@@ -266,7 +266,7 @@ falls back to `us` inside `geocode()` rather than failing.
 `user_agent` is **not** the supported location for the User-Agent. It exists only
 as the `cred()` legacy fallback for `weather_user_agent`; the template defines no
 `[weather] user_agent`. Its effect is larger than the section name suggests: 49
-of 75 module files read `weather_user_agent` as the bot-wide HTTP User-Agent, and
+of 78 module files read `weather_user_agent` as the bot-wide HTTP User-Agent, and
 `geocode._ua_has_contact()` **fail-closes** geocoding entirely if the UA contains
 neither an `@domain` nor an `http(s)://` prefix. An unset or contact-free UA
 therefore disables `.w`, `.regloc`, and `.myloc` with only a log warning to
@@ -378,6 +378,25 @@ same value as the in-code default, so templating them changed no behavior.
 | `[steam]` | `steamids_file` | `steamids.json` | yes |
 | `[idlerpg]` | `api_url` | `http://idlerpg.rizon.net/xml.php` | yes |
 | `[qdb]` | `api_url` | `https://bash-org-archive.com` | yes |
+| `[claude]` | `model` | `claude-opus-5-5` | yes |
+| `[claude]` | `system_prompt` | empty | yes |
+| `[claude]` | `blocked_channels` | empty | yes |
+| `[claude]` | `ignored_nicks` | empty | yes |
+| `[claude]` | `banned_nicks` | empty | yes |
+| `[claude]` | `intent_check` | `heuristic` | yes |
+| `[claude]` | `web_search` | `true` | yes |
+| `[claude]` | `file` | `claude.json` | yes |
+
+`[claude]` is read with `cfg.get(..., fallback=...)` rather than an `in` test,
+to the same effect. The three nick and channel lists are comma- or
+space-separated and matched case-insensitively. `intent_check` accepts
+`heuristic` (answer only lines that start with the bot's nick) or `off`
+(answer any mention); anything else means `heuristic`. `web_search` is off only
+for `false`, `no`, `off`, or `0`. A blank `model` means the default. Every key
+takes effect on `.reload claude`, not on `.rehash`, because the module reads
+them once in `on_load()`. The SDK honours `ANTHROPIC_BASE_URL` from the
+process environment, which would send the API key to that host instead of
+`api.anthropic.com`; leave it unset unless you mean to use a proxy.
 
 `[seen] max_age_days` is `int()`-cast inside a `try`; a non-numeric value falls
 back to 180 rather than raising. Zero disables pruning.
@@ -438,7 +457,7 @@ tier, so a template placeholder can never reach an outbound HTTP request.
 
 ### Secret inventory
 
-`KNOWN_SECRETS` holds 41 names. Membership is what makes a name visible to
+`KNOWN_SECRETS` holds 42 names. Membership is what makes a name visible to
 `secret_store list`, `status`, and `migrate`. `CONFIG_LOCATIONS` holds 40 of them
 with a legacy `(section, key)` migration source.
 
@@ -447,13 +466,16 @@ with a legacy `(section, key)` migration source.
 | IRC auth | `nickserv_password`, `sasl_password`, `server_password`, `oper_password` |
 | Contact identifier | `weather_user_agent` |
 | Weather providers (25) | `weatherapi_key`, `tomorrowio_key`, `openweathermap_key`, `visualcrossing_key`, `pirateweather_key`, `weatherstack_key`, `accuweather_key`, `worldweatheronline_key`, `weatherbit_key`, `stormglass_key`, `meteomatics_username`, `meteomatics_password`, `weatherkit_team_id`, `weatherkit_service_id`, `weatherkit_key_id`, `weatherkit_key_file`, `airnow_key`, `purpleair_key`, `waqi_token`, `openaq_key`, `iqair_key`, `tidecheck_key`, `firms_key`, `google_pollen_key`, `n2yo_api_key` |
-| Other modules (11) | `omdb_key`, `lastfm_key`, `youtube_key`, `finnhub_key`, `alphavantage_key`, `twelvedata_key`, `steam_key`, `twitch_client_id`, `twitch_client_secret`, `brave_key`, `abuseipdb_key` |
+| Other modules (12) | `omdb_key`, `lastfm_key`, `youtube_key`, `finnhub_key`, `alphavantage_key`, `twelvedata_key`, `steam_key`, `twitch_client_id`, `twitch_client_secret`, `brave_key`, `abuseipdb_key`, `anthropic_api_key` |
 
 `weatherkit_key_file` stores a filesystem **path** to the Apple `.p8` private
 key, not the key material. That file's own permissions are the operator's
 responsibility.
 
-`sasl_password` is the one name in `KNOWN_SECRETS` with no `CONFIG_LOCATIONS`
+`anthropic_api_key` has no `CONFIG_LOCATIONS` entry either, because it never
+had a plaintext ini location to migrate from.
+
+`sasl_password` is the other name in `KNOWN_SECRETS` with no `CONFIG_LOCATIONS`
 entry, so `migrate` never sweeps it. It also has no runtime consumer: the SASL
 PLAIN path calls `sasl_plain_payload(self._nick, NS_PW)`, so SASL always uses
 `nickserv_password` and a distinct `sasl_password` is silently ignored. The

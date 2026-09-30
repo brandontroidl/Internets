@@ -65,10 +65,12 @@ full set, which is what a real deployment wants.
 | `PyJWT>=2.13.0` | `weatherkit` | No | The Apple WeatherKit provider cannot sign its ES256 token |
 | `cryptography>=50.0.0` | `weatherkit` | No | Same; PyJWT needs it for ES256 |
 | `defusedxml>=0.7.1` | `xml` | Conditional | Three command modules fail to load at all |
+| `anthropic>=1.9.0` | `claude` | No | The `claude` module stays silent and hidden from `.help` |
 
-The `all` extra is the union of the six optional packages. The `dev` extra
+The `all` extra is the union of the seven optional packages. The `dev` extra
 (`pytest`, `pytest-asyncio`, `pytest-cov`, `coverage`, `bandit[sarif]`,
-`pip-audit`, `build`) is tooling only and never reaches a deployment.
+`pip-audit`, `build`, and `anthropic` so the `claude` tests run) is tooling
+only and never reaches a deployment.
 
 :::{note}
 **`fetch_json()` is the preferred helper, not a chokepoint.** An AST walk over
@@ -108,6 +110,25 @@ the verify function, so a missing backend is not a startup failure:
 `ValueError` naming the missing package rather than returning `False`. That
 fails closed - admin authentication cannot succeed - but it does so at first
 `.auth`, not at boot. A deployment on `scrypt$` needs neither package.
+
+**`anthropic` is opt-in and deliberately outside `requirements.txt`.** Only
+`modules/claude.py` uses it, through a function-local import, so without it the
+module loads, stays silent, and reports `is_configured()` False. It is declared
+in the `claude` extra, in `all`, and in `dev` (so CI's `test` job exercises the
+module against the real SDK), but not in `requirements.txt`, for two reasons.
+It is a paid service an operator should choose, and it brings its own
+transitive tree (an HTTP client, `pydantic`, and more) into an otherwise small
+set. And `requirements.lock` can only be regenerated on Python 3.10 (see
+"Regeneration" below); adding it to `requirements.txt` without that resolve
+would leave the two files out of step. The cost is real: `pip-audit` scans
+`requirements.lock` only, so nothing in CI audits the `anthropic` release an
+operator installs. Install it with `pip install 'internets-irc[claude]'` or
+`pip install 'anthropic>=1.9.0'`.
+
+The SDK does its own HTTP, so the `fetch_json()` byte cap does not apply to it.
+Its responses are bounded instead by `max_tokens` (4096) on every request, and
+its errors are mapped to fixed replies without exception text
+(`modules/claude.py - _complete_sync()`).
 
 **`defusedxml` is a hard import in three modules.** `modules/idlerpg.py`,
 `modules/scinews.py`, and `modules/reflookup.py` all import it at module scope,

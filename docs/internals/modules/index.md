@@ -89,6 +89,10 @@ the main documentation), whose `--check` mode gates drift.
 - [qdb](qdb.md) - quote database lookup
 - [health](health.md) - bot self-check
 
+## AI
+
+- [claude](claude.md) - Claude chat, memory, personas, recaps, chime-ins, moderation; covers the `_claude_state` and `_claude_intent` helpers
+
 ## Fun
 
 - [bofh](bofh.md) - excuse generator

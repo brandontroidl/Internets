@@ -27,8 +27,8 @@ verification steps, is [docs/data-retention.md](docs/data-retention.md).
 
 ## Read this first if you are installing the bot
 
-The shipped `config.ini.example` autoloads 69 modules. Five of them keep their
-own store of user data: `seen`, `tell`, `notes`, `remind`, `steam`. `location`
+The shipped `config.ini.example` autoloads 70 modules. Six of them keep their
+own store of user data: `seen`, `tell`, `notes`, `remind`, `steam`, `claude`. `location`
 keeps no file of its own but writes your saved location through the core store
 and logs it. `linktitle` persists nothing, and writes every URL it announces
 into the application log. The `privacy` module is in that list, so the erasure
@@ -62,8 +62,10 @@ whatever the process umask gives it, and so do the segments it rotates into
 | Your personal notes | Recalled by `.notes` | `notes.json` |
 | Your pending reminders | Fired at the time you asked for | `reminders.json` |
 | Your registered Steam ID | So `.steam` works with no argument | `steamids.json` |
+| The last 100 lines of each AI-enabled channel, yours included | Recaps, chime-ins, and `.scheck` | `claude.json` |
+| Facts you asked the bot to remember, your timezone, personas | Used in the bot's replies to you | `claude.json` |
 | Shadow-ban entries (set by an admin) | Moderation: your commands are then silently ignored | `shadow_bans.json` |
-| Admin actions, with the admin's nick and hostmask | Tamper-evident accountability for privileged commands | `audit.log` |
+| Admin actions (and op kicks via `.skick`/`.skban`), with the actor's nick and hostmask | Tamper-evident accountability for privileged commands | `audit.log` |
 | Every command you run, with your nick, hostmask, and the text you passed it | Operational logging | `internets.log` |
 | Other application log lines, some carrying user data | Operational logging | `internets.log` |
 | Every IRC line in and out, if the operator enabled it | Protocol debugging | `[logging] debug_file` |
@@ -120,6 +122,26 @@ channel.
 between two identity namespaces and is the most directly identifying record the
 bot keeps by consent.
 
+### Claude chat (`claude.json`, module `claude`)
+
+When the `claude` module is loaded and has an API key, it keeps:
+
+- **A channel backlog.** The last 100 lines said in each channel where AI chat
+  is on, up to 48 hours old: timestamp, nick, and text, including `/me`
+  actions and the bot's own replies. This is passive: you are recorded by
+  talking in the channel, not by using the bot. Command lines are not
+  recorded, and neither are lines from opted-out nicks. A channel op can turn
+  it off for a channel with `.ai off`, and the operator can exclude channels
+  and nicks in `[claude]`.
+- **Facts you asked it to remember** (`Internets: remember ...`): up to 50 per
+  nick, 300 characters each, kept until you remove them.
+- **Your timezone and 12/24-hour preference**, if you told it.
+- **Personas**: style text someone set for a channel or for a nick, up to 200
+  characters each.
+- **In memory only**, lost on restart: your last 12 messages with the bot in
+  each channel, dropped after 30 idle minutes, and the host part of your
+  hostmask as last seen (used by `.skban`).
+
 ### Shadow bans (`shadow_bans.json`)
 
 An admin running `.shadow-ban <nick> [reason]` stores your lowercased nick and
@@ -129,7 +151,8 @@ the free-text reason they typed. This is an operator moderation record. It is
 ### Admin audit trail (`audit.log`)
 
 `audit_log.py - AuditLog.record()` appends a hash-chained record for each
-privileged action, holding the acting admin's nick and hostmask, the action,
+privileged action, holding the acting admin's nick and hostmask (or a channel
+op's, for `.skick` and `.skban`), the action,
 its arguments, and the chain hashes. Records are append-only by design: erasing
 one breaks verification. `.say` and `.act` records include the message text the
 admin sent. If you are not an admin, your nick can still appear here inside the
@@ -223,11 +246,20 @@ inventory of services, endpoints, and byte caps is in
 | A URL you pasted in channel | The site itself, fetched automatically |
 | An IP or hostname you asked about | DNS, RDAP, ip-api, and reputation feeds |
 | Free-text queries you typed | Search, translation, and lookup APIs |
+| What you say to the bot, and recent channel lines | Anthropic (the `claude` module) |
 | Third-party account handles | Last.fm, Steam, Twitch, IdleRPG |
 | The operator's contact identifier | Every outbound module request |
 
 Specifics worth stating plainly:
 
+- **Claude chat.** Talking to the bot (addressing it by nick, `.claude`,
+  `.ask`) sends Anthropic your message, your nick, your saved facts, any
+  persona set for you or the channel, and your recent turns with the bot.
+  A recap request ("catch me up"), an unprompted chime-in, `.scheck`, and
+  `.aitell` also send up to 100 lines of the channel backlog, which includes
+  other people's nicks and messages. With web search on, Claude may query the
+  web about the question. What Anthropic keeps is governed by Anthropic's
+  terms, not by this bot.
 - **Weather.** A `.w`, `.forecast`, `.alerts`, or similar command sends your
   location text to a geocoder (`nominatim.openstreetmap.org`, or
   `api.zippopotam.us` for postal codes), then sends the resulting
@@ -313,6 +345,8 @@ looks like, in [docs/data-retention.md](docs/data-retention.md).
 | `locations.json` | Indefinite |
 | `notes.json` | Indefinite |
 | `steamids.json` | Indefinite |
+| `claude.json` backlog | 100 lines per channel, 48 hours |
+| `claude.json` facts, preferences, personas | Indefinite |
 | `shadow_bans.json` | Indefinite |
 | `audit.log` | Indefinite |
 | `internets.log` | 4 files of 5 MiB each |
@@ -398,7 +432,8 @@ each loaded module holds, by calling `BotModule.forget(nick)` on all of them.
 Modules that implement erasure: `seen` (your entry), `tell` (both messages
 queued **for** you and messages **you sent** to others), `notes` (all of them),
 `remind` (all pending, and their timers are cancelled), `steam` (your
-registration). Every other module returns 0 because it stores nothing about
+registration), `claude` (your facts, preferences, personas set for you, your
+lines in every channel backlog, and your in-memory conversations). Every other module returns 0 because it stores nothing about
 you.
 
 ### What `.forgetme` does not reach
@@ -416,8 +451,8 @@ This list is verified, not cautionary boilerplate.
   channel the bot sits in, and everything you sent it privately, is in that
   file verbatim.
 - **The audit log.** `audit.log` and its rotated `audit.log.<stamp>` segments
-  are append-only and hash-chained. If you are an admin, your nick and hostmask
-  are permanent there.
+  are append-only and hash-chained. If you are an admin, or used `.skick` or
+  `.skban` as a channel op, your nick and hostmask are permanent there.
 - **Backup files.** `store.py - Store._write()` copies each state file to
   `<name>.json.bak` before every write, so the previous `users.json` contents
   survive in `users.json.bak` until the next successful write replaces it. That

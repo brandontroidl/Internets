@@ -8,6 +8,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Claude chat (`modules/claude.py`).** Address the bot by nick, or use
+  `.claude` / `.ask`, and Claude answers over the Anthropic Messages API. Modelled
+  on the sopel ai-multi plugin: short per-conversation memory, facts you ask it
+  to remember, personas (yours, or the channel's when an op sets one), timezone
+  and clock preferences, recaps of the channel backlog, replies to `/me` emotes,
+  web search, and unprompted chime-ins that stay off until an op runs
+  `.talkback on`. Ops get `.ai on|off`, `.scheck` (AI review of recent lines,
+  sent by PM), `.skick`, and `.skban`; admins get `.aitell`. Needs
+  `anthropic_api_key` and the new `claude` extra (`pip install
+  'internets-irc[claude]'`); without them the module is silent and hidden from
+  `.help`. It records the last 100 lines of each AI-enabled channel for up to 48
+  hours in `claude.json`, sends conversation context to Anthropic, and is
+  covered by `.optout` and `.forgetme`; see `PRIVACY.md`. This is the first
+  module that grants channel operators any bot privilege; see
+  `docs/security-model.md`, section 4.
+
 - **Documentation reconstructed from the source, in two layers.** The narrative
   guides under `docs/` were rewritten or written from scratch against the
   implementation rather than against the previous documentation, and a new

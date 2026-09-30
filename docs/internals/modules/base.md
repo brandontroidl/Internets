@@ -55,7 +55,7 @@ without the full dependency set. The `IRCBot` type is imported under `TYPE_CHECK
 only - no runtime import cycle with `internets.py`.
 
 Dependents (verified by grep at time of writing): all 70+ command modules subclass
-`BotModule`; 72 of 75 files under `modules/` use `help_row` and/or `strip_ctrl`; 22
+`BotModule`; 73 of 78 files under `modules/` use `help_row` and/or `strip_ctrl`; 22
 call `fetch_json` (24 files reference it, minus this file and `example.py`'s
 commentary); `probe.py`, `scinews.py` use `resolve_public`; most keyed modules use
 `cred`. `internets.py - IRCBot.load_module()` consumes the contract from the other

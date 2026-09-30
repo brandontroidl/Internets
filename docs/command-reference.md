@@ -1,7 +1,7 @@
 # Command Reference
 
-Every command the bot can dispatch: 165 primary module commands across 70 modules,
-4 public core commands, and 23 admin core commands, as of 2026-08-15.
+Every command the bot can dispatch: 173 primary module commands across 71 modules,
+4 public core commands, and 23 admin core commands, as of 2026-09-29.
 
 The inventory below is **generated**, not hand-listed. `scripts/gen-command-reference.py`
 walks `modules/`, instantiates each `BotModule` subclass without running `__init__`,
@@ -11,7 +11,7 @@ and reports the real `COMMANDS` registrations plus
 ```console
 $ python scripts/gen-command-reference.py
 ...
-Primary module commands: 165. Core public: 4. Core admin: 23.
+Primary module commands: 173. Core public: 4. Core admin: 23.
 ```
 
 Drift is gated. The check mode exits non-zero if any registered command name is
@@ -810,6 +810,32 @@ Module `privacy` - key: none - 4 commands.
   rate-limited.
   `.forgetme` also reports "tracking in 1 channel(s) (erased now)" for a user who
   was never tracked, because the opt-out sentinel row is counted.
+
+## AI
+
+### claude
+
+Module `claude` - key: `anthropic_api_key` **required**, plus the optional
+`anthropic` package - 8 commands. Most use needs no command at all: address the
+bot by nick at the start of a line (`Internets: what's a quasar?`) and it answers
+in the channel. See [internals/modules/claude.md](internals/modules/claude.md)
+for everything it recognises without a command (saved facts, personas,
+timezone, recaps, `/me` emotes).
+
+- **`.claude <message>`** (`.ask`) - talk to Claude; same path as addressing the
+  bot, and works in PM. e.g. `.claude why is the sky blue`
+- **`.claudereset [channel]`** - forget your recent conversation with the bot here;
+  `channel` (ops) clears every conversation and the recap backlog for the channel.
+- **`.ai [on|off]`** - ops: switch AI chat on or off for this channel. On by default.
+- **`.talkback [on|off]`** - ops: allow unprompted chime-ins here. Off by default.
+- **`.scheck [#chan] [nick]`** - ops: AI review of the last 100 logged messages,
+  or one nick's, sent to you by PM. Naming a channel needs bot admin.
+- **`.skick <nick> <#chan>`** - ops: kick. The channel may be omitted in-channel.
+- **`.skban <nick> <#chan>`** - ops: ban `*!*@host` (host as last seen) and kick.
+- **`.aitell <#chan> <directive>`** - admin: post one AI-written line to a channel.
+
+  Note: each answer is a paid API call. The per-nick API cooldown applies to
+  every AI reply; locally answered requests (facts, personas, the time) skip it.
 
 ## More
 

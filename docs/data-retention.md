@@ -43,6 +43,10 @@ table overflows the PDF build.
 | Note | `modules/notes.py - NotesModule._do_add()` | `notes.json` |
 | Reminder | `modules/remind.py - RemindModule.cmd_remind()` | `reminders.json` |
 | Steam registration | `modules/steam.py - cmd_regsteam()` | `steamids.json` |
+| Claude backlog line | `modules/_claude_state.py - ClaudeState.log_line()` | `claude.json` |
+| Claude fact | `modules/_claude_state.py - ClaudeState.add_fact()` | `claude.json` |
+| Claude preference | `modules/_claude_state.py - ClaudeState.set_pref()` | `claude.json` |
+| Claude persona | `modules/_claude_state.py - ClaudeState.set_persona()` | `claude.json` |
 | Shadow-ban entry | `internets.py - _save_shadow_bans()` | `shadow_bans.json` |
 | Audit record | `audit_log.py - AuditLog.record()` | `audit.log` |
 | Application log line | `botlog.py - _setup_logging()` | `internets.log` |
@@ -52,6 +56,8 @@ table overflows the PDF build.
 | Quarantined state | `store.py - Store._quarantine()` | `<name>.json.corrupt.<ts>` |
 | Geocode cache | `modules/geocode.py` | memory only |
 | URL dedup map | `modules/linktitle.py` | memory only |
+| Claude conversation | `modules/_claude_state.py - Conversations.append()` | memory only |
+| Claude host cache | `modules/claude.py - ClaudeModule.on_raw()` | memory only |
 | Hostmask cache | `internets.py - IRCBot._nick_hosts` | memory only |
 
 Contents per datum:
@@ -72,6 +78,15 @@ Contents per datum:
   per nick (`MAX_PER_NICK`), lead time 30 s to 30 days (`MIN_LEAD_SECONDS`,
   `MAX_LEAD_SECONDS`).
 - **Steam registration** - lowercased nick to SteamID64 string.
+- **Claude backlog line** - `[ts, nick, text]` per channel line, text <= 400
+  chars after `strip_ctrl`. Every non-command line in a channel with AI chat on,
+  from any nick not opted out and not in `[claude] banned_nicks`, plus the
+  bot's own replies. Cap 100 lines per channel (`BACKLOG_LINES`).
+- **Claude fact** - free text <= 300 chars (`MAX_FACT_LEN`), keyed by the
+  lowercased nick that saved it. Cap 50 (`MAX_FACTS`).
+- **Claude preference** - `tz` (IANA name) and `clock` (12 or 24) per nick.
+- **Claude persona** - style text <= 200 chars (`MAX_PERSONA_LEN`) per channel,
+  and per nick within a channel.
 - **Shadow-ban entry** - lowercased nick plus operator-supplied reason text.
 - **Audit record** - `v`, `ts`, `actor`, `host`, `action`, `args`, `prev_hash`,
   `this_hash`. `actor` and `host` are the admin's nick and hostmask; a
@@ -90,6 +105,11 @@ Contents per datum:
 | Note | Unbounded | `.notes del`, `.notes clear`, `.forgetme` |
 | Reminder | Until fire or cancel | `_fire()`, `.remind-cancel`, `.forgetme` |
 | Steam registration | Unbounded | `.regsteam` overwrite or `.forgetme` |
+| Claude backlog line | 48 h, 100 lines per channel | `ClaudeState.prune()` at load and each 60 s flush; `.claudereset channel` |
+| Claude fact | Unbounded | `forget ...` to the bot, `.forgetme` |
+| Claude preference | Unbounded | Overwrite or `.forgetme` |
+| Claude persona | Unbounded | `reset personality`, `.forgetme` |
+| Claude conversation | 30 idle minutes, 12 messages | Expiry, `.claudereset`, restart |
 | Shadow-ban entry | Unbounded | `.shadow-unban` only |
 | Audit record | Unbounded | Never deleted; rotates at 5 MiB |
 | Application log line | 4 files x 5 MB | Size rollover discards the oldest |
@@ -134,6 +154,8 @@ detail cap, and every per-user count cap in Table A.
 | Note | Yes, `NotesModule.forget()` | Read `notes.json`, written at once |
 | Reminder | Yes, timers cancelled too | Read `reminders.json`, written at once |
 | Steam registration | Yes, `SteamModule.forget()` | Read `steamids.json` |
+| Claude backlog, facts, preferences, personas | Yes, `ClaudeModule.forget()` | Read `claude.json`, written at once |
+| Claude conversation | Yes, `ClaudeModule.forget()` | Not inspectable at runtime |
 | Shadow-ban entry | **No** | `.shadow-list`, or read the file |
 | Audit record | **No**, append-only by design | `.audit`, or read `audit.log` |
 | Application log line | **No** | Search `internets.log` for the nick |
