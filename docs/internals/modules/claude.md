@@ -117,7 +117,13 @@ reaching the API: the module fails closed rather than answering unbound.
 Recap phrasing ("catch me up", "tldr", `^^`, "what do you think", see
 `modules/_claude_intent.py - is_review()`) adds the last 60 backlog lines to the
 system prompt, with a 30 s per-nick cooldown. The reply goes to the channel as
-`nick: text`, after a 1.5 to 4 s delay, and is appended to the backlog.
+`nick: text`, after a 1.5 to 4 s delay, and is appended to the backlog. When
+`nick: text` would take more than `[claude] max_channel_lines` IRC lines
+(default 2, counted at the core's 400-byte split, `_LINE_BYTES`), the reply goes
+to the asker by PM instead, nothing is posted in the channel, and the reply
+stays out of the backlog; it still enters the asker's conversation history.
+`.aitell`, chime-ins (200 characters), and emote replies (300) are not routed
+this way.
 
 History is stored as text only. Thinking blocks are never replayed: the system
 prompt changes between requests (facts, personas, time), and the API rejects a
@@ -204,7 +210,7 @@ personas, backlog lines, conversations, and recorded host, then saves at once.
 ## Configuration
 
 `[claude]` in `config.ini.example`: `model`, `system_prompt`,
-`doctrine_file`, `blocked_channels`, `ignored_nicks`, `banned_nicks`, `intent_check`,
+`doctrine_file`, `max_channel_lines`, `blocked_channels`, `ignored_nicks`, `banned_nicks`, `intent_check`,
 `web_search`, `file`. The key is `cred(cfg, "anthropic_api_key", "claude",
 "api_key")`, so `INTERNETS_ANTHROPIC_API_KEY` or `[secrets] anthropic_api_key`.
 Without the key or without the `anthropic` package the module stays silent and

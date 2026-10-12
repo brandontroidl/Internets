@@ -381,6 +381,7 @@ same value as the in-code default, so templating them changed no behavior.
 | `[claude]` | `model` | `claude-opus-5-5` | yes |
 | `[claude]` | `system_prompt` | empty | yes |
 | `[claude]` | `doctrine_file` | empty | yes |
+| `[claude]` | `max_channel_lines` | `2` | yes |
 | `[claude]` | `blocked_channels` | empty | yes |
 | `[claude]` | `ignored_nicks` | empty | yes |
 | `[claude]` | `banned_nicks` | empty | yes |
@@ -393,7 +394,9 @@ to the same effect. The three nick and channel lists are comma- or
 space-separated and matched case-insensitively. `intent_check` accepts
 `heuristic` (answer only lines that start with the bot's nick) or `off`
 (answer any mention); anything else means `heuristic`. `web_search` is off only
-for `false`, `no`, `off`, or `0`. A blank `model` means the default. Every key
+for `false`, `no`, `off`, or `0`. `max_channel_lines` takes 1 to 10; a blank,
+non-integer, or out-of-range value means `2` and logs a warning. A blank
+`model` means the default. Every key
 takes effect on `.reload claude`, not on `.rehash`, because the module reads
 them once in `on_load()`; the *contents* of `doctrine_file` are the exception,
 re-read whenever the file's mtime changes. The SDK honours `ANTHROPIC_BASE_URL` from the

@@ -630,6 +630,52 @@ def test_failures_never_log_exception_text(caplog):
     assert caplog.records and _SECRET not in caplog.text
 
 
+# --- long replies go to PM ----------------------------------------------------------------
+
+def test_line_budget_matches_the_core_split():
+    assert claude._LINE_BYTES == IRCBot._MAX_BODY
+
+
+def test_reply_within_the_line_budget_stays_in_the_channel(mod):
+    mod._client = StubClient(_resp("x" * 500))            # "alice: " + 500 bytes = 2 lines
+    out = _say(mod, f"{BOT}: hi")
+    assert mod.bot.sent == [("privmsg", "#chan", "alice: " + "x" * 500)]
+    assert out and "x" * 50 in mod.state.recent("#chan", 5)[-1][2]
+
+
+def test_reply_over_the_line_budget_goes_to_the_asker_by_pm(mod):
+    mod._client = StubClient(_resp("y" * 1000))           # 3 lines
+    _say(mod, f"{BOT}: tell me everything")
+    assert mod.bot.sent == [("privmsg", "alice", "y" * 1000)]
+    assert all("y" * 50 not in row[2] for row in mod.state.recent("#chan", 10))
+    # The exchange still counts as conversation, so a follow-up has context.
+    assert mod.convos.get("#chan", "alice")[-1]["content"] == "y" * 1000
+
+
+def test_line_budget_is_configurable_and_bounded(monkeypatch, tmp_path):
+    monkeypatch.setattr(claude, "cred", lambda *a, **k: "")
+    monkeypatch.setattr(claude, "_TYPING_DELAY", (0, 0))
+
+    def load(value):
+        m = claude.ClaudeModule(FakeBot(f"[claude]\nfile = {tmp_path / 'c.json'}\n"
+                                        f"max_channel_lines = {value}\n"))
+        m.on_load()
+        return m
+
+    assert [load(v)._channel_lines for v in ("", "1", "10", "0", "11", "lots")] == \
+        [2, 1, 10, 2, 2, 2]
+    m = load("1")
+    m._client = StubClient(_resp("x" * 500))
+    _say(m, f"{BOT}: hi")
+    assert m.bot.sent == [("privmsg", "alice", "x" * 500)]
+
+
+def test_pm_replies_ignore_the_line_budget(mod):
+    mod._client = StubClient(_resp("z" * 1000))
+    asyncio.run(mod.cmd_claude("alice", "alice", "long one please"))
+    assert mod.bot.sent == [("privmsg", "alice", "z" * 1000)]
+
+
 # --- operator doctrine and authority ------------------------------------------------------
 
 def _doctrine_mod(monkeypatch, tmp_path, doctrine):

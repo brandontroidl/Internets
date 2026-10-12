@@ -27,6 +27,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   re-read when it changes; if the file is set but unusable the module refuses
   to answer. A speaker logged in with `AUTH` is named in the prompt as the
   operator whose instructions take precedence; a matching nick alone is not.
+  An answer longer than `[claude] max_channel_lines` IRC lines (default 2) is
+  sent to the asker by PM instead of the channel.
 
 - **Documentation reconstructed from the source, in two layers.** The narrative
   guides under `docs/` were rewritten or written from scratch against the

@@ -204,6 +204,10 @@ system_prompt =
 ; every cache miss.  If set but missing, empty, or too large, the module
 ; refuses to answer rather than answering without it.  Blank = off.
 doctrine_file =
+; A channel answer that would take more IRC lines than this (400 bytes
+; each, counting the "nick: " prefix) is sent to the asker by PM instead.
+; 1-10; anything else means the default.
+max_channel_lines = 2
 ; Channels where the module neither answers nor records the backlog.
 blocked_channels =
 ; Nicks the module never answers but still records in the backlog.

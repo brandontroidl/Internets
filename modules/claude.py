@@ -43,6 +43,9 @@ _TASK_TIMEOUT = 55.0
 # by the system prompt and _MAX_REPLY instead.
 _MAX_TOKENS = 4096
 _MAX_REPLY = 1200          # three IRC lines at the 400-byte split
+_LINE_BYTES = 400          # IRCBot._MAX_BODY: where privmsg splits a message
+_CHANNEL_LINES = 2         # default [claude] max_channel_lines
+_CHANNEL_LINES_MAX = 10
 
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 _SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search", "max_uses": 3}
@@ -202,6 +205,8 @@ class ClaudeModule(BotModule):
         self._persona_base = strip_ctrl(get("system_prompt"), 1000)
         self._intent_mode = "off" if get("intent_check").lower() == "off" else "heuristic"
         self._search = get("web_search", "true").lower() not in ("false", "no", "off", "0")
+        self._channel_lines = self._bounded_int(
+            get("max_channel_lines"), _CHANNEL_LINES, 1, _CHANNEL_LINES_MAX)
         self._blocked = self._set(get("blocked_channels"))
         self._banned = self._set(get("banned_nicks"))
         self._ignored = self._set(get("ignored_nicks"))
@@ -259,6 +264,23 @@ class ClaudeModule(BotModule):
             await asyncio.sleep(_FLUSH_SECONDS)
             self.state.prune()
             await asyncio.to_thread(self.state.save)
+
+    @staticmethod
+    def _bounded_int(raw: str, default: int, lo: int, hi: int) -> int:
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            value = None
+        if value is None or not lo <= value <= hi:
+            log.warning("claude: max_channel_lines must be %d-%d, using %d", lo, hi, default)
+            return default
+        return value
+
+    @staticmethod
+    def _lines(text: str) -> int:
+        return -(-len(text.encode("utf-8", errors="replace")) // _LINE_BYTES)
 
     @staticmethod
     def _set(raw: str) -> set[str]:
@@ -511,8 +533,15 @@ class ClaudeModule(BotModule):
             text = f"{text} | sources: {' '.join(sources)}"
         if typing:
             await self._typing()
-        self._say(where if _is_channel(where) else nick,
-                  f"{nick}: {text}" if _is_channel(where) else text)
+        line = f"{nick}: {text}"
+        if not _is_channel(where):
+            self._say(nick, text)
+        elif self._lines(line) > self._channel_lines:
+            # Long answers go to the asker alone rather than flooding the
+            # channel; they stay out of the channel backlog for the same reason.
+            self.bot.privmsg(nick, text)
+        else:
+            self._say(where, line)
         if not self._opted_out(nick):
             self.convos.append(where, nick, user_text, text)
 
