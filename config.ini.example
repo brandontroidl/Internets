@@ -198,6 +198,12 @@ api_url =
 model = claude-opus-5-5
 ; Extra personality text appended to the built-in IRC style prompt.
 system_prompt =
+; Path to a text file of standing rules that leads every request's system
+; prompt (~ is expanded; at most 256 KB; edits apply on the next request).
+; Sent with prompt caching, but a large file still costs input tokens on
+; every cache miss.  If set but missing, empty, or too large, the module
+; refuses to answer rather than answering without it.  Blank = off.
+doctrine_file =
 ; Channels where the module neither answers nor records the backlog.
 blocked_channels =
 ; Nicks the module never answers but still records in the backlog.

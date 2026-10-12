@@ -380,6 +380,7 @@ same value as the in-code default, so templating them changed no behavior.
 | `[qdb]` | `api_url` | `https://bash-org-archive.com` | yes |
 | `[claude]` | `model` | `claude-opus-5-5` | yes |
 | `[claude]` | `system_prompt` | empty | yes |
+| `[claude]` | `doctrine_file` | empty | yes |
 | `[claude]` | `blocked_channels` | empty | yes |
 | `[claude]` | `ignored_nicks` | empty | yes |
 | `[claude]` | `banned_nicks` | empty | yes |
@@ -394,7 +395,8 @@ space-separated and matched case-insensitively. `intent_check` accepts
 (answer any mention); anything else means `heuristic`. `web_search` is off only
 for `false`, `no`, `off`, or `0`. A blank `model` means the default. Every key
 takes effect on `.reload claude`, not on `.rehash`, because the module reads
-them once in `on_load()`. The SDK honours `ANTHROPIC_BASE_URL` from the
+them once in `on_load()`; the *contents* of `doctrine_file` are the exception,
+re-read whenever the file's mtime changes. The SDK honours `ANTHROPIC_BASE_URL` from the
 process environment, which would send the API key to that host instead of
 `api.anthropic.com`; leave it unset unless you mean to use a proxy.
 

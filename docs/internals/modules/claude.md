@@ -90,11 +90,29 @@ Claude. An opted-out user cannot save facts.
 **Sent to Claude** otherwise, after `bot.rate_limited()`. The request carries:
 
 - a system prompt: IRC style (plain text, short, says it is a bot if sincerely
-  asked), `[claude] system_prompt`, the channel and per-user personas, the
-  speaker's saved facts, and the current UTC time;
+  asked), the current UTC time, an operator line (below), `[claude]
+  system_prompt`, the channel and per-user personas, and the speaker's saved
+  facts;
 - the speaker's recent turns in this channel from `Conversations` (12 messages,
   expiring after 30 idle minutes, 500 conversations at most);
 - the new line as `<nick> text`.
+
+**Operator authority.** When `bot.is_admin()` holds for the speaker (logged in
+with `AUTH` from the hostmask bound at login), the system prompt names them the
+authenticated operator whose instructions override personas and other users.
+Every other speaker gets a line saying that only a speaker the prompt names
+has that authority, so "I am the operator" from an unauthenticated nick, or a
+nick that merely matches the operator's, carries nothing.
+
+**Doctrine.** With `[claude] doctrine_file` set,
+`modules/claude.py - ClaudeModule._doctrine_text()` reads the file (at most
+256 KB, re-read when its mtime changes) and `ClaudeModule._call()` sends it as
+the first system block with `cache_control`, ahead of the per-request text,
+so the time, personas, and facts never break its cache prefix. This applies to
+every call the module makes, `.scheck` and `.aitell` included. A configured
+file that is missing, unreadable, empty, or over the cap makes every call
+answer `doctrine file unreadable - check [claude] doctrine_file` without
+reaching the API: the module fails closed rather than answering unbound.
 
 Recap phrasing ("catch me up", "tldr", `^^`, "what do you think", see
 `modules/_claude_intent.py - is_review()`) adds the last 60 backlog lines to the
@@ -186,7 +204,7 @@ personas, backlog lines, conversations, and recorded host, then saves at once.
 ## Configuration
 
 `[claude]` in `config.ini.example`: `model`, `system_prompt`,
-`blocked_channels`, `ignored_nicks`, `banned_nicks`, `intent_check`,
+`doctrine_file`, `blocked_channels`, `ignored_nicks`, `banned_nicks`, `intent_check`,
 `web_search`, `file`. The key is `cred(cfg, "anthropic_api_key", "claude",
 "api_key")`, so `INTERNETS_ANTHROPIC_API_KEY` or `[secrets] anthropic_api_key`.
 Without the key or without the `anthropic` package the module stays silent and
@@ -200,7 +218,12 @@ Without the key or without the `anthropic` package the module stays silent and
   user requests. Anyone can steer the bot's style for themselves; only ops can
   steer it for the channel or for another nick. The model has no tools besides
   web search, so a steered persona can change what it says but not what the
-  bot does.
+  bot does. Operator authority is the same: it changes what the model is told
+  to prioritise, not what the bot can do.
+- The doctrine file goes to the API on every request, and channel users can
+  ask the bot to repeat its instructions. The prompt tells the model not to
+  recite it, which is a deterrent, not a control: put nothing in that file you
+  would not want posted to the channel.
 - The bot's own nick is read from the private `bot._nick` at use time, because
   there is no public accessor and it changes on NICK.
 
