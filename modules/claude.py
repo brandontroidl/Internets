@@ -28,6 +28,10 @@ from .base import BotModule, cred, help_row, strip_ctrl
 
 log = logging.getLogger("internets.claude")
 
+# Typing delay and chime-in rolls are not security decisions; SystemRandom
+# keeps Bandit B311 quiet without per-line nosec, as in modules/bofh.py.
+_rng = random.SystemRandom()
+
 _DEFAULT_MODEL = "claude-opus-5-5"
 
 # Handlers are cancelled at 60 s (internets.py _CMD_TIMEOUT), and tasks started
@@ -446,7 +450,7 @@ class ClaudeModule(BotModule):
             self._waiting -= 1
 
     async def _typing(self) -> None:
-        await asyncio.sleep(random.uniform(*_TYPING_DELAY))
+        await asyncio.sleep(_rng.uniform(*_TYPING_DELAY))
 
     def _say(self, target: str, text: str) -> None:
         self.bot.privmsg(target, text)
@@ -536,7 +540,7 @@ class ClaudeModule(BotModule):
         if len(self.state.recent(channel, _CHIMEIN_MIN_LINES)) < _CHIMEIN_MIN_LINES:
             return False
         chance = _CHIMEIN_CHANCE * (_CHIMEIN_LAUGH_BOOST if intent.is_laughter(text) else 1)
-        if random.random() >= chance:
+        if _rng.random() >= chance:
             return False
         self._chime_last[channel.lower()] = now
         return True

@@ -421,7 +421,7 @@ def _fill(m, n=6):
 
 
 def test_chime_in_only_when_talkback_is_on(mod, monkeypatch):
-    monkeypatch.setattr(claude.random, "random", lambda: 0.0)
+    monkeypatch.setattr(claude._rng, "random", lambda: 0.0)
     _fill(mod)
     _drain(mod)
     assert mod._client.calls == []
@@ -436,7 +436,7 @@ def test_chime_in_only_when_talkback_is_on(mod, monkeypatch):
 
 
 def test_chime_in_skip_posts_nothing(mod, monkeypatch):
-    monkeypatch.setattr(claude.random, "random", lambda: 0.0)
+    monkeypatch.setattr(claude._rng, "random", lambda: 0.0)
     mod.state.set_switch("#chan", "talkback", True)
     mod._client = StubClient(_resp("SKIP"))
     _fill(mod)
@@ -445,7 +445,7 @@ def test_chime_in_skip_posts_nothing(mod, monkeypatch):
 
 
 def test_chime_in_skips_greetings(mod, monkeypatch):
-    monkeypatch.setattr(claude.random, "random", lambda: 0.0)
+    monkeypatch.setattr(claude._rng, "random", lambda: 0.0)
     mod.state.set_switch("#chan", "talkback", True)
     for i in range(5):
         mod.state.log_line("#chan", "bob", f"x{i}")
