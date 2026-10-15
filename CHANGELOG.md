@@ -24,8 +24,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   module that grants channel operators any bot privilege; see
   `docs/security-model.md`, section 4. `[claude] doctrine_file` binds every
   request to a file of standing rules, sent first with prompt caching and
-  re-read when it changes; if the file is set but unusable the module refuses
-  to answer. A speaker logged in with `AUTH` is named in the prompt as the
+  re-read when it changes. Lines that are only `@path` import other files the
+  way Claude Code's `CLAUDE.md` does, so pointing it at `~/.claude/CLAUDE.md`
+  sends the imported doctrine, not the import lines. If the file or an import
+  is set but unusable the module refuses to answer. A speaker logged in with `AUTH` is named in the prompt as the
   operator whose instructions take precedence; a matching nick alone is not.
   An answer longer than `[claude] max_channel_lines` IRC lines (default 2) is
   sent to the asker by PM instead of the channel.

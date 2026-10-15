@@ -727,6 +727,53 @@ def test_unusable_doctrine_refuses_instead_of_answering_unbound(monkeypatch, tmp
     assert m._client.calls == []
 
 
+def test_doctrine_imports_are_expanded_like_claude_code(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    (home / ".claude" / "rules").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".claude" / "CLAUDE.md").write_text(
+        "# Top\n@operating-doctrine.md\n# Personal\n@~/.claude/rules/personal.md\n"
+        "```\n@not-an-import.md\n```\nmail me @ noon\n")
+    (home / ".claude" / "operating-doctrine.md").write_text("Rule A.\n@rules/nested.md\n")
+    (home / ".claude" / "rules" / "nested.md").write_text("Rule B.")
+    (home / ".claude" / "rules" / "personal.md").write_text("Rule C.")
+    m = _doctrine_mod(monkeypatch, tmp_path, "~/.claude/CLAUDE.md")
+    _say(m, f"{BOT}: hi")
+    text = m._client.calls[0]["system"][0]["text"]
+    assert text.endswith("# Top\nRule A.\nRule B.\n# Personal\nRule C.\n"
+                         "```\n@not-an-import.md\n```\nmail me @ noon")
+
+
+def test_doctrine_import_edits_apply_without_a_reload(monkeypatch, tmp_path):
+    import os
+    (tmp_path / "top.md").write_text("@child.md")
+    child = tmp_path / "child.md"
+    child.write_text("first")
+    m = _doctrine_mod(monkeypatch, tmp_path, tmp_path / "top.md")
+    _say(m, f"{BOT}: hi")
+    child.write_text("second")
+    st = child.stat()
+    os.utime(child, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    _say(m, f"{BOT}: hi again")
+    first, second = (c["system"][0]["text"] for c in m._client.calls)
+    assert first.endswith("\n\nfirst") and second.endswith("\n\nsecond")
+
+
+@pytest.mark.parametrize("files", [
+    {"top.md": "@missing.md"},
+    {"top.md": "@a.md", "a.md": "@top.md"},                            # cycle
+    {"top.md": "@a.md\n@b.md", "a.md": "x" * 200_000, "b.md": "y" * 100_000},
+    {"top.md": "@0.md", "6.md": "too deep"} | {f"{i}.md": f"@{i + 1}.md" for i in range(6)},
+], ids=["missing", "cycle", "too-large-together", "too-deep"])
+def test_unusable_doctrine_import_refuses(monkeypatch, tmp_path, files):
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+    m = _doctrine_mod(monkeypatch, tmp_path, tmp_path / "top.md")
+    assert _say(m, f"{BOT}: hi") == [
+        "alice: claude: doctrine file unreadable - check [claude] doctrine_file"]
+    assert m._client.calls == []
+
+
 def test_no_doctrine_file_sends_a_plain_system_string(mod):
     _say(mod, f"{BOT}: hi")
     assert isinstance(mod._client.calls[0]["system"], str)

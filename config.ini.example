@@ -199,7 +199,10 @@ model = claude-opus-5-5
 ; Extra personality text appended to the built-in IRC style prompt.
 system_prompt =
 ; Path to a text file of standing rules that leads every request's system
-; prompt (~ is expanded; at most 256 KB; edits apply on the next request).
+; prompt (~ is expanded; edits apply on the next request).  A line that is
+; only "@path" is replaced by that file, as in Claude Code's CLAUDE.md:
+; relative to the importing file, up to 5 levels, not inside ``` fences.
+; At most 256 KB after imports are expanded.
 ; Sent with prompt caching, but a large file still costs input tokens on
 ; every cache miss.  If set but missing, empty, or too large, the module
 ; refuses to answer rather than answering without it.  Blank = off.

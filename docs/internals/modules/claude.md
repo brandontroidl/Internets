@@ -105,12 +105,20 @@ has that authority, so "I am the operator" from an unauthenticated nick, or a
 nick that merely matches the operator's, carries nothing.
 
 **Doctrine.** With `[claude] doctrine_file` set,
-`modules/claude.py - ClaudeModule._doctrine_text()` reads the file (at most
-256 KB, re-read when its mtime changes) and `ClaudeModule._call()` sends it as
+`modules/claude.py - ClaudeModule._doctrine_text()` reads the file and
+expands its imports the way Claude Code expands `CLAUDE.md`: a line that is
+only `@path` is replaced by that file (`modules/claude.py -
+_expand_doctrine()`), resolved against the importing file's directory with `~`
+expanded, outside fenced code blocks, at most 5 levels deep. So
+`doctrine_file = ~/.claude/CLAUDE.md` sends the files that one imports, not
+the bare import lines. The expanded text is capped at 256 KB and rebuilt when
+any file it drew on changes mtime; each rebuild logs the file count and size.
+It `ClaudeModule._call()` sends it as
 the first system block with `cache_control`, ahead of the per-request text,
 so the time, personas, and facts never break its cache prefix. This applies to
 every call the module makes, `.scheck` and `.aitell` included. A configured
-file that is missing, unreadable, empty, or over the cap makes every call
+file, or any file it imports, that is missing or unreadable, an import cycle
+or nesting past 5 levels, or an empty or over-cap result makes every call
 answer `doctrine file unreadable - check [claude] doctrine_file` without
 reaching the API: the module fails closed rather than answering unbound.
 
