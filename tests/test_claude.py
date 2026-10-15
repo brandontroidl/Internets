@@ -731,6 +731,7 @@ def test_doctrine_imports_are_expanded_like_claude_code(monkeypatch, tmp_path):
     home = tmp_path / "home"
     (home / ".claude" / "rules").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))   # what ~ expands from on Windows
     (home / ".claude" / "CLAUDE.md").write_text(
         "# Top\n@operating-doctrine.md\n# Personal\n@~/.claude/rules/personal.md\n"
         "```\n@not-an-import.md\n```\nmail me @ noon\n")
