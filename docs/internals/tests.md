@@ -8,7 +8,7 @@ audit-log key handling, config floors), formatting contracts for IRC output, and
 regression tests written against specific observed incidents (each usually
 carries the incident in its docstring). Two harnesses coexist deliberately:
 
-- `tests/test_*.py` - the pytest suite. 43 files, discovered by
+- `tests/test_*.py` - the pytest suite. 45 files, discovered by
   `pyproject.toml [tool.pytest.ini_options] testpaths = ["tests"]`.
 - `tests/run_tests.py` - a standalone, zero-dependency runner
   (`python tests/run_tests.py`). It needs nothing but the standard library
@@ -265,7 +265,7 @@ suite-level view.
   to the coverage number by construction.
 - **No console tests.** `console.py` (the stdin admin console) has no test
   file at all; `docs/internals/console.md` records the detailed gaps.
-- **44 of the 75 files under `modules/` have no behavioral tests anywhere** (neither a
+- **44 of the 78 files under `modules/` have no behavioral tests anywhere** (neither a
   `tests/test_*.py` file nor a `run_tests.py` section): advice, apod, bofh,
   bored, catfact, chuck, cocktail, cowsay, dadjoke, devutils, dictionary,
   dnd, example, fact, fml, fx, games, health, hn, httpcode, idlerpg, imdb,

@@ -54,6 +54,7 @@ _MODULE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Fun",           ("bofh", "cowsay", "fact", "catfact", "chuck", "dadjoke",
                        "advice", "bored", "games", "dice", "qdb", "fml")),
     ("Util/social",   ("remind", "tell", "notes", "seen", "channels", "urls", "privacy")),
+    ("AI",            ("claude",)),
 )
 
 

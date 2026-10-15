@@ -30,7 +30,7 @@ testing. Never commit a populated `config.ini`.
 ## Running the suites
 
 Both runners must be run. Neither is a superset of the other. The pytest suite
-is 40 files (`tests/test_*.py`, discovered via
+is 45 files (`tests/test_*.py`, discovered via
 `pyproject.toml [tool.pytest.ini_options] testpaths = ["tests"]`); the
 standalone runner is one 2705-line file.
 
@@ -468,7 +468,7 @@ Findings sections of the docs under `docs/internals/`.
   coverage gate, the gap is invisible to the coverage number by construction.
 - **`console.py` is untested.** The stdin admin console has no test file at
   all. See [internals/console.md](internals/console.md).
-- **44 modules have no behavioral tests** in either runner, out of the 75 files
+- **44 modules have no behavioral tests** in either runner, out of the 78 files
   under `modules/`:
   advice, apod, bofh, bored, catfact, chuck, cocktail, cowsay, dadjoke,
   devutils, dictionary, dnd, example, fact, fml, fx, games, health, hn,

@@ -85,7 +85,8 @@ digraph boundaries {
 | IRC server | both | Every command, every reply, all credentials | TLS context in `internets.py - IRCBot._connect()`; credential gate `_tls_or_refuse()` |
 | IRC users | inbound | Command words and arguments | `IRCBot._dispatch()` caps and gates |
 | Admins | inbound | Privileged commands | `IRCBot.is_admin()` re-checked per call |
-| Channel operators | inbound | Nothing. Channel op status grants no bot privilege | See [section 4](#4-authorization) |
+| Channel operators | inbound | `claude` module controls for their own channel only | See [section 4](#4-authorization) |
+| Anthropic API | both | User messages, nicks, channel backlog outbound; model text inbound | `modules/claude.py - _complete_sync()`; `strip_ctrl` on every reply |
 | Filesystem | both | Config, secrets, state, audit, logs | POSIX modes; `secret_store.perms_ok()` is the only fail-closed check |
 | External HTTP APIs | both | Credentials outbound, arbitrary bytes inbound | `modules/_netsafe.py`, `modules/base.py - fetch_json()` |
 | Local operator shell | inbound | `python -m secret_store`, `hashpw.py`, the stdin console | No authentication; local shell access is full control |
@@ -232,9 +233,22 @@ is rate-limited.
 
 ### What a channel operator can do
 
-Nothing, by virtue of being a channel operator. `IRCBot.is_chanop()` exists and
-tracks per-channel op state from NAMES and MODE, but no command authorizes on
-it. Channel op status is used for display and bookkeeping only.
+In the core, nothing. `IRCBot.is_chanop()` tracks per-channel op state from
+NAMES and MODE, and one module authorizes on it: `claude`. A channel operator
+(or a bot admin) can, **in that channel only**:
+
+- switch AI chat and unprompted chime-ins on or off (`.ai`, `.talkback`);
+- set the channel's persona or another nick's persona there;
+- clear every conversation and the recap backlog (`.claudereset channel`);
+- send the channel's recent backlog to Anthropic for review (`.scheck`);
+- have the bot kick or kick-ban a nick (`.skick`, `.skban`), which works only
+  if the bot itself holds ops there.
+
+`.skick` and `.skban` are audit-logged (the requester's nick and hostmask land
+in `audit.log` permanently, admin or not); the switches, personas, reset, and
+`.scheck` are not. The op check reads the bot's own view of channel
+modes, so it is as current as the last NAMES or MODE the bot saw. Naming a
+different channel in `.scheck`, and `.aitell`, need bot admin.
 
 The one non-admin privileged path is `channels.cmd_join` / `cmd_part`, which
 accepts a request from a **registered channel founder**. Verification is
@@ -448,6 +462,28 @@ Response bodies are byte-capped before decoding. `fetch_json` streams and reads
 The weather provider tree carries a second, independent stream-and-cap
 implementation with a different default (see
 [weather provider internals](internals/weather-providers/http.md)).
+
+### Model output echoed to IRC
+
+`modules/claude.py` treats Claude's reply like any other third-party string:
+whitespace is folded to one line, `strip_ctrl` removes control bytes, and the
+result is capped at 1200 characters before it reaches `privmsg`. The only
+control bytes the module adds are the CTCP `ACTION` wrapper on emote replies.
+
+What users type reaches the model's instructions in two places: personas and
+saved facts are placed in the system prompt, labelled as user requests. That is
+prompt injection by design, the same as ai-multi's persona feature: anyone can
+change how the bot talks to them, and ops can change how it talks to the
+channel. The model has one tool, web search, and no path to bot commands,
+files, or raw IRC, so a steered persona changes what the bot says, not what it
+does. The `.scheck` prompt forbids medical or psychiatric diagnosis; its output
+goes only to the requesting op.
+
+Cost is the other exposure. Every AI reply is a paid call. The per-nick API
+cooldown and the dispatcher-equivalent flood gate bound each nick, at most three
+calls run at once with six waiting, and chime-ins are off until an op enables
+them. A user rotating nicks still meets the per-channel burst gate, which
+addressed lines share with commands, and the concurrency cap.
 
 ## 8. Logging defenses
 

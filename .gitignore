@@ -65,6 +65,7 @@ seen.json
 tells.json
 notes.json
 reminders.json
+claude.json
 # Silently-dropped nicks and their reasons (internets.py, written 0600).
 shadow_bans.json
 # store.py quarantines a state file it cannot parse as

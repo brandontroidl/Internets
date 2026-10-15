@@ -24,7 +24,7 @@ Three layers, each with its own entry document.
 | Layer | Code | Entry document |
 | --- | --- | --- |
 | Core | 13 top-level `.py` files | [architecture](architecture.md) |
-| Commands | `modules/` (75 files, 70 loadable, 69 registering commands) | [modules](modules.md) |
+| Commands | `modules/` (78 files, 71 loadable, 70 registering commands) | [modules](modules.md) |
 | Weather | `weather_providers/` (32 packages) | [providers](providers.md) |
 
 The core owns one asyncio event loop. Commands and providers are the only two
@@ -171,7 +171,7 @@ most capabilities).
 
 ## Secrets inventory
 
-`secret_store.KNOWN_SECRETS` holds 41 names.
+`secret_store.KNOWN_SECRETS` holds 42 names.
 `secret_store.CONFIG_LOCATIONS` maps 40 of them to a `(section, key)` pair for
 the `migrate` command.
 
@@ -180,7 +180,7 @@ the `migrate` command.
 | IRC authentication | 4 | `nickserv_password`, `sasl_password`, `server_password`, `oper_password` |
 | Contact identifier | 1 | `weather_user_agent`; PII, sent in every outbound User-Agent |
 | Weather provider keys | 26 | Includes the four `weatherkit_*` values and the two `meteomatics_*` values |
-| Module API keys | 10 | `omdb_key`, `lastfm_key`, `youtube_key`, three stock providers, `steam_key`, two `twitch_*`, `brave_key`, `abuseipdb_key` |
+| Module API keys | 12 | `omdb_key`, `lastfm_key`, `youtube_key`, three stock providers, `steam_key`, two `twitch_*`, `brave_key`, `abuseipdb_key`, `anthropic_api_key` |
 
 Operating rules that are not negotiable. Outbound credentials are stored
 reversibly because the bot must send the literal value on the wire; hashing them
@@ -197,7 +197,7 @@ Three gaps to be aware of:
   neither `KNOWN_SECRETS` nor `CONFIG_LOCATIONS`. It works through `get()` and
   through `INTERNETS_NASA_API_KEY`, but `secret_store list` cannot see it and
   `migrate` will not relocate it.
-- `weather_user_agent` is read by 49 of the 75 module files as the global
+- `weather_user_agent` is read by 49 of the 78 module files as the global
   User-Agent and is a fail-closed gate: `modules/geocode.py - _ua_has_contact()`
   disables all Nominatim geocoding unless it contains an `@domain` or an
   `http(s)://` URL. A deployment that leaves it blank gets weather and location
@@ -541,7 +541,7 @@ to cost a maintainer time:
 
 Recorded at the end of [known-issues](known-issues.md). The four that matter:
 there is no end-to-end dispatch test, `console.py` has no test file, 44 of the
-75 files under `modules/` have no behavioral test, and
+78 files under `modules/` have no behavioral test, and
 `tests/test_physcalc.py - TestRc.test_five_band` asserts a miscalculated result,
 locking a defect in as expected behavior. Fixing `modules/physcalc.py` therefore
 requires changing that test in the same commit.

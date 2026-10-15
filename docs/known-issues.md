@@ -160,10 +160,10 @@ Two gaps make the erasure incomplete even when `privacy` is loaded:
   channel(s) (erased now)".
 
 **Verified:** parsed the template's autoload list; `privacy` and `health` are
-present. On the collector count: five modules keep their own store (`seen`,
-`tell`, `notes`, `remind`, `steam`); `location` stores through the core store;
-and `linktitle` persists nothing but writes announced URLs to the log. All
-seven are autoloaded.
+present. On the collector count: six modules keep their own store (`seen`,
+`tell`, `notes`, `remind`, `steam`, `claude`); `location` stores through the
+core store; and `linktitle` persists nothing but writes announced URLs to the
+log. All eight are autoloaded.
 
 **Fix shape:** decide whether the two log sites should log at DEBUG, omit the
 identifier, or be covered by a log-scrubbing pass; and clear the opt-out flag
@@ -705,7 +705,7 @@ Not defects, but the reason several of the above went unnoticed.
   (`internets.py`, `console.py`) are also excluded from the coverage gate, so the
   coverage number cannot reveal the hole.
 - `console.py` has no test file at all.
-- 44 of the 75 files under `modules/` have no behavioral test, including every
+- 44 of the 78 files under `modules/` have no behavioral test, including every
   module in the social and utility group, where the two privacy defects live.
 - `tests/test_physcalc.py - TestRc.test_five_band` asserts the output of a
   miscalculated 5-band resistor decode, locking the defect in as expected

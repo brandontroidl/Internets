@@ -81,6 +81,8 @@ KNOWN_SECRETS: tuple[str, ...] = (
     "brave_key",
     # IP reputation (.ip / .rep) - optional; the command is keyless without it
     "abuseipdb_key",
+    # Claude chat (.claude) - paid Anthropic API key
+    "anthropic_api_key",
 )
 
 # Mapping: canonical secret name → (config.ini section, key)

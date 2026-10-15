@@ -89,8 +89,8 @@ are the ones the current numbers came from, with the answers as of 2026-08-15.
 Module files, and the module and command counts:
 
 ```
-ls modules/*.py | wc -l                      # 75
-scripts/gen-command-reference.py | tail -1   # 165 / 4 / 23
+ls modules/*.py | wc -l                      # 78
+scripts/gen-command-reference.py | tail -1   # 173 / 4 / 23
 ```
 
 Weather providers, three independent ways, which is why the number is trusted:
@@ -237,9 +237,9 @@ that get confused with each other.
 
 | Population | How to get it | Count |
 | --- | --- | --- |
-| Files under `modules/` | `ls modules/*.py` | 75 |
-| Loadable modules | instantiate `BotModule` subclasses | 70 |
-| Modules registering commands | non-empty `COMMANDS` | 69 |
+| Files under `modules/` | `ls modules/*.py` | 78 |
+| Loadable modules | instantiate `BotModule` subclasses | 71 |
+| Modules registering commands | non-empty `COMMANDS` | 70 |
 | Modules in the shipped autoload | `[bot] autoload` in the template | 69 |
 
 The gaps between them are all meaningful. `base.py`, `geocode.py`, `units.py`,

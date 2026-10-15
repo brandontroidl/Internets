@@ -49,6 +49,7 @@ deployment root, or set absolute paths in `config.ini`. See
 | `notes.json` | `modules/notes.py` | `[notes] file` | per-nick personal notes |
 | `reminders.json` | `modules/remind.py` | `[remind] file` | scheduled reminders |
 | `steamids.json` | `modules/steam.py` | `[steam] steamids_file` | nick to SteamID64 registry |
+| `claude.json` | `modules/_claude_state.py` | `[claude] file` | channel backlog, saved facts, preferences, personas (PII) |
 | `audit.log` | `audit_log.py` | (fixed `./audit.log`) | privileged-action records (PII) |
 | `audit.log.key` | `audit_log.py` | (derived) | 32-byte HMAC key, hex |
 | `internets.pid` | `process_lock.py` | (fixed, set by `_entry()`) | `pid\|start_time\|hostname` |
@@ -108,7 +109,7 @@ current canonical shape plus one explicitly handled legacy shape.
 ### Pattern B: bare JSON with an atomic write (everything else)
 
 `shadow_bans.json`, `seen.json`, `tells.json`, `notes.json`,
-`reminders.json`, and `steamids.json` are written as plain JSON with no
+`reminders.json`, `steamids.json`, and `claude.json` are written as plain JSON with no
 envelope and no checksum. Each writer implements the same sequence inline:
 `tempfile.mkstemp` in the target directory, write, `chmod 0o600`,
 `os.replace`, unlink the temp file on any error. Corruption in these files is
@@ -155,6 +156,7 @@ survives a power loss.
 | `notes.json` | every mutating subcommand, via `to_thread` | `NotesModule._lock` |
 | `reminders.json` | set, cancel, fire, and `forget` | `RemindModule._lock` |
 | `steamids.json` | `.regsteam` and `forget`, via `to_thread` | `SteamModule._lock` |
+| `claude.json` | dirty flag, module task every 60 s (pruning first), `forget`, and `on_unload` | `ClaudeState._lock` |
 | `audit.log` | synchronously on every privileged action | `AuditLog._lock` |
 | `internets.pid` | once at `acquire()`; removed at `release()` | none |
 | `internets.log` | continuously, per log record | stdlib handler lock |
@@ -210,6 +212,7 @@ lockfile carrying `pid|start_time|hostname`, with liveness probing so a
 | `notes.json` | `NotesModule` load, shape-filtered | warn, start empty |
 | `reminders.json` | `RemindModule._load()`, one task per pending | warn, start empty |
 | `steamids.json` | `SteamModule.on_load()` | warn, start empty |
+| `claude.json` | `ClaudeState.load()`, pruned as it loads | warn, start empty |
 | `audit.log` | tip hash only, lazily on first `record()` | genesis tip |
 | `internets.pid` | stale-detection probe | see failure table above |
 
@@ -229,7 +232,7 @@ It is not a process restart: nothing outside that module is touched.
 | State | Survives `.reload` | Survives restart |
 | --- | --- | --- |
 | Store datasets (locations, channels, users) | yes, untouched | yes, from disk |
-| Module stores (seen, tells, notes, reminders, steamids) | yes, via `on_unload` flush then reload | yes, from disk |
+| Module stores (seen, tells, notes, reminders, steamids, claude) | yes, via `on_unload` flush then reload | yes, from disk |
 | Shadow-ban set | yes, untouched | yes, from disk |
 | Audit chain | yes | yes, tip re-read from the live file |
 | Authenticated admin sessions | yes (held by core, not a module) | no |
@@ -267,6 +270,8 @@ The following exist only in RAM and reset on every restart:
   dedup map (capped at 500 entries), `scinews` / `spacex` / `crypto` /
   `ipintel` TTL caches, and the weather provider session cache.
 - `notes.py`'s pending two-step `.notes clear` confirmations.
+- `claude.py`'s per-conversation history (`Conversations`), its host cache
+  for `.skban`, and its recap and chime-in cooldowns.
 
 No cache is persisted, so no cache can be poisoned across a restart, and no
 cache needs a backup.
@@ -313,6 +318,7 @@ replaced with an empty queue on the next save.
 | `channels.json` | none; replaced wholesale on each save | - |
 | `notes.json` | none; notes live until the owner deletes them | - |
 | `steamids.json` | none | - |
+| `claude.json` | backlog: 100 lines per channel and 48 h; facts, preferences, personas: none | `ClaudeState.prune()` at load and every flush |
 | `audit.log` | size rotation at 5 MiB; segments kept forever | `_rotate_if_oversize()` |
 | `internets.log` | size rotation at `max_bytes` (5 MB), `backup_count` (3) kept | `RotatingFileHandler` |
 
@@ -324,7 +330,7 @@ a malformed or missing `last_seen`, by contrast, counts as stale.
 
 ## Privacy
 
-Four artifacts hold personal data:
+These artifacts hold personal data:
 
 - **`users.json`** - nick, hostmask (usually embedding username and host or
   cloak), first-seen and last-seen timestamps, per channel, plus the
@@ -337,6 +343,9 @@ Four artifacts hold personal data:
 - **`audit.log`** - actor nick and hostmask for every privileged action.
 - **`steamids.json`** - links an IRC nick to a Steam identity, which is PII
   by correlation across two namespaces.
+- **`claude.json`** - the last 100 lines of every channel with AI chat on
+  (nick, text, timestamp, recorded passively from everyone not opted out),
+  plus facts people asked the bot to remember and their timezone.
 
 `locations.json` is user-supplied location strings (ZIP codes, city names),
 which are not identifiers on their own but are close to it in a small
@@ -345,10 +354,12 @@ channel.
 ### What the opt-out flag actually gates
 
 `store.py` records the flag; consumers decide what it means. Verified against
-every `is_opted_out` caller in the repo, it gates exactly two things: a
-cross-user weather lookup (`.w -n <nick>`) and the `seen` module, which
+every `is_opted_out` caller in the repo, it gates exactly three things: a
+cross-user weather lookup (`.w -n <nick>`); the `seen` module, which
 enforces it three ways (stop recording, answer "never seen" on query, and
-purge existing entries at each flush).
+purge existing entries at each flush); and the `claude` module, which stops
+recording the nick's lines in the backlog, refuses to save facts for it, and
+keeps no conversation history for it.
 
 It does **not** stop the core's own user tracking. Rows continue to accrue in
 `users.json` with the flag riding on them. Opt-out limits disclosure, not
@@ -363,7 +374,7 @@ location, clears opt-out bookkeeping, hard-deletes every `users.json` row for
 the nick (`Store.user_purge()`, deliberately not `user_quit`, which would
 refresh `last_seen` instead of erasing it), then fans out to every loaded
 module's `BotModule.forget(nick)`. `seen`, `tell`, `notes`, and `remind`
-override it; `steam` also implements it.
+override it; `steam` and `claude` also implement it.
 
 What it cannot reach:
 
@@ -422,7 +433,7 @@ useless apart:
 1. `config.ini` (holds `[secrets]`; treat as a credential store).
 2. The state JSON files: `locations.json`, `channels.json`, `users.json`,
    `shadow_bans.json`, `seen.json`, `tells.json`, `notes.json`,
-   `reminders.json`, `steamids.json`.
+   `reminders.json`, `steamids.json`, `claude.json`.
 3. `audit.log`, `audit.log.key`, and every rotated `audit.log.<stamp>`
    segment.
 

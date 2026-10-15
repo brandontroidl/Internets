@@ -39,20 +39,21 @@ an optional, unauthenticated Prometheus metrics exporter that is off by default.
 
 | Dimension | Count |
 |---|---|
-| Command modules | 70 loadable, 69 registering at least one command |
-| Primary module commands | 165 (plus aliases) |
+| Command modules | 71 loadable, 70 registering at least one command |
+| Primary module commands | 173 (plus aliases) |
 | Core commands | 4 public, 23 admin |
 | Weather providers | 32 (20 key-gated, 12 keyless) |
 | Weather capabilities | 14 dispatchable, 13 result types |
-| Test files | 40 pytest files, plus a standalone `tests/run_tests.py` |
-| Tests passing | 1738 passed / 3 skipped (pytest); 213 passed (`run_tests.py`) |
+| Test files | 45 pytest files, plus a standalone `tests/run_tests.py` |
+| Tests passing | 1885 passed / 9 skipped (pytest); 213 passed (`run_tests.py`) |
 
 Notes on those numbers, because two of them are easy to misread:
 
-- `modules/` holds 75 `.py` files. Five register no commands: `__init__`, `base`,
-  `geocode`, `units`, and `_netsafe` are the module API and shared helpers. Of the
-  70 loadable modules, `linktitle` registers zero commands and runs entirely from
-  the raw-line fanout, which is why the command-registering count is 69.
+- `modules/` holds 78 `.py` files. Seven register no commands: `__init__`, `base`,
+  `geocode`, `units`, `_netsafe`, `_claude_intent`, and `_claude_state` are the
+  module API and shared helpers. Of the 71 loadable modules, `linktitle` registers
+  zero commands and runs entirely from the raw-line fanout, which is why the
+  command-registering count is 70.
   `scripts/gen-command-reference.py --check` regenerates and drift-checks the
   inventory; treat it as the source of truth over any prose count.
 - Coverage is measured **core-only**. `pyproject.toml` `[tool.coverage.run]`
