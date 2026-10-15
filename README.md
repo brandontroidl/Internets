@@ -57,8 +57,8 @@ is regenerated from the source and checked in CI, so it is the list to trust.
 | Privacy | `.privacy`, `.optout`, `.optin`, `.forgetme` |
 | Operator | Authentication, module lifecycle, rehash, restart, raw send, statistics, health, audit review, shadow-ban |
 
-75 `.py` files live under `modules/`, of which 70 define a loadable `BotModule`
-and 69 register at least one command. `linktitle` is the exception and runs from
+78 `.py` files live under `modules/`, of which 71 define a loadable `BotModule`
+and 70 register at least one command. `linktitle` is the exception and runs from
 the raw-line hook instead. A module whose upstream needs
 an API key can report `is_configured()` as `False`, which hides its commands from
 `.help` on an unkeyed deployment without disabling dispatch. See
@@ -83,7 +83,7 @@ process_lock.py    PID lockfile with stale detection
 
 modules/           command modules, hot-loadable at runtime
 weather_providers/ 32 provider packages plus base, _dispatch, _health, _http
-tests/             run_tests.py (standalone) and 40 pytest files
+tests/             run_tests.py (standalone) and 45 pytest files
 ```
 
 Each command invocation runs as its own `asyncio.Task` under a concurrency cap
@@ -136,7 +136,7 @@ pip install -r requirements.txt
 
 `pip install -e ".[dev]"` adds the test and lint tooling on top of an editable
 install. Per-feature extras (`async`, `bcrypt`, `argon2`, `weatherkit`, `xml`,
-`all`) are declared in `pyproject.toml` for a minimal footprint.
+`claude`, `all`) are declared in `pyproject.toml` for a minimal footprint.
 
 Run the bot from the checkout. A wheel or sdist install works only after two
 manual repairs: `config.py - MODULES_DIR` defaults to a path resolved against the
@@ -280,12 +280,12 @@ Verified unfixed defects, several of which bear on the above, are catalogued in
 ## Privacy summary
 
 Only the modules that need it record user-derived data: `seen`, `tell`, `notes`,
-`remind`, and `steam` keep their own stores, `location` stores through the core
+`remind`, `steam`, and `claude` keep their own stores, `location` stores through the core
 store, and `linktitle` persists nothing but writes announced URLs to the log. The
 `privacy` module supplies `.privacy`, `.optout`, `.optin`, and `.forgetme`, and
 erasure works when it is loaded.
 
-`config.ini.example` now autoloads 69 modules, including `privacy`, so a
+`config.ini.example` now autoloads 70 modules, including `privacy`, so a
 deployment that copies the template gets the erasure commands. Earlier copies of
 the template did not: if your `config.ini` predates this change, check that
 `privacy` is in `[bot] autoload`.

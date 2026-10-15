@@ -133,6 +133,7 @@ migration surface, not a supported place to put a new key.
 | `brave_key` | `INTERNETS_BRAVE_KEY` | `[search] brave_key` |
 | `abuseipdb_key` | `INTERNETS_ABUSEIPDB_KEY` | `[ipintel] abuseipdb_key` |
 | `n2yo_api_key` | `INTERNETS_N2YO_API_KEY` | `[satpass] n2yo_api_key` |
+| `anthropic_api_key` | `INTERNETS_ANTHROPIC_API_KEY` | `[claude] api_key` |
 | `nasa_api_key` | `INTERNETS_NASA_API_KEY` | `[apod] api_key` |
 | `weather_user_agent` | `INTERNETS_WEATHER_USER_AGENT` | `[weather] user_agent` |
 
@@ -152,7 +153,7 @@ name to both tuples is the fix; `CONTRIBUTING.md` already states the rule.
 ### The weather_user_agent naming drift
 
 `weather_user_agent` is not a weather setting. It is the bot's **global
-outbound User-Agent contact identifier**, read by 49 of the 75 files under
+outbound User-Agent contact identifier**, read by 49 of the 78 files under
 `modules/` (`grep -l weather_user_agent modules/*.py`) and spliced into the `User-Agent`
 header of essentially every outbound request the modules layer makes, from
 `.catfact` to `.rdns`.
@@ -514,6 +515,16 @@ change. `fml` is coupled to a Tailwind class string and reports "site layout may
 have changed" when its regex finds nothing, which is honest but means a silent
 upstream redesign disables the command until someone notices.
 
+## AI chat
+
+| Service and endpoint | Command | Auth (secret) | Request behavior |
+| --- | --- | --- | --- |
+| Anthropic Messages API - api.anthropic.com/v1/messages, via the `anthropic` SDK | addressing the bot, `.claude`, `.ask`, `.scheck`, `.aitell`, emotes, chime-ins | `x-api-key` header (`anthropic_api_key`) | Required, plus the optional `anthropic` package. 40 s, no SDK retry, at most 3 concurrent. `max_tokens` 4096 bounds the response instead of a byte cap. Web search runs server-side at Anthropic when `[claude] web_search` is on |
+
+Not SSRF-relevant: the host is fixed by the SDK and no user input reaches the
+URL. Everything the module sends and keeps is in
+[internals/modules/claude.md](internals/modules/claude.md).
+
 ## Privacy: what leaves the machine
 
 The bot is a relay between an IRC channel and the services above. Everything a
@@ -529,16 +540,18 @@ sensitivity:
 | Free-text queries | Whatever the user typed: search terms, translation text, titles, symbols | `.sw`, `.si`, `.t`, `.yt`, `.imdb`, `.u`, `.wiki`, `.papers`, `.mtg`, `.recipe`, `.gecko` |
 | Third-party account handles | A Last.fm username, Steam vanity name, Twitch channel, IdleRPG player | `.lastfm`, `.steam`, `.tw`, `.irpg` |
 | Password material | **Only** the first 5 hex characters of a SHA-1 digest | `.pwn` |
+| Conversation | The message, the speaker's nick, saved facts and personas, recent turns; for recaps, chime-ins, `.scheck`, and `.aitell`, up to 100 recent channel lines with other people's nicks | Anthropic, via `claude` |
 
-Four things deliberately do **not** leave:
+Four things deliberately do **not** leave, one with an exception:
 
 - The `.fx` conversion amount. Only the two currency codes go over the wire; the
   multiplication happens locally.
 - The full password or hash in `.pwn`.
 - The `.qr` payload. No request is made; a link is returned.
-- The IRC nick and channel. No integration sends them. `linktitle` uses the
-  channel name as a local cooldown key only, and `steam` persists the
-  nick-to-SteamID mapping to a local 0600 file.
+- The IRC nick and channel, except to Anthropic: `claude` sends nicks and the
+  channel name as conversation context. No other integration sends them.
+  `linktitle` uses the channel name as a local cooldown key only, and `steam`
+  persists the nick-to-SteamID mapping to a local 0600 file.
 
 Every user's identity is nonetheless attached to their request at the *bot's*
 end: a shared source IP and one shared User-Agent, per-nick rate limiting via

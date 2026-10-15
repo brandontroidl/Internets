@@ -447,7 +447,7 @@ that test does not close the entry; it changes the entry to record that the code
 was changed and the test is still owed.
 
 The reason is the register's own history. Its closing section records that no
-end-to-end dispatch test exists, that 44 of the 75 files under `modules/` have
+end-to-end dispatch test exists, that 44 of the 78 files under `modules/` have
 no behavioral test at all, and that
 `tests/test_physcalc.py - TestRc.test_five_band` asserts the output of a
 miscalculated resistor decode, locking a defect in as expected behavior. A test

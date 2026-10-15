@@ -237,7 +237,7 @@ def _():
     # sanitizes) - NOT a change-detector: these splice third-party/user text
     # into bot-attributed IRC lines, so each MUST reference the canonical
     # base.strip_ctrl. Catches a future module (or a removed call) that drifts.
-    for name in ("search", "seen", "tell", "stocks", "remind", "location"):
+    for name in ("search", "seen", "tell", "stocks", "remind", "location", "claude"):
         src = Path(f"modules/{name}.py").read_text(encoding="utf-8")
         assert "strip_ctrl" in src, f"modules/{name}.py: missing canonical strip_ctrl sanitizer"
     # weather keeps its own _sanitize (same C0/DEL regex); allow either.

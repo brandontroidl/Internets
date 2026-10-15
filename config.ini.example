@@ -91,15 +91,15 @@ services_nick  = ChanServ
 ; A loaded module that's missing its API key shows no commands in
 ; `.help` until the key is added to [secrets] below.
 ;
-; `privacy` is listed deliberately.  Seven of the modules here record
-; user-derived data (seen, tell, notes, remind, steam, location, and
-; linktitle's URL log), and `privacy` is what ships .forgetme, .optout,
+; `privacy` is listed deliberately.  Eight of the modules here record
+; user-derived data (seen, tell, notes, remind, steam, location, claude,
+; and linktitle's URL log), and `privacy` is what ships .forgetme, .optout,
 ; .optin and .privacy.  Drop the collectors or keep privacy loaded; do
 ; not run collection with no erasure command.  It does not reach the bot
 ; log, which records announced URLs and nick-to-location pairs at INFO
 ; (docs/known-issues.md item 4).  `health` adds .uptime plus the
 ; admin-only .health subsystem snapshot.
-autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes,netcalc,mathx,encode,devtools,physcalc,pkginfo,reflookup,ghinfo,dnsutils,secinfo,astro2,probe,satpass,scinews,ipintel,linktitle,scholar,privacy,health
+autoload = weather,location,calc,dice,urbandictionary,translate,channels,stocks,imdb,lastfm,youtube,dictionary,ipinfo,urls,steam,twitch,idlerpg,qdb,fml,search,bofh,dadjoke,chuck,fact,advice,catfact,poke,dnd,mtg,iss,xkcd,apod,cocktail,recipe,hn,reddit,numberfact,bored,games,devutils,qr,httpcode,cowsay,crypto,fx,spacex,seen,tell,remind,notes,netcalc,mathx,encode,devtools,physcalc,pkginfo,reflookup,ghinfo,dnsutils,secinfo,astro2,probe,satpass,scinews,ipintel,linktitle,scholar,claude,privacy,health
 
 [admin]
 ; Admin password hash for .load / .unload / .reload - generate with
@@ -189,6 +189,43 @@ api_url = http://idlerpg.rizon.net/xml.php
 ; this if a better mirror appears; a stale value here overrides a working
 ; default and every lookup 404s.
 api_url =
+
+[claude]
+; Talk to Claude by addressing the bot ("Internets: hi") or with .claude.
+; Silent until anthropic_api_key is set in [secrets].  Every answer is a
+; paid API call; the per-nick api_cooldown above bounds each user, and
+; unprompted chime-ins stay off until a channel op runs .talkback on.
+model = claude-opus-5-5
+; Extra personality text appended to the built-in IRC style prompt.
+system_prompt =
+; Path to a text file of standing rules that leads every request's system
+; prompt (~ is expanded; edits apply on the next request).  A line that is
+; only "@path" is replaced by that file, as in Claude Code's CLAUDE.md:
+; relative to the importing file, up to 5 levels, not inside ``` fences.
+; At most 256 KB after imports are expanded.
+; Sent with prompt caching, but a large file still costs input tokens on
+; every cache miss.  If set but missing, empty, or too large, the module
+; refuses to answer rather than answering without it.  Blank = off.
+doctrine_file =
+; A channel answer that would take more IRC lines than this (400 bytes
+; each, counting the "nick: " prefix) is sent to the asker by PM instead.
+; 1-10; anything else means the default.
+max_channel_lines = 2
+; Channels where the module neither answers nor records the backlog.
+blocked_channels =
+; Nicks the module never answers but still records in the backlog.
+ignored_nicks =
+; Nicks the module neither answers nor records.
+banned_nicks =
+; heuristic: answer only when the line starts with the bot's nick.
+; off: answer any line that mentions the nick.
+intent_check = heuristic
+; Let Claude search the web for questions that need current information.
+; Searches are billed per use on top of tokens.
+web_search = true
+; Saved facts, personas, per-channel switches, and the channel backlog.
+; Holds user-derived data; .forgetme erases a nick's records from it.
+file = claude.json
 
 [metrics]
 ; Optional Prometheus text-format exporter.  Off by default.
@@ -411,3 +448,8 @@ brave_key =
 ;   .ip / .rep work fully keyless (DNSBL + DShield + GreyNoise + Tor);
 ;   adding a key appends the AbuseIPDB confidence score + report count.
 abuseipdb_key =
+
+; Anthropic API (claude)      - https://platform.claude.com/settings/keys
+;   Paid, billed per token.  Also needs the anthropic package:
+;   pip install 'internets-irc[claude]'.  See [claude] above.
+anthropic_api_key =

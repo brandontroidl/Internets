@@ -47,17 +47,17 @@ That is a complete, loadable module. Everything else in the contract
 (`help_lines`, `is_configured`, the lifecycle hooks, `forget`) is optional and
 defaults to a no-op on `BotModule`.
 
-The file count is not the module count. `modules/` holds 75 `.py` files:
+The file count is not the module count. `modules/` holds 78 `.py` files:
 
 | Category | Count | Files |
 |---|---|---|
-| Loadable modules | 70 | everything not listed below |
-| Helpers (no `setup()`, no commands) | 5 | `__init__`, `base`, `geocode`, `units`, `_netsafe` |
+| Loadable modules | 71 | everything not listed below |
+| Helpers (no `setup()`, no commands) | 7 | `__init__`, `base`, `geocode`, `units`, `_netsafe`, `_claude_intent`, `_claude_state` |
 
-Of the 70 loadable modules, 69 register at least one command word.
+Of the 71 loadable modules, 70 register at least one command word.
 `linktitle` registers none: it is passive, driven entirely by the `on_raw`
 fanout, and exists only to announce titles for URLs posted in a channel.
-Across the 69 there are 165 primary commands (aliases folded into their
+Across the 70 there are 173 primary commands (aliases folded into their
 handler), plus 4 public and 23 admin core commands that live in
 `admin_cmds.py` rather than in any module.
 
@@ -70,7 +70,7 @@ IRCBot.autoload_modules()`). `[bot] modules_dir` selects the directory and
 defaults to `modules`.
 
 A module on disk but absent from `autoload` is inert until an admin runs
-`.load <name>`. The shipped `config.ini.example` autoloads 69 of the 70
+`.load <name>`. The shipped `config.ini.example` autoloads 70 of the 71
 modules; only `example`, the module-writing skeleton, is omitted.
 
 :::{warning}
@@ -201,17 +201,17 @@ membership, and PRIVMSG handlers. Practical consequences:
 ### forget and the erasure surface
 
 `.forgetme` calls `forget()` on every loaded module, so right-to-erasure
-coverage equals exactly the set of modules that override it. Five do: `seen`,
-`tell`, `notes`, `remind`, and `steam`. Saved weather locations are not covered
+coverage equals exactly the set of modules that override it. Six do: `seen`,
+`tell`, `notes`, `remind`, `steam`, and `claude`. Saved weather locations are not covered
 by a module `forget()`; `location.py` defines none, and `privacy.cmd_forgetme`
 erases them by calling the core `bot.loc_del(nick)` directly.
 
 ## 6. `is_configured()`: visibility, not access control
 
 `is_configured()` defaults to `True`. A module overrides it to report that a
-required credential is absent. Seven modules do, all returning `False` when
-their key is missing: `imdb`, `lastfm`, `satpass`, `steam`, `stocks`,
-`twitch`, `youtube`.
+required credential is absent. Eight modules do, all returning `False` when
+their key is missing: `claude`, `imdb`, `lastfm`, `satpass`, `steam`,
+`stocks`, `twitch`, `youtube`.
 
 What it gates, verified against every call site: four branches of
 `admin_cmds.py - cmd_help()`, and `cmd_stats()`.
@@ -344,6 +344,7 @@ module, read its page under
 | catfact | `.catfact` (`.cat`) |
 | channels | `.join`, `.part`, `.users` |
 | chuck | `.chuck` |
+| claude | `.ai`, `.aitell`, `.claude` (`.ask`), `.claudereset`, `.scheck`, `.skban`, `.skick`, `.talkback` |
 | cocktail | `.cocktail` (`.drink`) |
 | cowsay | `.cowsay` |
 | crypto | `.gecko` (`.coingecko`, `.cg`) |
@@ -408,17 +409,18 @@ module, read its page under
 | core (public) | `.auth`, `.help`, `.modules`, `.version` |
 | core (admin) | `.act`, `.audit`, `.deauth`, `.debug`, `.fingerprint`, `.load`, `.loglevel`, `.mode`, `.nick`, `.raw`, `.rehash`, `.reload`, `.reloadall`, `.restart`, `.say`, `.shadow-ban`, `.shadow-list`, `.shadow-unban`, `.shutdown`, `.snomask`, `.stats`, `.unload`, `.uptime` |
 
-Totals as generated on 2026-08-15: 165 primary module commands, 4 core public,
+Totals as generated on 2026-09-29: 173 primary module commands, 4 core public,
 23 core admin. The `linktitle` cell is annotated here; the generator emits it
 empty.
 
 ### Credential gating at a glance
 
-Only these seven modules disappear from `.help` without a key. Everything else
+Only these eight modules disappear from `.help` without a key. Everything else
 either needs no credential or degrades at call time.
 
 | Module | Requires |
 |---|---|
+| claude | `anthropic_api_key` and the `anthropic` package |
 | imdb | `omdb_key` |
 | lastfm | `lastfm_key` |
 | satpass | `n2yo_api_key` |

@@ -138,6 +138,8 @@ Ordered roughly by reach. "Audited" means a durable record lands in `audit.log`.
 | `.snomask <mask>` | server-notice mask on the bot | yes |
 | `.say [target] <text>` | speaks as the bot anywhere | yes, target and text |
 | `.act [target] <text>` | CTCP ACTION as the bot | yes, target and text |
+| `.aitell <#chan> <directive>` (module `claude`) | speaks an AI-written line as the bot in a channel | yes, channel, directive, and posted text |
+| `.skick` / `.skban <nick> <#chan>` (module `claude`) | kicks or bans as the bot; also open to that channel's ops | yes, channel and target |
 | `.shadow-ban <nick> [reason]` | silences a user bot-wide, persistently | yes |
 | `.shadow-unban <nick>` | reverses the above | yes |
 | `.debug` / `.loglevel` | log verbosity, process-wide | yes when arguments given |
