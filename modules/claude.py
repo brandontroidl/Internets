@@ -47,7 +47,7 @@ _TASK_TIMEOUT = 55.0
 # by the system prompt and _MAX_REPLY instead.
 _MAX_TOKENS = 4096
 _MAX_REPLY = 1200          # three IRC lines at the 400-byte split
-_LINE_BYTES = 400          # IRCBot._MAX_BODY: where privmsg splits a message
+_LINE_BYTES = 400          # IRCBot._MAX_BODY, the split cap when the bot has no line_budget()
 _CHANNEL_LINES = 2         # default [claude] max_channel_lines
 _CHANNEL_LINES_MAX = 10
 
@@ -210,7 +210,9 @@ def _complete_sync(client: Any, model: str, system: str | list[dict[str, Any]],
             if isinstance(url, str) and url.startswith(("https://", "http://")) \
                     and url not in sources:
                 sources.append(url)
-    folded = _fold(" ".join(parts))
+    # Web search splits the answer into text blocks at each citation, and each
+    # block carries its own spacing; a separator would leave "time , and".
+    folded = _fold("".join(parts))
     text = strip_ctrl(folded, max_chars)
     if not text:
         if resp.stop_reason in ("max_tokens", "pause_turn"):
@@ -320,8 +322,13 @@ class ClaudeModule(BotModule):
             return default
         return value
 
-    @staticmethod
-    def _lines(text: str) -> int:
+    def _lines(self, target: str, text: str) -> int:
+        """IRC lines ``text`` takes when sent to ``target``, split as the core
+        will split it (its budget shrinks with the bot's relay prefix)."""
+        split = getattr(self.bot, "_split_msg", None)
+        budget = getattr(self.bot, "line_budget", None)
+        if callable(split) and callable(budget):
+            return len(split(text, budget(target)))
         return -(-len(text.encode("utf-8", errors="replace")) // _LINE_BYTES)
 
     @staticmethod
@@ -587,7 +594,7 @@ class ClaudeModule(BotModule):
         line = f"{nick}: {text}"
         if not _is_channel(where):
             self._say(nick, text)
-        elif self._lines(line) > self._channel_lines:
+        elif self._lines(where, line) > self._channel_lines:
             # Long answers go to the asker alone rather than flooding the
             # channel; they stay out of the channel backlog for the same reason.
             self.bot.privmsg(nick, text)

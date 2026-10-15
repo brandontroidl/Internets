@@ -179,6 +179,13 @@ class IRCBot(AdminCommandsMixin):
     Admin command handlers live in AdminCommandsMixin (admin_cmds.py).
     """
     _MAX_BODY = 400
+    # The server relays our line as ":nick!user@host PRIVMSG target :body" and
+    # truncates it at 512 bytes (510 + CRLF), so the prefix it adds comes out
+    # of the body's budget. user@host is learned from our own JOIN echo; until
+    # then assume a long cloaked one so nothing is cut.
+    _IRC_LINE = 510
+    _USERHOST_GUESS = 100
+    _self_userhost: str | None = None
     _MAX_TASKS = 50
     _CMD_TIMEOUT = 60   # seconds - a command handler that exceeds this is timed
                         # out so it can't permanently hold one of _MAX_TASKS slots
@@ -334,13 +341,13 @@ class IRCBot(AdminCommandsMixin):
     def privmsg(self, target: str, msg: str) -> None:
         if " " in target or not target:
             log.warning(f"privmsg: invalid target {target!r}"); return
-        for chunk in self._split_msg(msg):
+        for chunk in self._split_msg(msg, self.line_budget(target)):
             self.send(f"PRIVMSG {target} :{chunk}")
 
     def notice(self, target: str, msg: str) -> None:
         if " " in target or not target:
             log.warning(f"notice: invalid target {target!r}"); return
-        for chunk in self._split_msg(msg):
+        for chunk in self._split_msg(msg, self.line_budget(target, "NOTICE")):
             self.send(f"NOTICE {target} :{chunk}")
 
     def reply(self, nick: str, reply_to: str, msg: str,
@@ -355,18 +362,33 @@ class IRCBot(AdminCommandsMixin):
     def preply(self, nick: str, reply_to: str, msg: str) -> None:
         self.reply(nick, reply_to, msg, privileged=True)
 
-    def _split_msg(self, msg: str) -> list[str]:
+    def line_budget(self, target: str, command: str = "PRIVMSG") -> int:
+        """Body bytes per line that survive the server's relay to ``target``."""
+        nick = getattr(self, "_nick", "") or ""
+        userhost = self._self_userhost
+        uh_len = len(userhost.encode("utf-8")) if userhost else self._USERHOST_GUESS
+        prefix = (len(nick.encode("utf-8")) + uh_len + len(command)
+                  + len(target.encode("utf-8")) + 6)   # ":" "!" " " " " " :"
+        return max(64, min(self._MAX_BODY, self._IRC_LINE - prefix))
+
+    def _split_msg(self, msg: str, budget: int | None = None) -> list[str]:
+        """Split into chunks of at most ``budget`` UTF-8 bytes, preferring the
+        last space in a chunk's second half so words are not cut in two."""
+        limit = budget or self._MAX_BODY
         chunks: list[str] = []
         enc = msg.encode("utf-8", errors="replace")
         while enc:
-            chunk = enc[:self._MAX_BODY]
-            if len(enc) > self._MAX_BODY:
+            chunk = enc[:limit]
+            if len(enc) > limit:
                 while chunk and (chunk[-1] & 0xC0) == 0x80:
                     chunk = chunk[:-1]
                 if not chunk:
-                    chunk = enc[:self._MAX_BODY]
+                    chunk = enc[:limit]
+                cut = chunk.rfind(b" ")
+                if cut > limit // 2:
+                    chunk = chunk[:cut]
             chunks.append(chunk.decode("utf-8", errors="replace"))
-            enc = enc[len(chunk):]
+            enc = enc[len(chunk):].lstrip(b" ") if len(enc) > len(chunk) else b""
         return chunks
 
     # ── Accessors ────────────────────────────────────────────────────
@@ -1151,7 +1173,9 @@ class IRCBot(AdminCommandsMixin):
         m = self._RE_JOIN.match(line)
         if m:
             nick, hm, chan = m.group(1), m.group(2), m.group(3)
-            if nick.lower() == self._nick.lower(): self._on_join(chan)
+            if nick.lower() == self._nick.lower():
+                self._self_userhost = hm   # sizes the relay prefix in line_budget()
+                self._on_join(chan)
             else: self._store.user_join(chan, nick, hm)
             return True
         m = self._RE_PART.match(line)

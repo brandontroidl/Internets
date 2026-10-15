@@ -262,7 +262,7 @@ Inheritance contract with the mixin:
   by iterating `IRCBot._CORE`).
 
 Class constants (all class-level so tests can assert them without an instance):
-`_MAX_BODY=400` (PRIVMSG chunking), `_MAX_TASKS=50`, `_CMD_TIMEOUT=60`,
+`_MAX_BODY=400` (PRIVMSG chunking cap; `line_budget()` lowers it per target), `_MAX_TASKS=50`, `_CMD_TIMEOUT=60`,
 `_MAX_ARG_LEN=400`, auth lockout parameters, and the network timing block
 (`_READ_LIMIT=8192`, `_READ_TIMEOUT=300`, `_PING_INTERVAL=90`, `_PONG_TIMEOUT=240`,
 NickServ wait = 40 x 0.25 s, `_SHUTDOWN_DRAIN_S=2.0`, `_UNEXPECTED_SLEEP_S=5.0`).
@@ -302,11 +302,20 @@ touch `_`-prefixed state.
 - `send(msg, priority=1)`: enqueue on the `Sender` if one exists (silently a no-op
   pre-connection), bump `_stats_msg_out`.
 - `privmsg(target, msg)` / `notice(target, msg)`: reject targets containing a space
-  or empty (cheap injection/protocol-error guard), chunk via `_split_msg`.
+  or empty (cheap injection/protocol-error guard), chunk via `_split_msg` at
+  `line_budget(target)`.
 - `reply(nick, reply_to, msg, privileged=False)`: PM stays PM; privileged output to a
   channel goes as a NOTICE to the nick (avoids leaking admin traffic into the
   channel); normal output goes to the channel. `preply` = `reply(privileged=True)`.
-- `_split_msg(msg)`: splits on UTF-8 byte length at `_MAX_BODY=400`, backing up over
+- `line_budget(target, command="PRIVMSG")`: body bytes per line that survive the
+  server's relay. The server prepends `:nick!user@host` and truncates the relayed
+  line at 512 bytes, so the budget is `_IRC_LINE` (510) minus that prefix, capped at
+  `_MAX_BODY`. `user@host` is `_self_userhost`, learned from the bot's own JOIN echo;
+  before the first JOIN it assumes `_USERHOST_GUESS` (100) bytes. Without this, a
+  bot with a long cloaked host had the tail of every 400-byte line cut off.
+- `_split_msg(msg, budget=None)`: splits on UTF-8 byte length at `budget` (default
+  `_MAX_BODY=400`), at the last space in the chunk's second half when there is one
+  (the space is dropped), else backing up over
   continuation bytes (`(b & 0xC0) == 0x80`) so no chunk splits a code point; if a
   single code point exceeds the cap (impossible for real UTF-8, defensive), it falls
   back to a hard split with `errors="replace"`. Tested in `tests/run_tests.py` via

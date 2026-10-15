@@ -6,6 +6,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Long replies lost text mid-line.** The server relays each bot line with the
+  bot's `nick!user@host` in front and cuts it at 512 bytes, so a bot with a long
+  cloaked host lost the tail of every 400-byte chunk (a long Claude answer read
+  "...than trust the ai. st" / "hasn't recognized..."). `privmsg` and `notice`
+  now size chunks with `IRCBot.line_budget()`, which learns the bot's own
+  `user@host` from its JOIN echo, and split at word boundaries.
+- **Claude answers with web search sources had stray spaces** before
+  punctuation ("in finite time , and"): the text blocks around each citation are
+  now joined without a separator.
+
 ### Added
 
 - **Claude chat (`modules/claude.py`).** Address the bot by nick, or use

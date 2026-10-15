@@ -636,6 +636,43 @@ def test_line_budget_matches_the_core_split():
     assert claude._LINE_BYTES == IRCBot._MAX_BODY
 
 
+def _real_split_bot(userhost=None):
+    b = IRCBot.__new__(IRCBot)
+    b._nick = "Internets"
+    b._self_userhost = userhost
+    return b
+
+
+def test_core_split_leaves_room_for_the_relay_prefix():
+    # The server relays ":nick!user@host PRIVMSG #chan :body" and cuts it at
+    # 510 bytes; with a long cloaked host a 400-byte body lost its tail.
+    host = "~internets@" + "a" * 90 + ".cloak"
+    b = _real_split_bot(host)
+    budget = b.line_budget("#chan")
+    for chunk in b._split_msg("word " * 300, budget):
+        relayed = f":Internets!{host} PRIVMSG #chan :{chunk}"
+        assert len(relayed.encode()) <= IRCBot._IRC_LINE
+
+
+def test_core_split_keeps_words_whole_and_loses_nothing():
+    b = _real_split_bot("u@h")
+    text = " ".join(f"w{i}é" for i in range(400))
+    chunks = b._split_msg(text, b.line_budget("#chan"))
+    assert len(chunks) > 1
+    assert " ".join(chunks) == text
+    assert all(not c.startswith(" ") and not c.endswith(" ") for c in chunks)
+
+
+def test_core_split_before_join_assumes_a_long_host():
+    assert _real_split_bot().line_budget("#chan") < IRCBot._MAX_BODY
+
+
+def test_search_citation_blocks_join_without_stray_spaces():
+    resp = _resp("it blew up in finite time", ", and a lean proof exists", ".")
+    text, _, err = _complete(StubClient(resp))
+    assert err is None and text == "it blew up in finite time, and a lean proof exists."
+
+
 def test_reply_within_the_line_budget_stays_in_the_channel(mod):
     mod._client = StubClient(_resp("x" * 500))            # "alice: " + 500 bytes = 2 lines
     out = _say(mod, f"{BOT}: hi")

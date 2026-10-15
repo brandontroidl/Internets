@@ -127,7 +127,8 @@ Recap phrasing ("catch me up", "tldr", `^^`, "what do you think", see
 system prompt, with a 30 s per-nick cooldown. The reply goes to the channel as
 `nick: text`, after a 1.5 to 4 s delay, and is appended to the backlog. When
 `nick: text` would take more than `[claude] max_channel_lines` IRC lines
-(default 2, counted at the core's 400-byte split, `_LINE_BYTES`), the reply goes
+(default 2, counted with the core's own `_split_msg()` at `line_budget()` for the
+channel), the reply goes
 to the asker by PM instead, nothing is posted in the channel, and the reply
 stays out of the backlog; it still enters the asker's conversation history.
 `.aitell`, chime-ins (200 characters), and emote replies (300) are not routed

@@ -25,7 +25,7 @@ gets missed - **only two of them apply to every reply.**
 | Limit | Symbol | Unit | Direction | Applies |
 |---|---|---|---|---|
 | 512 | `sender.Sender._MAX_IRC_LINE` | bytes | outbound | always, on every line |
-| 400 | `internets.IRCBot._MAX_BODY` | bytes | outbound | always, on every body |
+| 400 | `internets.IRCBot._MAX_BODY` | bytes | outbound | always, on every body; `line_budget()` lowers it so the relayed line fits 512 |
 | 400 | `modules.base.strip_ctrl` default | characters | outbound | **only when a module calls it** |
 | 400 | `internets.IRCBot._MAX_ARG_LEN` | characters | **inbound** | on the command argument, never on a reply |
 

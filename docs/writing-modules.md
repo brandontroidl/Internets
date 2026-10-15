@@ -159,7 +159,7 @@ against `internets.py`:
 | Member | Behavior |
 |---|---|
 | `cfg` | the live `ConfigParser`. Read at use time so `.rehash` takes effect |
-| `privmsg(target, msg)` | validate target, split into 400-byte UTF-8-safe chunks, enqueue PRIVMSG |
+| `privmsg(target, msg)` | validate target, split at word boundaries into UTF-8-safe chunks of at most 400 bytes (less when the bot's `nick!user@host` is long, see `line_budget()`), enqueue PRIVMSG |
 | `notice(target, msg)` | same, as NOTICE. Use for errors and rate-limit replies |
 | `reply(nick, reply_to, msg, privileged=False)` | PM goes to the nick; a channel gets PRIVMSG, or a private NOTICE when `privileged` |
 | `preply(nick, reply_to, msg)` | `reply(..., privileged=True)`. Output that should not be broadcast |
@@ -672,7 +672,7 @@ Three separate 400s apply, and they are not the same 400:
 | Limit | Where | Effect |
 |---|---|---|
 | `strip_ctrl(..., max_len=400)` default | `modules/base.py` | your string is truncated at 400 characters |
-| `IRCBot._MAX_BODY = 400` | `internets.py - _split_msg()` | the message body is split into 400-byte, UTF-8-boundary-safe chunks, one IRC line each |
+| `IRCBot._MAX_BODY = 400` | `internets.py - _split_msg()` | the message body is split into chunks of at most 400 bytes (fewer when `line_budget()` must leave room for a long relay prefix), at word boundaries where possible, one IRC line each |
 | `IRCBot._MAX_ARG_LEN = 400` | `internets.py - _dispatch()` | inbound `arg` longer than 400 characters is refused before your handler runs |
 
 Chunking means a long reply becomes several lines rather than being truncated,

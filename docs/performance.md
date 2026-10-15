@@ -36,7 +36,7 @@ work off the loop unless a handler explicitly hands it over.
 | Concurrent command tasks | 50 | `internets.py - IRCBot._MAX_TASKS` |
 | Per-command wall clock | 60 s | `internets.py - IRCBot._CMD_TIMEOUT` |
 | Command argument length | 400 chars | `internets.py - IRCBot._MAX_ARG_LEN` |
-| Outbound body per line | 400 bytes | `internets.py - IRCBot._MAX_BODY` |
+| Outbound body per line | at most 400 bytes | `internets.py - IRCBot._MAX_BODY`, lowered by `IRCBot.line_budget()` |
 
 `IRCBot._dispatch()` checks `_active_cmd_tasks >= _MAX_TASKS` before creating
 the task, logs `event=dispatch_rejected reason=at_capacity`, and notices the
@@ -236,9 +236,10 @@ Two consequences follow, and neither is obvious from reading the handler:
    dropping. There is no per-user output budget and no coalescing.
 
 The same arithmetic applies to any multi-line output. `IRCBot._split_msg()`
-encodes the body to UTF-8 and slices it at `_MAX_BODY` = 400 **bytes** (backing
-off to a codepoint boundary), so the chunk count is `ceil(len(body_bytes) /
-400)`. A 2 KiB response is 2048 bytes and becomes **6** queued messages, not 5;
+encodes the body to UTF-8 and slices it at `line_budget()`, at most `_MAX_BODY`
+= 400 **bytes** and less when the bot's relayed `nick!user@host` prefix is long
+(backing off to a space or a codepoint boundary), so the chunk count is at
+least `ceil(len(body_bytes) / 400)`. A 2 KiB response is 2048 bytes and becomes **6** queued messages, not 5;
 5 is the answer only for exactly 2000 bytes. Sizes here are binary throughout,
 matching the sibling documents. A module that emits one line per result row is
 emitting one queue slot per row regardless.
